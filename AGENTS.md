@@ -2,6 +2,13 @@
 
 Cross-project defaults for agents working on this machine.
 
+## Instruction Precedence
+
+Project-local guidance overrides these defaults. Before editing a repository, read its root
+`AGENTS.md` and project-local `.agents/README.md` when present, then read the nearest nested
+`AGENTS.md` for the files involved. Use `skills/readable-code/SKILL.md` when writing or reviewing
+code unless more specific project guidance takes precedence.
+
 ## Public And Outbound Content
 
 Treat anything written outside the local working context as potentially public and
@@ -21,8 +28,15 @@ comments, docs, or content sent to an external service:
 
 - Default branch is `main`. Use `develop` for integration when the project has
   that branch, and open PRs into `main` unless project instructions say otherwise.
+- For tasks that edit repository files, create and enter an isolated worktree by following
+  `skills/using-git-worktrees/SKILL.md`, then perform the task from that worktree.
+- Preserve pre-existing user work. Never stash, discard, restore, unstage, or commit it.
 - Use the `gh` CLI for GitHub operations.
+- Match the repository's recent commit subject style.
 - Commit or push only when I ask.
+- Do not amend, force-push, skip hooks, or use destructive Git commands unless I explicitly ask
+  for that exact operation.
+- After a multi-line commit, verify the stored message with `git log -1 --format=%B`.
 - Do not add agent attribution, session trailers, generated-by footers, internal
   model details, or tool runtime details to commits, PRs, issues, or review
   comments.
@@ -271,6 +285,9 @@ put them under the relevant contained project's own `.agents/` tree, such as
 
 - If something I ask for is technically wrong or impossible, say so and propose a
   workable approach.
+- Use multiline syntax for the active shell: Bash heredocs in Bash and PowerShell here-strings in
+  PowerShell. For multiline GitHub CLI bodies, use `--body-file -` and read the object back to
+  verify what was stored.
 - When delegated review findings are expected in the current response, follow
   `procedures/reviews/delegated-review-results/delegated-review-results.md`: await
   the anchored report, do not claim completion on timeout/cancellation, and put
