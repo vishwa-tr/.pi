@@ -1,75 +1,75 @@
 ---
 name: readable-code
-description: Preserve named values, logical spacing, local structure, and straightforward React patterns when writing or reviewing code. Use for implementation and refactoring where readability, state design, or easy debugging matters.
+description: Write or refactor non-trivial code for human readability, review, and debugging. Use when logic includes meaningful state changes, data transformations, lifecycle behavior, or dense control flow; let project conventions and formatters override these defaults.
 ---
 
-# Readable Code
+# Readable code
 
-## Purpose
+Prefer the smallest implementation that is easy to inspect, debug, and extend. Optimize for understanding rather than the fewest lines.
 
-Prefer the smallest clear implementation. Preserve code that is easy for a human to scan, debug,
-and extend; do not optimize for the fewest lines. Follow project-local conventions and surrounding
-code before these defaults.
+## Follow the local codebase
 
-## Named Values
+Read nearby code and applicable project instructions before introducing names or structure. Match established domain vocabulary, error contracts, module patterns, and formatting. Do not use this skill to justify unrelated cleanup.
 
-Build a non-trivial query, payload, filter, or configuration object in a named variable before the
-call that consumes it:
+## Name meaningful values and transitions
+
+Give non-trivial queries, payloads, filters, configurations, and intermediate results names before the call that consumes them:
 
 ```js
-const appointmentQuery = { patientId: patientId };
+const appointmentQuery = { patientId };
+if (status != null) appointmentQuery.status = status;
 
-if (status != null) {
-    appointmentQuery.status = status;
+const appointments = await appointmentStore.find(appointmentQuery);
+```
+
+Keep a short, complete literal inline when naming it would add no information.
+
+Make repeated state transitions explicit. A named helper is often clearer than burying mutations in callback spreads:
+
+```js
+async function updateJob(id, patch) {
+  await jobStore.update(id, (job) => (job ? { ...job, ...patch } : job));
 }
 
-const appointmentDocs = await appointmentModel.find(appointmentQuery).lean().exec();
+await updateJob(jobId, { status: "failed", error: message });
 ```
 
-A short literal that is complete and unlikely to grow can remain inline. Land awaited results in a
-named variable before passing them to another call when that makes the operation easier to inspect.
+## Keep control flow debuggable
 
-## Vertical Spacing
+- Prefer guard clauses when they keep the successful path flat.
+- Use intermediate variables where a breakpoint or inspection point helps.
+- Choose an explicit loop over a nested transformation chain when several steps or mutations must be understood together.
+- Extract a helper when a block has a stable responsibility or repeats.
+- Avoid clever one-liners that hide ordering, failure, or state changes.
 
-Use blank lines to separate logical steps:
+A simple `map` or `filter` remains appropriate when its intent is immediate.
 
-```js
-const rangeEnd = dateService.add24Hours(date);
-const rangeStart = dateService.convertToStartOfDay(date);
+## Use structure and spacing to show intent
 
-query.date = { $gte: rangeStart, $lt: rangeEnd };
-```
+Group tightly related statements and separate meaningful phases such as validation, construction, execution, and result handling. Preserve useful spacing already present and let the formatter own mechanical layout.
 
-Typical boundaries are validation, construction, execution, and result handling. Preserve useful
-spacing already present in a file.
+Comments should explain constraints a future editor might otherwise violate—external behavior, required ordering, compatibility, or a non-obvious tradeoff. Do not narrate straightforward code.
 
-## Naming And Structure
+## Keep state straightforward
 
-Read surrounding functions before introducing names. Match local vocabulary such as `query`,
-`validation`, `verified`, or `result` rather than adding a parallel naming scheme.
+- Give independently changing values independent names.
+- Avoid opaque state bags and broad object spreads when they hide which fields changed.
+- Keep state ownership near the narrowest component or module that needs it.
+- Separate pure derivation from side effects where practical.
+- Make initialization, cleanup, retry, and failure transitions visible.
 
-- Keep named queries, payloads, configuration objects, and intermediate values when they improve
-  scanning or extension.
-- Use one named `useState` per value; avoid generated state bags and implicit object spreads.
-- A hook that wraps one behavior should return that behavior directly.
-- Prefer specific functions over one generalized function held together by refs and branching.
+In React, do not add `useMemo`, `useCallback`, `React.memo`, or ref workarounds without a concrete identity consumer or measured reason. Prefer direct state and data flow over speculative memoization.
 
-## React Identity
+## Refactor with a narrow purpose
 
-Do not add `useMemo`, `useCallback`, `React.memo`, or ref workarounds without a concrete identity
-consumer. When stable identity is required, name that dependency or lifecycle reason in the design
-rather than applying memoization speculatively.
+Preserve readable existing structure unless changing it is part of the task. Do not combine a functional change with broad renaming, reformatting, or abstraction cleanup. Extract shared code only when its stable common shape is visible.
 
-## Refactors
+## Review the result
 
-- Preserve existing readable structure unless changing it is part of the task.
-- Do not inline named values or repeated property access when the named form is clearer.
-- Do not remove blank lines merely to shorten a function.
-- Do not bundle unrelated readability cleanup with a functional change.
-- Let local project conventions and formatters override this skill.
+Before finishing, inspect the diff as a future reviewer:
 
-## Comments
-
-Do not add comments that restate code or narrate straightforward behavior. Use source comments only
-for constraints a reader would otherwise break, such as external bugs or required ordering. Put
-routine rationale and background in the task report or commit message instead.
+1. Can each non-trivial block be summarized in one sentence?
+2. Are important mutations, inputs, and failure paths visible?
+3. Can useful intermediate state be inspected in a debugger?
+4. Does the code match local conventions and formatter output?
+5. Is every changed line necessary for the requested behavior?
