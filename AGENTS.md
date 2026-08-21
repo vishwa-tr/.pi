@@ -45,11 +45,17 @@ sent to an external service:
 ## Pi Configuration Repository
 
 When the current repository is this portable Pi configuration, read `README.md` and
-`configs/pi-agent/MANIFEST.md` before changing its layout or active resources.
+`configs/pi-agent/MANIFEST.md` before changing its layout or active resources. Then read the
+relevant package README, project documentation, and nearest nested `AGENTS.md` for the area involved.
+Do this automatically; do not wait for the user to request documentation. Do not load
+repository-specific documentation for unrelated project work.
 
 - Keep the root `AGENTS.md` filename uppercase; Pi loads it as global guidance.
 - Root `settings.json`, `keybindings.json`, `skills/`, and `subagents/` are active global resources.
 - `configs/pi-agent/packages/` is the source for enabled local Pi packages.
+- When the user asks about a skill, procedure, MCP definition, or subagent, check this repository's
+  `skills/`, `procedures/`, `mcp/`, and `subagents/` directories before other global or installed
+  locations.
 - Keep shared materials project- and host-agnostic. Keep machine-local credentials, sessions, logs,
   caches, and runtime databases out of the tracked tree.
 - Root `subagents/` is the shared source of truth for Pi Subagents and Pi Teams definitions; do not
