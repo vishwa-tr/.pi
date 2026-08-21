@@ -1,6 +1,6 @@
 ---
 name: code-conventions
-description: Formatting and import-ordering conventions for this repo (backend Node + frontend Next.js). Use whenever writing or editing any .js file — ordering imports, choosing quotes/indentation, declaring functions/constants, or shaping return values. Apply before saving any new or modified file.
+description: Formatting, structure, import-ordering, async, React, and commenting conventions for this repo (backend Node + frontend Next.js). Use whenever writing or editing JavaScript or React code — ordering imports, choosing quotes/indentation, shaping functions and return values, managing state, or documenting constraints. Apply before saving any new or modified file.
 ---
 
 # Code conventions
@@ -12,6 +12,16 @@ hand-maintained conventions. Match them in every file you touch.
 > different approach is genuinely better, don't silently diverge and don't blindly conform:
 > tell the user *why* the alternative is clearly better, with concrete reasons, and confirm
 > with them before going that way. When there's no clear win, follow the convention.
+
+## Keep the shape simple
+
+- Prefer the smallest correct implementation over a new abstraction.
+- Keep code in one function until part of it has a concrete reusable or composable responsibility.
+- Do not add compatibility paths without persisted data, shipped consumers, or an explicit
+  requirement.
+- Build non-trivial queries, payloads, filters, and configuration objects in named variables before
+  passing them to a call.
+- Preserve blank lines between validation, construction, execution, and result handling.
 
 ## Formatting (Prettier)
 
@@ -199,7 +209,8 @@ Each function does one thing and is short. When logic repeats inside a function,
 ### No callback hell — async/await everywhere
 
 Use `async`/`await` with flat, sequential statements. Do **not** nest callbacks or chain
-`.then()`. Patterns in use:
+`.then()`. Land an awaited value in a named variable before passing it to another call; do not nest
+`await` inside call arguments. Patterns in use:
 
 - Sequential work: a flat list of `await` lines, or `for (const x of items) { await ... }`.
 - Parallel work: collect promises then `await Promise.all(tasks)` (see
@@ -209,6 +220,24 @@ Use `async`/`await` with flat, sequential statements. Do **not** nest callbacks 
 - Extract named handlers instead of inlining deep callbacks (e.g. `getAuthentication`,
   `handleError` in the notify/socket code), and return tuples like `return [valid, auth, user]`
   when a helper yields several values.
+
+## React state and identity
+
+- Use one named `useState` call per value rather than a string-keyed state bag or state generated
+  from a roster.
+- Return object fields explicitly rather than spreading a state bag into the result.
+- Introduce `useMemo`, `useCallback`, `React.memo`, or a ref workaround only when referential
+  identity has a real consumer.
+- Prefer two specific functions over one general function held together by refs.
+- When a hook wraps one behavior, return that behavior directly rather than an object with one key.
+- Let small hooks own their internal machinery so callers pass ordinary identifiers and receive
+  ordinary values.
+
+## Comments
+
+Do not add comments that restate code, narrate a straightforward algorithm, or carry task
+background that belongs in the change report. Reserve source comments for constraints a future
+reader could otherwise break, such as ordering dependencies or external platform defects.
 
 ### Idioms
 
