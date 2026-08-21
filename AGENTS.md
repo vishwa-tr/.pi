@@ -96,20 +96,24 @@ generic pattern or procedure instead of copying sensitive or local-only content.
 ## Project Agent Documentation
 
 When creating a new project, working in an existing project, or refactoring a
-project, create and maintain a project-local `docs/agents/` directory. Any plan,
-skill, procedure, subagent, MCP note, implementation note, memory, review note,
-setup note, or similar agent-generated material that is useful for the project
-must be written to disk there, not only left in chat.
+project, create and maintain a project-local `.agents/` directory. Ensure the
+project-root `AGENTS.md` tells agents to read `.agents/README.md`; create both
+files when they are missing, and preserve any existing root instructions when
+adding the reference.
+
+Any plan, skill, procedure, subagent, MCP note, implementation note, memory,
+review note, setup note, or similar agent-generated material that is useful for
+the project must be written to disk there, not only left in chat.
 
 Use this project-local layout:
 
-- `docs/agents/plans/<domain>/<plan-name>/<plan-name>.md`
-- `docs/agents/skills/<domain>/<skill-name>/<skill-name>.md`
-- `docs/agents/procedures/<domain>/<procedure-name>/<procedure-name>.md`
-- `docs/agents/subagents/<domain>/<subagent-name>/<subagent-name>.md`
-- `docs/agents/mcp/<domain>/<mcp-name>/<mcp-name>.md`
-- `docs/agents/notes/<domain>/<note-name>/<note-name>.md`
-- `docs/agents/memories/<domain>/<memory-name>/<memory-name>.md`
+- `.agents/plans/<domain>/<plan-name>/<plan-name>.md`
+- `.agents/skills/<domain>/<skill-name>/<skill-name>.md`
+- `.agents/procedures/<domain>/<procedure-name>/<procedure-name>.md`
+- `.agents/subagents/<domain>/<subagent-name>/<subagent-name>.md`
+- `.agents/mcp/<domain>/<mcp-name>/<mcp-name>.md`
+- `.agents/notes/<domain>/<note-name>/<note-name>.md`
+- `.agents/memories/<domain>/<memory-name>/<memory-name>.md`
 
 Use lowercase hyphen-case for `<domain>` and artifact names. Pick a domain that
 describes the work area, such as `frontend`, `backend`, `auth`, `deployment`,
@@ -117,7 +121,7 @@ describes the work area, such as `frontend`, `backend`, `auth`, `deployment`,
 
 For example, a build plan for a backend API should be saved as:
 
-`docs/agents/plans/backend/api-build-plan/api-build-plan.md`
+`.agents/plans/backend/api-build-plan/api-build-plan.md`
 
 Project-local artifacts may include project-specific details, but must still
 exclude secrets, credentials, private keys, auth tokens, local-only absolute
@@ -127,9 +131,9 @@ shared repository using the `Reusable Artifact Capture` rules above.
 
 For this shared repository, keep the top-level `skills/`, `plans/`, `procedures/`,
 `subagents/`, `mcp/`, and `configs/` directories reusable and project-agnostic.
-Do not place project-specific artifacts in a root `docs/agents/` tree here;
-instead, put them under the relevant contained project's own documentation tree,
-such as `configs/pi-agent/docs/agents/` for PiAgent-specific work.
+Do not place project-specific artifacts in a root `.agents/` tree here; instead,
+put them under the relevant contained project's own `.agents/` tree, such as
+`configs/pi-agent/.agents/` for PiAgent-specific work.
 
 ## Directory Map
 
