@@ -1211,10 +1211,16 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 			lines.length = targetH;
 		}
 
+		// A custom component must never return a line wider than the width Pi
+		// supplied. Keep this final guard even though individual panes truncate:
+		// nested renderers and narrow split layouts can otherwise violate the
+		// contract and make differential rendering stop on a later scroll.
+		const fittedLines = lines.map((line) => truncateToWidth(line, innerW, ""));
+
 		cachedWidth = width;
 		cachedHeight = targetH;
-		cachedLines = lines;
-		return lines;
+		cachedLines = fittedLines;
+		return fittedLines;
 	}
 
 	return { render, handleInput, invalidate };

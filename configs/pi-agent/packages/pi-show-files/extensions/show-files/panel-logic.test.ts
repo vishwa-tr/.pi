@@ -16,6 +16,7 @@ import {
 	formatBytes,
 	nextMatchLine,
 	nextRegionStart,
+	previewLines,
 	regionIndexAt,
 	sortDirEntries,
 	stepSelection,
@@ -64,6 +65,11 @@ test("classifyContent precedence: image > toolarge > binary > text", () => {
 	assert.equal(classifyContent({ ...base, isImage: false }), "text");
 	// Exactly at the limit is NOT too large (strict >).
 	assert.equal(classifyContent({ isImage: false, size: 100, hasNul: false, maxBytes: 100 }), "text");
+});
+
+test("previewLines removes CRLF carriage returns and neutralizes terminal controls", () => {
+	assert.deepEqual(previewLines("one\r\ntwo\r\n"), ["one", "two", ""]);
+	assert.deepEqual(previewLines("left\rright\x1b[2J\x07"), ["left�right�[2J�"]);
 });
 
 test("sortDirEntries: dirs first, then case-insensitive name order", () => {

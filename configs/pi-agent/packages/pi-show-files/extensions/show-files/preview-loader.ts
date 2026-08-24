@@ -15,7 +15,7 @@ import { getLanguageFromPath, highlightCode } from "@earendil-works/pi-coding-ag
 import { getImageDimensions } from "@earendil-works/pi-tui";
 import { findChromium, openExternally, renderHtmlSnapshot, snapshotPathFor } from "./browser.ts";
 import type { PresentedFile } from "./files.ts";
-import { browseRelPath, classifyContent, sortDirEntries } from "./panel-logic.ts";
+import { browseRelPath, classifyContent, previewLines, sortDirEntries } from "./panel-logic.ts";
 import type { BrowseRow, PreviewState } from "./preview-state.ts";
 import { renderableKind } from "./rendered.ts";
 
@@ -52,7 +52,8 @@ export function createPreviewLoader(state: PreviewState, deps: PreviewLoaderDeps
 		const lang = getLanguageFromPath(file.abs);
 		if (!lang) return;
 		try {
-			const highlighted = highlightCode(state.fileText.replace(/\t/g, "    "), lang);
+			const displayText = state.fileLines.join("\n").replace(/\t/g, "    ");
+			const highlighted = highlightCode(displayText, lang);
 			// A mismatch would break the raw-line cursor, gutter, and region mapping.
 			// Fall back to the existing plain rendering rather than misaligning them.
 			if (highlighted.length === state.fileLines.length) state.highlightedLines = highlighted;
@@ -88,6 +89,9 @@ export function createPreviewLoader(state: PreviewState, deps: PreviewLoaderDeps
 	// Load a curated item (from the left list). Resets the browse context; a
 	// directory becomes the browse root, a file loads its content.
 	async function loadPreview(file: PresentedFile | undefined) {
+		// Missing/empty selections do not start I/O of their own, so invalidate any
+		// load still in flight before committing their synchronous preview state.
+		state.loadToken++;
 		resetPreviewState();
 		state.browseRoot = null;
 		state.browseRootRel = null;
@@ -214,7 +218,7 @@ export function createPreviewLoader(state: PreviewState, deps: PreviewLoaderDeps
 				state.previewKind = "binary";
 			} else {
 				state.fileText = buf.toString("utf8");
-				state.fileLines = state.fileText.split("\n");
+				state.fileLines = previewLines(state.fileText);
 				state.previewKind = "file";
 				rebuildSyntaxHighlighting();
 				// Markdown/HTML render by default — but regions reference raw line

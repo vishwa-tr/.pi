@@ -49,6 +49,18 @@ export function classifyContent(opts: { isImage: boolean; size: number; hasNul: 
 }
 
 /**
+ * Split source text into terminal-safe preview lines while preserving source line
+ * numbers. CRLF terminators must not leak a carriage return into a rendered TUI
+ * row, and remaining control bytes are shown as replacement glyphs rather than
+ * being interpreted by the terminal.
+ */
+export function previewLines(text: string): string[] {
+	return text
+		.split("\n")
+		.map((line) => line.replace(/\r$/, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "�"));
+}
+
+/**
  * Sort directory entries in place: directories first, then case-insensitive name
  * order. Returns the same array for chaining.
  */
