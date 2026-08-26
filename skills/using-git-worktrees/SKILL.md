@@ -215,13 +215,20 @@ When repository instructions call for landing the worktree branch on its recorde
 git -C "$worktree_path" rebase "$parent_branch"
 ```
 
-Stop and report conflicts instead of guessing at another change's intent. After a successful rebase, rerun the relevant checks. Then fast-forward the recorded parent from its surviving checkout:
+Stop and report conflicts instead of guessing at another change's intent. After a successful rebase, rerun the relevant checks. Immediately before touching the parent checkout, verify that it still has the recorded branch checked out and contains no staged, unstaged or untracked changes:
+
+```bash
+current_parent_branch=$(git -C "$parent_path" branch --show-current)
+parent_status=$(git -C "$parent_path" status --porcelain)
+```
+
+Require `current_parent_branch` to equal `parent_branch` and `parent_status` to be empty. If either check fails, stop and ask the user to restore or explicitly choose a clean landing checkout; do not merge into the current checkout. Then fast-forward the recorded parent:
 
 ```bash
 git -C "$parent_path" merge --ff-only "$worktree_branch"
 ```
 
-If the parent moved, return to the worktree, rebase again and re-verify. Do not merge into a different branch, create a merge commit or force the operation. Follow repository approval boundaries; when permission to merge is ambiguous, ask first.
+If the parent moved after the rebase, return to the worktree, rebase again and re-verify. Do not merge into a different branch, create a merge commit or force the operation. Follow repository approval boundaries; when permission to merge is ambiguous, ask first.
 
 Include the worktree path and branch in status and final reporting when it helps the user find the work.
 
