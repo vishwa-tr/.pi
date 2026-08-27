@@ -44,11 +44,12 @@ directories, which the procedure loader ignores.
 
 ## Repository guidance
 
-This README is the source of truth for repository-specific layout and package
-behavior. The automatically loaded root `AGENTS.md` tells agents to read it when
-a task concerns this repository, so users do not need to request documentation
-loading explicitly. Package-specific work must also follow the relevant package
-README, project documentation, and nearest nested `AGENTS.md`.
+This README is the source of truth for repository-specific layout and a high-level package
+behavior overview. `settings.json` is authoritative for activation, and
+`configs/pi-agent/MANIFEST.md` is the complete enabled-package inventory. The automatically loaded
+root `AGENTS.md` tells agents to read both when a task concerns this repository, so users do not
+need to request documentation loading explicitly. Package-specific work must also follow the
+relevant package README, project documentation, and every applicable nested `AGENTS.md`.
 
 The repository combines three roles:
 

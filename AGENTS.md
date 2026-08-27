@@ -4,10 +4,15 @@ Cross-project defaults for agents working on this machine.
 
 ## Instruction Precedence
 
-Project-local guidance overrides these defaults. Before editing a repository, read its root
-`AGENTS.md` and project-local `.agents/README.md` when present, then read the nearest nested
-`AGENTS.md` for the files involved. Consult the global `readable-code` skill for non-trivial
-implementation or refactoring unless more specific project guidance takes precedence.
+Project-local guidance may override these defaults only for repository conventions such as style,
+commands, architecture, and target branches. Global privacy and outbound-content rules,
+preservation of user work, commit and push authorization, and destructive-operation restrictions
+remain authoritative unless the user directly overrides them in the current conversation.
+
+Before editing a repository, read its root `AGENTS.md` and project-local `.agents/README.md` when
+present, then every applicable nested `AGENTS.md` from the root through the target file's parent.
+Consult the global `readable-code` skill for non-trivial implementation or refactoring unless more
+specific project guidance takes precedence.
 
 ## Public And Outbound Content
 
@@ -80,11 +85,16 @@ Follow a project's existing agent-documentation structure. Do not create `.agent
 Create durable project agent material only when the user requests it or when it is an explicit task
 deliverable.
 
-When a project has no convention and a project-local artifact is requested, use lowercase
-hyphen-case under `.agents/<type>/<domain>/<artifact>/<artifact>.md`, where `<type>` is `plans`,
-`skills`, `procedures`, `subagents`, `mcp`, `notes`, or `memories`. Keep project-specific material
-inside that project and exclude secrets, credentials, private paths, personal details, and generated
-logs.
+When a project has no convention and an inert project-local documentation artifact is requested,
+use lowercase hyphen-case under `.agents/docs/<type>/<domain>/<artifact>/<artifact>.md`, where
+`<type>` is `plans`, `skills`, `procedures`, `subagents`, `mcp`, `notes`, or `memories`. Keep
+project-specific material inside that project and exclude secrets, credentials, private paths,
+personal details, and generated logs.
+
+Do not use that documentation layout for active resources. Verify the target runtime's discovery
+contract first. In Pi, project skills use `.agents/skills/<skill-name>/SKILL.md`, project subagent
+definitions use `.pi/subagents/<type>.md`, and executable saved procedures use
+`.pi/procedures/<name>.js`.
 
 ## Working Style
 
