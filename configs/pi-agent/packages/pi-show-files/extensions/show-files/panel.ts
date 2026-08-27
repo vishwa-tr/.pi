@@ -74,6 +74,7 @@ import {
 	nextMatchLine,
 	nextRegionStart,
 	regionIndexAt,
+	sanitizePreviewText,
 	type Row,
 	stepSelection,
 } from "./panel-logic.ts";
@@ -995,8 +996,12 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 				all = state.mdComp.render(w);
 			} else {
 				banner = htmlBannerLines(inner);
-				if (!state.renderedCache || state.renderedCache.width !== w)
-					state.renderedCache = { width: w, lines: wrapTextWithAnsi(htmlToText(state.fileText), w) };
+				if (!state.renderedCache || state.renderedCache.width !== w) {
+					// Entity decoding can reintroduce control characters even though the
+					// loaded source was sanitized, so neutralize the derived text again.
+					const htmlText = sanitizePreviewText(htmlToText(state.fileText));
+					state.renderedCache = { width: w, lines: wrapTextWithAnsi(htmlText, w) };
+				}
 				all = state.renderedCache.lines;
 			}
 			const avail = Math.max(1, bodyH - banner.length);

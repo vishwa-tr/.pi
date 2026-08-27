@@ -49,15 +49,19 @@ export function classifyContent(opts: { isImage: boolean; size: number; hasNul: 
 }
 
 /**
- * Split source text into terminal-safe preview lines while preserving source line
- * numbers. CRLF terminators must not leak a carriage return into a rendered TUI
- * row, and remaining control bytes are shown as replacement glyphs rather than
- * being interpreted by the terminal.
+ * Neutralize terminal controls while preserving tabs and line feeds used for
+ * layout. Normalize CRLF first so source line numbers remain stable; stray CR,
+ * C0, DEL, and C1 controls become visible replacement glyphs.
  */
-export function previewLines(text: string): string[] {
+export function sanitizePreviewText(text: string): string {
 	return text
-		.split("\n")
-		.map((line) => line.replace(/\r$/, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "�"));
+		.replace(/\r\n/g, "\n")
+		.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "�");
+}
+
+/** Split source text into terminal-safe preview lines, preserving line numbers. */
+export function previewLines(text: string): string[] {
+	return sanitizePreviewText(text).split("\n");
 }
 
 /**

@@ -217,8 +217,10 @@ export function createPreviewLoader(state: PreviewState, deps: PreviewLoaderDeps
 			} else if (kind === "binary") {
 				state.previewKind = "binary";
 			} else {
-				state.fileText = buf.toString("utf8");
-				state.fileLines = previewLines(state.fileText);
+				state.fileLines = previewLines(buf.toString("utf8"));
+				// Rendered Markdown/HTML must consume the same terminal-safe text as
+				// the raw preview rather than the untrusted source bytes.
+				state.fileText = state.fileLines.join("\n");
 				state.previewKind = "file";
 				rebuildSyntaxHighlighting();
 				// Markdown/HTML render by default — but regions reference raw line
