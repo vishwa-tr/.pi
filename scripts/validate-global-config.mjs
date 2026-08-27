@@ -10,8 +10,8 @@ const failures = [];
 const notes = [];
 
 const EXPECTED_PACKAGE_COUNT = 31;
-const EXPECTED_SKILL_COUNT = 30;
-const EXPECTED_THEME = "void-agent-tokyo-night";
+const EXPECTED_SKILL_COUNT = 31;
+const EXPECTED_THEME = "void-agent-one-dark";
 const ROOT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
 const AGENT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
 

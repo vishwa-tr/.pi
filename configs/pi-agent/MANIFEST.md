@@ -12,8 +12,10 @@ Pi packages live under `packages/<name>/` and are enabled through portable relat
 | `pi-changes` | `/changes` session edit review/undo and read-only `/git-changes` repository diff browser |
 | `pi-clear` | `/clear` alias |
 | `pi-sessions` | `/sessions` alias for Pi's native `/resume` session selector |
+| `pi-prune` | `/prune` lifecycle-safe session replacement followed by trash-backed cleanup of the previous session file |
 | `pi-codex-usage` | Shortest available Codex rate-limit status and all-window `/codex-usage` details |
 | `pi-codex-web-search` | LLM-callable `web_search` backed by an isolated ephemeral Codex app-server turn and ChatGPT login |
+| `pi-codex-image-generation` | LLM-callable `image_generation` backed by an isolated ephemeral Codex image-generation turn and ChatGPT login |
 | `pi-mcp-client` | Local stdio MCP client with machine-local multi-server config, namespaced tools, confirmation gates, and progressive discovery |
 | `void-agent` | Bundled Void Agent theme family and presentation extension, plus a pre-trust guard that prevents the portable global `.pi` tree from loading again as project config through a bind-mount/path alias and suppresses the resulting misleading warning. Ships palettes `void-agent` (default) plus `void-agent-{gruvbox,tokyo-night,nord,one-dark,catppuccin,kanagawa}` (identical role-map, colors only) — Pi's native picker owns selection/persistence; the default is seeded once on first run, never re-forced. Prompt field, working indicator (random accent spinners incl. blinking star pulse, `label… (elapsed · ↓ tokens)` with run-cumulative counts, three-line full-width black↔prompt-gray background block with theme-green Matrix rain and a random per-run animation: breathe/aurora/comet/shimmer; persistent `/matrix` and `/working-animation` controls), and tool-turn separators without replacing tool definitions, status lines, or widgets |
 | `pi-commit` | `/commit [--dry-run]` grouped Git review, lazy model-generated descriptions, and path-scoped commits |
@@ -38,7 +40,7 @@ Pi packages live under `packages/<name>/` and are enabled through portable relat
 
 ## Theme and keybindings
 
-The active theme is `void-agent-tokyo-night`, bundled at `packages/void-agent/themes/void-agent-tokyo-night.json` and selected by root `settings.json` plus `agent/settings.json`.
+The active theme is `void-agent-one-dark`, bundled at `packages/void-agent/themes/void-agent-one-dark.json` and selected by root `settings.json` plus `agent/settings.json`.
 
 Keybindings are stored at root `keybindings.json` and mirrored in `agent/keybindings.json`. `Shift+Tab` is reserved for Plan mode, thinking-level cycling uses `Alt+T`, and forward model cycling uses `Alt+M`.
 

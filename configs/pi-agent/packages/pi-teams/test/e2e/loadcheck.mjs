@@ -8,13 +8,15 @@
 import { strict as assert } from "node:assert";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { EXT, PI_PKG, WORLDS } from "./env.mjs";
 
 const emptyAgentDir = join(WORLDS, "loadcheck-empty");
 rmSync(emptyAgentDir, { recursive: true, force: true });
 mkdirSync(emptyAgentDir, { recursive: true });
 
-const { loadExtensions } = await import(join(PI_PKG, "dist/core/extensions/loader.js"));
+const loaderModuleUrl = pathToFileURL(join(PI_PKG, "dist/core/extensions/loader.js")).href;
+const { loadExtensions } = await import(loaderModuleUrl);
 const result = await loadExtensions([join(EXT, "index.ts")], emptyAgentDir);
 
 assert.deepEqual(result.errors, [], `extension load errors: ${JSON.stringify(result.errors)}`);
@@ -29,5 +31,9 @@ assert.deepEqual(
 	"the eight team_* tools",
 );
 assert.deepEqual(keysOf(ext.commands), ["teams"], "/teams command");
+
+const peers = ext.tools.get("team_peers").definition;
+assert.match(peers.description, /blocks peer delivery immediately/, "team_peers documents immediate delivery enforcement");
+assert.match(peers.description, /refresh on the next wake/, "team_peers distinguishes next-wake tool and prose refresh");
 
 console.log("loadcheck ok — tools:", keysOf(ext.tools).sort().join(", "), "· commands:", keysOf(ext.commands).join(", "));

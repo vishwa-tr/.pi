@@ -16,10 +16,13 @@ import {
 	formatBytes,
 	nextMatchLine,
 	nextRegionStart,
+	previewLines,
 	regionIndexAt,
+	sanitizePreviewText,
 	sortDirEntries,
 	stepSelection,
 } from "./panel-logic.ts";
+import { htmlToText } from "./rendered.ts";
 
 function file(rel: string, group?: string): PresentedFile {
 	return { rel, abs: `/root/${rel}`, kind: "file", title: rel, regions: [], ...(group ? { group } : {}) };
@@ -64,6 +67,23 @@ test("classifyContent precedence: image > toolarge > binary > text", () => {
 	assert.equal(classifyContent({ ...base, isImage: false }), "text");
 	// Exactly at the limit is NOT too large (strict >).
 	assert.equal(classifyContent({ isImage: false, size: 100, hasNul: false, maxBytes: 100 }), "text");
+});
+
+test("sanitizePreviewText preserves layout while neutralizing C0, DEL, and C1 controls", () => {
+	assert.equal(
+		sanitizePreviewText("one\r\ntwo\rtab\t\x1b[2J\x07\x7f\x9b31m\x9d0;title\x9c"),
+		"one\ntwo�tab\t�[2J���31m�0;title�",
+	);
+});
+
+test("previewLines removes CRLF carriage returns and neutralizes terminal controls", () => {
+	assert.deepEqual(previewLines("one\r\ntwo\r\n"), ["one", "two", ""]);
+	assert.deepEqual(previewLines("left\rright\x1b[2J\x07\x9b31m"), ["left�right�[2J��31m"]);
+});
+
+test("HTML entity decoding cannot reintroduce terminal controls", () => {
+	const rendered = htmlToText("<p>safe&#27;[2J&#x9b;31m</p>");
+	assert.equal(sanitizePreviewText(rendered), "safe�[2J�31m");
 });
 
 test("sortDirEntries: dirs first, then case-insensitive name order", () => {

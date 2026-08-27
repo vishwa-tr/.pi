@@ -9,7 +9,7 @@
  */
 import { strict as assert } from "node:assert";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { EXT, WORLDS, jiti } from "./env.mjs";
 
 const systemDeny = await jiti.import(join(EXT, "sandbox/system-deny.ts"));
@@ -43,21 +43,69 @@ async function okA(name, fn) {
 // ------------------------------------------------------- H1: bash command deny
 console.log("system-deny bash text scan (H1):");
 ok("denies a bash command referencing a protected root", () => {
-	const home = "/home/u";
-	const protectedDir = `${home}/.pi/agent/subagents`;
+	const home = join(sep, "home", "u");
+	const protectedDir = join(home, ".pi", "agent", "subagents");
 	const check = systemDeny.makeCommandDenyCheck([protectedDir], (p) => p, home);
-	assert.equal(check(`echo pwned > ${protectedDir}/self.md`).denied, true);
+	assert.equal(check(`echo pwned > ${protectedDir}${sep}self.md`).denied, true);
 	assert.equal(check("echo pwned > ~/.pi/agent/subagents/self.md").denied, true, "tilde spelling caught");
 	assert.equal(check("$HOME/.pi/agent/subagents/x").denied, true, "$HOME spelling caught");
 	assert.equal(check("ls src/").denied, false, "an unrelated command is allowed");
+});
+ok("denies Windows path aliases for targets and commands", () => {
+	const pathSeparator = "\\";
+	const home = "C:\\Users\\u";
+	const protectedDir = `${home}\\.pi\\agent\\subagents`;
+	const fakeRealpath = (path) => {
+		if (path.toLowerCase() === protectedDir.toLowerCase()) return protectedDir;
+		throw new Error("missing");
+	};
+	const targetCheck = systemDeny.makeSystemDenyCheck([protectedDir], fakeRealpath, pathSeparator);
+	const namespaceCheck = systemDeny.makeSystemDenyCheck([protectedDir], (path) => path, pathSeparator);
+	const commandCheck = systemDeny.makeCommandDenyCheck([protectedDir], fakeRealpath, home, pathSeparator);
+	assert.equal(targetCheck("C:/Users/u/.pi/agent/subagents/new.md").denied, true, "forward-slash new target");
+	assert.equal(targetCheck("C:/Users\\u/.pi/agent\\subagents/new.md").denied, true, "mixed-slash new target");
+	assert.equal(targetCheck("\\\\?\\C:\\Users\\u\\.pi\\agent\\subagents\\new.md").denied, true, "extended drive new target");
+	assert.equal(namespaceCheck("\\\\?\\C:\\Users\\u").denied, true, "extended drive ancestor");
+	assert.equal(namespaceCheck("\\\\.\\C:\\Users\\u\\.pi\\agent\\subagents\\new.md").denied, true, "device namespace fails closed");
+	const resolvedNamespaceCheck = systemDeny.makeSystemDenyCheck([protectedDir], (path) => {
+		if (path.toLowerCase() === protectedDir.toLowerCase()) return protectedDir;
+		return "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\Users\\u\\.pi\\agent\\subagents\\new.md";
+	}, pathSeparator);
+	assert.equal(resolvedNamespaceCheck("C:\\temp\\link").denied, true, "unsupported resolved namespace fails closed");
+	const unsafePrefixCheck = systemDeny.makeSystemDenyCheck(
+		[protectedDir],
+		() => "\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\protected",
+		pathSeparator,
+	);
+	assert.equal(unsafePrefixCheck("C:\\safe\\file.txt").denied, true, "unsupported protected prefix fails closed");
+	const uncProtected = "\\\\server\\share\\.pi\\agent\\subagents";
+	const uncCheck = systemDeny.makeSystemDenyCheck([uncProtected], (path) => path, pathSeparator);
+	assert.equal(uncCheck("\\\\?\\UNC\\server\\share\\.pi\\agent\\subagents\\new.md").denied, true, "extended UNC target");
+	assert.equal(commandCheck("echo x > C:/Users\\u/.pi/agent\\subagents/new.md").denied, true, "mixed command path");
+	assert.equal(commandCheck("echo x > \\\\?\\C:\\Users\\u\\.pi\\agent\\subagents\\new.md").denied, true, "extended command path");
+	assert.equal(
+		commandCheck("echo x > \\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\Users\\u\\.pi\\agent\\subagents\\new.md").denied,
+		true,
+		"GLOBALROOT command fails closed",
+	);
+	assert.equal(
+		commandCheck("echo x > \\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\protected").denied,
+		true,
+		"volume GUID command fails closed",
+	);
+	const lowerProtectedDir = protectedDir.toLowerCase();
+	const caseCommandCheck = systemDeny.makeCommandDenyCheck([lowerProtectedDir], (path) => path, home, pathSeparator);
+	assert.equal(caseCommandCheck("echo x > $HOME/.pi/agent/subagents/new.md").denied, true, "case-insensitive $HOME path");
+	assert.equal(caseCommandCheck("echo x > ~/.pi/agent/subagents/new.md").denied, true, "case-insensitive tilde path");
 });
 
 // ------------------------------------------------------- M10: NF-C containment
 console.log("system-deny containment (M10):");
 ok("an NFD spelling of the same protected path is still denied", () => {
 	// "café" as NFC vs NFD (e + combining accent). Same file, different bytes.
-	const nfc = "/proj/café/subagents";
-	const nfd = "/proj/café/subagents/self.md";
+	const project = join(sep, "proj");
+	const nfc = join(project, "café", "subagents");
+	const nfd = join(project, "café", "subagents", "self.md");
 	const check = systemDeny.makeSystemDenyCheck([nfc], (p) => p);
 	assert.equal(check(nfd).denied, true);
 });

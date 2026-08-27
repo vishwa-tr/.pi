@@ -48,6 +48,7 @@ export interface PreviewState {
 	browseReturnCursor: number;
 
 	// Rendered-preview state (markdown/HTML, `r` toggles rendered↔raw)
+	// fileText is terminal-safe source text, never the untrusted raw bytes.
 	fileText: string;
 	highlightedLines: string[];
 	renderableAs: RenderableKind | null;

@@ -74,6 +74,7 @@ import {
 	nextMatchLine,
 	nextRegionStart,
 	regionIndexAt,
+	sanitizePreviewText,
 	type Row,
 	stepSelection,
 } from "./panel-logic.ts";
@@ -840,8 +841,8 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 				// that runs to the pane edge so it can't be mistaken for a file row.
 				const label = truncateToWidth(row.label.toUpperCase(), Math.max(1, width - 4), "…");
 				const styled = theme.fg("muted", theme.bold(label));
-				const dashes = Math.max(0, width - visibleWidth(label) - 1);
-				out.push(pad(`${styled} ${theme.fg("borderMuted", "─".repeat(dashes))}`, width));
+				const dots = Math.max(0, width - visibleWidth(label) - 1);
+				out.push(pad(`${styled} ${theme.fg("borderMuted", "·".repeat(dots))}`, width));
 				continue;
 			}
 			const file = row.file;
@@ -877,12 +878,12 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 		const info = state.imageInfo;
 		const lines: string[] = [];
 		const push = (s: string) => lines.push(truncateToWidth(s, inner, "…"));
-		push(theme.fg("accent", theme.bold(" Image")));
+		push(theme.fg("accent", theme.bold("Image")));
 		push("");
-		push(` ${theme.fg("text", state.previewFile?.rel ?? "")}`);
+		push(theme.fg("text", state.previewFile?.rel ?? ""));
 		const dims = info?.dims ? `${info.dims.widthPx}×${info.dims.heightPx} px` : "dimensions unknown";
 		const meta = [info?.mime ?? "image", dims, info ? formatBytes(info.bytes) : ""].filter(Boolean).join("  ·  ");
-		push(` ${theme.fg("muted", meta)}`);
+		push(theme.fg("muted", meta));
 		push("");
 		let proto: string | null = null;
 		try {
@@ -890,18 +891,18 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 		} catch {
 			proto = null;
 		}
-		push(` ${theme.fg("warning", "Terminal image preview unavailable.")}`);
+		push(theme.fg("warning", "Terminal image preview unavailable."));
 		if (proto) {
 			// The terminal *could* draw it, but not inside this overlay panel.
-			push(` ${theme.fg("dim", `Your terminal supports ${proto} graphics, but this panel`)}`);
-			push(` ${theme.fg("dim", "is an overlay and can't host inline images.")}`);
+			push(theme.fg("dim", `Your terminal supports ${proto} graphics, but this panel`));
+			push(theme.fg("dim", "is an overlay and can't host inline images."));
 		} else {
-			push(` ${theme.fg("dim", "No kitty or iTerm2 graphics support detected in this")}`);
-			push(` ${theme.fg("dim", "terminal. Showing metadata only.")}`);
+			push(theme.fg("dim", "No kitty or iTerm2 graphics support detected in this"));
+			push(theme.fg("dim", "terminal. Showing metadata only."));
 		}
 		push("");
-		push(` ${theme.fg("dim", "Press a to add it to chat, or open the path above in")}`);
-		push(` ${theme.fg("dim", "an image viewer.")}`);
+		push(theme.fg("dim", "Press a to add it to chat, or open the path above in"));
+		push(theme.fg("dim", "an image viewer."));
 		return lines;
 	}
 
@@ -914,18 +915,18 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 		const push = (s: string) => lines.push(truncateToWidth(s, inner, "…"));
 		const s = state.htmlSnap;
 		if (s.status === "pending") {
-			push(` ${theme.fg("muted", `${ICON_LOADING} Rendering browser snapshot…`)}`);
+			push(theme.fg("muted", `${ICON_LOADING} Rendering browser snapshot…`));
 		} else if (s.status === "done") {
-			push(` ${theme.fg("success", `${ICON_SUCCESS} Rendered`)}${theme.fg("dim", "  ·  o open in browser  ·  r raw source")}`);
+			push(`${theme.fg("success", `${ICON_SUCCESS} Rendered`)}${theme.fg("dim", "  ·  o open in browser  ·  r raw source")}`);
 			const dim = s.width && s.height ? `${s.width}×${s.height}px  ·  ` : "";
-			push(` ${theme.fg("dim", `snapshot (can't show inline): ${dim}${s.path}`)}`);
+			push(theme.fg("dim", `snapshot (can't show inline): ${dim}${s.path}`));
 		} else if (s.status === "unavailable") {
-			push(` ${theme.fg("warning", `${ICON_WARNING} No headless browser — best-effort text.`)}${theme.fg("dim", "  ·  o open in browser")}`);
+			push(`${theme.fg("warning", `${ICON_WARNING} No headless browser — best-effort text.`)}${theme.fg("dim", "  ·  o open in browser")}`);
 		} else if (s.status === "failed") {
-			push(` ${theme.fg("warning", `${ICON_WARNING} Browser render failed — best-effort text.`)}${theme.fg("dim", "  ·  o open in browser")}`);
-			push(` ${theme.fg("dim", truncateToWidth(s.error, Math.max(10, inner - 2), "…"))}`);
+			push(`${theme.fg("warning", `${ICON_WARNING} Browser render failed — best-effort text.`)}${theme.fg("dim", "  ·  o open in browser")}`);
+			push(theme.fg("dim", truncateToWidth(s.error, Math.max(10, inner - 2), "…")));
 		}
-		if (lines.length > 0) push(theme.fg("borderMuted", ` ${"·".repeat(Math.max(1, Math.min(inner - 2, 40)))}`));
+		if (lines.length > 0) push(theme.fg("borderMuted", "·".repeat(Math.max(1, Math.min(inner - 1, 40)))));
 		return lines;
 	}
 
@@ -941,7 +942,7 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 		// summary (which is muted with a "Summary" label) and from the content.
 		if (descLinesCache.length > 0) {
 			for (const l of descLinesCache) out.push(pad(`${theme.fg("accent", "▏")} ${theme.fg("muted", l)}`, inner));
-			out.push(pad(theme.fg("borderMuted", ` ${"·".repeat(Math.max(1, Math.min(inner - 2, 30)))}`), inner));
+			out.push(pad(theme.fg("borderMuted", "·".repeat(Math.max(1, Math.min(inner - 1, 30)))), inner));
 		}
 		const bodyH = Math.max(1, contentH - out.length);
 
@@ -952,11 +953,11 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 		};
 
 		if (state.previewKind === "image") return fillBody(imageCardLines(inner));
-		if (state.previewKind === "loading") return fillBody([theme.fg("muted", " Loading…")]);
-		if (state.previewKind === "empty") return fillBody([theme.fg("muted", " (nothing to preview)")]);
-		if (state.previewKind === "binary") return fillBody([theme.fg("muted", " (binary file)")]);
+		if (state.previewKind === "loading") return fillBody([theme.fg("muted", "Loading…")]);
+		if (state.previewKind === "empty") return fillBody([theme.fg("muted", "(nothing to preview)")]);
+		if (state.previewKind === "binary") return fillBody([theme.fg("muted", "(binary file)")]);
 		if (state.previewKind === "missing")
-			return fillBody([theme.fg("warning", " This path does not exist on disk."), pad("", inner), theme.fg("dim", " The agent may have mistyped it; ask it to double-check.")]);
+			return fillBody([theme.fg("warning", "This path does not exist on disk."), pad("", inner), theme.fg("dim", "The agent may have mistyped it; ask it to double-check.")]);
 
 		if (state.previewKind === "dir") {
 			// Constrained browser: a cursor selects entries; ".." (when descended)
@@ -969,7 +970,7 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 				// isCursor already implies focus === "preview", so the pointer is always accent.
 				const pointer = isCursor ? theme.fg("accent", "› ") : "  ";
 				if (r.kind === "up") {
-					return ` ${pointer}${theme.fg("muted", "../")}${theme.fg("dim", "  up")}`;
+					return `${pointer}${theme.fg("muted", "../")}${theme.fg("dim", "  up")}`;
 				}
 				const nm = r.isDir ? `${r.name}/` : r.name;
 				const icon = r.isDir ? theme.fg("accent", "▸ ") : theme.fg("dim", "· ");
@@ -978,7 +979,7 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 					Math.max(1, inner - 5),
 					"…",
 				);
-				return ` ${pointer}${icon}${styled}`;
+				return `${pointer}${icon}${styled}`;
 			});
 			if (browse.length === 0) lines.push(theme.fg("muted", " (empty directory)"));
 			return fillBody(lines);
@@ -995,14 +996,18 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 				all = state.mdComp.render(w);
 			} else {
 				banner = htmlBannerLines(inner);
-				if (!state.renderedCache || state.renderedCache.width !== w)
-					state.renderedCache = { width: w, lines: wrapTextWithAnsi(htmlToText(state.fileText), w) };
+				if (!state.renderedCache || state.renderedCache.width !== w) {
+					// Entity decoding can reintroduce control characters even though the
+					// loaded source was sanitized, so neutralize the derived text again.
+					const htmlText = sanitizePreviewText(htmlToText(state.fileText));
+					state.renderedCache = { width: w, lines: wrapTextWithAnsi(htmlText, w) };
+				}
 				all = state.renderedCache.lines;
 			}
 			const avail = Math.max(1, bodyH - banner.length);
 			state.renderedCount = all.length;
 			state.previewScroll = Math.max(0, Math.min(state.previewScroll, Math.max(0, all.length - avail)));
-			const text = all.slice(state.previewScroll, state.previewScroll + avail).map((l) => ` ${l}`);
+			const text = all.slice(state.previewScroll, state.previewScroll + avail);
 			return fillBody([...banner, ...text]);
 		}
 
@@ -1033,7 +1038,7 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 				textStyled = inMatch ? theme.underline(text) : text;
 			} else if (isCursor || inSel || inRegion || inMatch) textStyled = theme.fg("text", text);
 			else textStyled = theme.fg("dim", text);
-			let rowStr = ` ${numStyled} ${textStyled}`;
+			let rowStr = `${numStyled} ${textStyled}`;
 			rowStr = pad(rowStr, inner);
 			if (inSel || isCursor) rowStr = theme.bg("selectedBg", rowStr);
 			else if (inRegion) rowStr = theme.bg("customMessageBg", rowStr);
@@ -1042,16 +1047,14 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 		return fillBody(lines);
 	}
 
-	// Header block: rule, title row (+ optional forwarding chain), optional summary.
+	// Header block: strong outer rules with compact title/summary content between.
 	function buildHeader(innerW: number): string[] {
 		const fileCount = files.length;
 		const missingCount = files.filter((f) => f.kind === "missing").length;
-		const header: string[] = [];
-		header.push(rule(innerW));
-		header.push(pad("", innerW)); // top padding above the title
+		const header: string[] = [rule(innerW)];
 		let counts = `${fileCount} file${fileCount !== 1 ? "s" : ""}`;
 		if (missingCount > 0) counts += `, ${missingCount} missing`;
-		// Title indented one space, so it lines up with the padded body below.
+		// One-column inset aligns full-width header and footer content.
 		header.push(pad(truncateToWidth(` ${theme.bold(title)}${theme.fg("dim", `  ${counts}`)}`, innerW, "…"), innerW));
 		// Who's showing — only when a subagent forwarded the presentation here.
 		if (from && from.length > 0) {
@@ -1060,10 +1063,8 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 			);
 		}
 		if (summary) {
-			// A separated, labelled intro block — visually distinct from the
-			// per-file description that appears in the right pane. The "Summary"
-			// label sits on the first wrapped line; continuation lines align under it.
-			header.push(pad("", innerW)); // blank line between title and summary
+			// The label distinguishes the presentation summary from the per-file
+			// description callout without spending blank rows on separation.
 			const label = " Summary  ";
 			const indent = " ".repeat(visibleWidth(label));
 			const wrapped = wrapTextWithAnsi(summary, Math.max(10, innerW - visibleWidth(label) - 1)).slice(0, 3);
@@ -1072,7 +1073,7 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 				header.push(pad(truncateToWidth(styled, innerW, "…"), innerW));
 			});
 		}
-		header.push(pad("", innerW)); // bottom padding below the header block
+		header.push(rule(innerW));
 		return header;
 	}
 
@@ -1211,10 +1212,16 @@ export function createShowFilesPanel(opts: ShowFilesPanelOptions): Component {
 			lines.length = targetH;
 		}
 
+		// A custom component must never return a line wider than the width Pi
+		// supplied. Keep this final guard even though individual panes truncate:
+		// nested renderers and narrow split layouts can otherwise violate the
+		// contract and make differential rendering stop on a later scroll.
+		const fittedLines = lines.map((line) => truncateToWidth(line, innerW, ""));
+
 		cachedWidth = width;
 		cachedHeight = targetH;
-		cachedLines = lines;
-		return lines;
+		cachedLines = fittedLines;
+		return fittedLines;
 	}
 
 	return { render, handleInput, invalidate };

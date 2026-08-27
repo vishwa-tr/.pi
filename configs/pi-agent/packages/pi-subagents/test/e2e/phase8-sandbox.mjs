@@ -42,6 +42,55 @@ await test("targets in/under/above the state tree and def dirs are denied; proje
 	assert.equal(deny(join(world.home, ".pi", "agent", "sessions")).denied, true, "ancestor of the state tree");
 	assert.equal(deny(join(world.project, "src", "app.ts")).denied, false);
 });
+await test("Windows path aliases cannot bypass target or command denies", () => {
+	const pathSeparator = "\\";
+	const home = "C:\\Users\\u";
+	const protectedDir = `${home}\\.pi\\agent\\subagents`;
+	const fakeRealpath = (path) => {
+		if (path.toLowerCase() === protectedDir.toLowerCase()) return protectedDir;
+		throw new Error("missing");
+	};
+	const windowsDeny = makeSystemDenyCheck([protectedDir], fakeRealpath, pathSeparator);
+	const namespaceDeny = makeSystemDenyCheck([protectedDir], (path) => path, pathSeparator);
+	const windowsCommandDeny = makeCommandDenyCheck([protectedDir], fakeRealpath, home, pathSeparator);
+	assert.equal(windowsDeny("C:/Users/u/.pi/agent/subagents/new.md").denied, true, "forward-slash new target");
+	assert.equal(windowsDeny("C:/Users\\u/.pi/agent\\subagents/new.md").denied, true, "mixed-slash new target");
+	assert.equal(windowsDeny("\\\\?\\C:\\Users\\u\\.pi\\agent\\subagents\\new.md").denied, true, "extended drive new target");
+	assert.equal(namespaceDeny("\\\\?\\C:\\Users\\u").denied, true, "extended drive ancestor");
+	assert.equal(namespaceDeny("\\\\?\\D:\\safe\\file.txt").denied, false, "other drive remains allowed");
+	assert.equal(namespaceDeny("\\\\.\\C:\\Users\\u\\.pi\\agent\\subagents\\new.md").denied, true, "device namespace fails closed");
+	const resolvedNamespaceDeny = makeSystemDenyCheck([protectedDir], (path) => {
+		if (path.toLowerCase() === protectedDir.toLowerCase()) return protectedDir;
+		return "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\Users\\u\\.pi\\agent\\subagents\\new.md";
+	}, pathSeparator);
+	assert.equal(resolvedNamespaceDeny("C:\\temp\\link").denied, true, "unsupported resolved namespace fails closed");
+	const unsafePrefixDeny = makeSystemDenyCheck(
+		[protectedDir],
+		() => "\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\protected",
+		pathSeparator,
+	);
+	assert.equal(unsafePrefixDeny("C:\\safe\\file.txt").denied, true, "unsupported protected prefix fails closed");
+	const uncProtected = "\\\\server\\share\\.pi\\agent\\subagents";
+	const uncDeny = makeSystemDenyCheck([uncProtected], (path) => path, pathSeparator);
+	assert.equal(uncDeny("\\\\?\\UNC\\server\\share\\.pi\\agent\\subagents\\new.md").denied, true, "extended UNC target");
+	assert.equal(windowsCommandDeny("echo x > C:/Users\\u/.pi/agent\\subagents/new.md").denied, true, "mixed command path");
+	assert.equal(windowsCommandDeny("echo x > \\\\?\\C:\\Users\\u\\.pi\\agent\\subagents\\new.md").denied, true, "extended command path");
+	assert.equal(
+		windowsCommandDeny("echo x > \\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\Users\\u\\.pi\\agent\\subagents\\new.md").denied,
+		true,
+		"GLOBALROOT command fails closed",
+	);
+	assert.equal(
+		windowsCommandDeny("echo x > \\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\protected").denied,
+		true,
+		"volume GUID command fails closed",
+	);
+	const lowerProtectedDir = protectedDir.toLowerCase();
+	const caseCommandDeny = makeCommandDenyCheck([lowerProtectedDir], (path) => path, home, pathSeparator);
+	assert.equal(caseCommandDeny("echo x > $HOME/.pi/agent/subagents/new.md").denied, true, "case-insensitive $HOME path");
+	assert.equal(caseCommandDeny("echo x > ~/.pi/agent/subagents/new.md").denied, true, "case-insensitive tilde path");
+	assert.equal(windowsCommandDeny("npm test").denied, false);
+});
 await test("bash text scan catches raw, realpath'd, and ~-relative spellings", () => {
 	assert.equal(denyCmd(`echo pwned > ${layout.globalTypeDefsDir}/x.md`).denied, true);
 	assert.equal(denyCmd(`cat ${realpathDeep(layout.registryFile, realpathSync)}`).denied, true);
@@ -92,9 +141,15 @@ await test("bash referencing a protected root hard-denies; safe command asks the
 		},
 	});
 	const bash = tools.find((t) => t.name === "bash");
-	await assert.rejects(() => bash.execute("tc4", { command: `rm -rf ${layout.subagentsRoot}` }, undefined, undefined, {}), /Blocked by the subagents sandbox/);
+	const bashContext = {
+		sessionManager: {
+			getSessionId: () => "sandbox-test",
+			getSessionFile: () => undefined,
+		},
+	};
+	await assert.rejects(() => bash.execute("tc4", { command: `rm -rf ${layout.subagentsRoot}` }, undefined, undefined, bashContext), /Blocked by the subagents sandbox/);
 	assert.equal(decisions.length, 0);
-	const result = await bash.execute("tc5", { command: "echo sandbox-ok" }, undefined, undefined, {});
+	const result = await bash.execute("tc5", { command: "echo sandbox-ok" }, undefined, undefined, bashContext);
 	assert.equal(decisions.length, 1, "safe command was confirmed");
 	assert.ok(JSON.stringify(result.content).includes("sandbox-ok"));
 });

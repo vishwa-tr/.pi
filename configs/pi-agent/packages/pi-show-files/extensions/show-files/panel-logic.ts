@@ -49,6 +49,22 @@ export function classifyContent(opts: { isImage: boolean; size: number; hasNul: 
 }
 
 /**
+ * Neutralize terminal controls while preserving tabs and line feeds used for
+ * layout. Normalize CRLF first so source line numbers remain stable; stray CR,
+ * C0, DEL, and C1 controls become visible replacement glyphs.
+ */
+export function sanitizePreviewText(text: string): string {
+	return text
+		.replace(/\r\n/g, "\n")
+		.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "�");
+}
+
+/** Split source text into terminal-safe preview lines, preserving line numbers. */
+export function previewLines(text: string): string[] {
+	return sanitizePreviewText(text).split("\n");
+}
+
+/**
  * Sort directory entries in place: directories first, then case-insensitive name
  * order. Returns the same array for chaining.
  */
