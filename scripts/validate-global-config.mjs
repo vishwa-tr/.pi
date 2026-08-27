@@ -11,6 +11,9 @@ const notes = [];
 
 const EXPECTED_PACKAGE_COUNT = 31;
 const EXPECTED_SKILL_COUNT = 31;
+const EXPECTED_PROVIDER = "openai-codex";
+const EXPECTED_MODEL = "gpt-5.6-sol";
+const EXPECTED_THINKING_LEVEL = "high";
 const EXPECTED_THEME = "void-agent-one-dark";
 const ROOT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
 const AGENT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
@@ -104,6 +107,15 @@ function validateSettingsFile({ relativePath, baseDir, allowedKeys, packagePrefi
   if (!sameJson(keys, [...allowedKeys].sort())) {
     fail(`${relativePath} must contain only ${allowedKeys.map((key) => JSON.stringify(key)).join(", ")}; found: ${keys.join(", ")}`);
   }
+  if (settings.defaultProvider !== EXPECTED_PROVIDER) {
+    fail(`${relativePath} default provider must be ${EXPECTED_PROVIDER}; found: ${JSON.stringify(settings.defaultProvider)}`);
+  }
+  if (settings.defaultModel !== EXPECTED_MODEL) {
+    fail(`${relativePath} default model must be ${EXPECTED_MODEL}; found: ${JSON.stringify(settings.defaultModel)}`);
+  }
+  if (settings.defaultThinkingLevel !== EXPECTED_THINKING_LEVEL) {
+    fail(`${relativePath} default thinking level must be ${EXPECTED_THINKING_LEVEL}; found: ${JSON.stringify(settings.defaultThinkingLevel)}`);
+  }
   if (settings.theme !== EXPECTED_THEME) {
     fail(`${relativePath} theme must be ${EXPECTED_THEME}; found: ${JSON.stringify(settings.theme)}`);
   }
@@ -117,7 +129,7 @@ function validateSettingsFile({ relativePath, baseDir, allowedKeys, packagePrefi
 const rootSettings = validateSettingsFile({
   relativePath: "settings.json",
   baseDir: root,
-  allowedKeys: ["packages", "theme"],
+  allowedKeys: ["defaultModel", "defaultProvider", "defaultThinkingLevel", "packages", "theme"],
   packagePrefix: ROOT_PACKAGE_PREFIX,
 });
 // The agent/ shim is active when the repository is checked out one level above
@@ -129,7 +141,7 @@ const agentShimActive = existsSync(join(root, "agent", "configs", "pi-agent", "p
 const agentSettings = validateSettingsFile({
   relativePath: "agent/settings.json",
   baseDir: join(root, "agent"),
-  allowedKeys: ["packages", "skills", "theme"],
+  allowedKeys: ["defaultModel", "defaultProvider", "defaultThinkingLevel", "packages", "skills", "theme"],
   packagePrefix: AGENT_PACKAGE_PREFIX,
   expectedSkills: ["./skills"],
   checkPackageFiles: agentShimActive,
