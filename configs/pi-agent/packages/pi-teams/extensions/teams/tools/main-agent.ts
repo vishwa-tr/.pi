@@ -244,8 +244,8 @@ export function createPeersTool(getCore: GetCore): ToolDefinition<typeof PeersPa
 		name: "team_peers",
 		label: "Set peer messaging",
 		description:
-			"Set fleet peer messaging. off routes coordination through you; changes apply on each agent's next wake. " +
-			"User-pinned settings override this request.",
+			"Set fleet peer messaging. off blocks peer delivery immediately and routes coordination through you; " +
+			"agent tools and identity prose refresh on the next wake. User-pinned settings override this request.",
 		parameters: PeersParams,
 		async execute(_toolCallId, params) {
 			try {

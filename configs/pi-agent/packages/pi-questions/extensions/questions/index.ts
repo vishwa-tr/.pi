@@ -103,7 +103,7 @@ const InputSchema = Type.Object({
 	),
 	fileKind: Type.Optional(
 		StringEnum(["file", "directory", "any"] as const, {
-			description: "Existing-path kind filter; nonexistent paths are allowed.",
+			description: "Existing-path kind filter; nonexistent paths are allowed. Defaults to any.",
 		}),
 	),
 }, { additionalProperties: false });

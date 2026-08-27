@@ -32,4 +32,8 @@ assert.deepEqual(
 );
 assert.deepEqual(keysOf(ext.commands), ["teams"], "/teams command");
 
+const peers = ext.tools.get("team_peers").definition;
+assert.match(peers.description, /blocks peer delivery immediately/, "team_peers documents immediate delivery enforcement");
+assert.match(peers.description, /refresh on the next wake/, "team_peers distinguishes next-wake tool and prose refresh");
+
 console.log("loadcheck ok — tools:", keysOf(ext.tools).sort().join(", "), "· commands:", keysOf(ext.commands).join(", "));
