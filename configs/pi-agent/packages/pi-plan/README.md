@@ -21,12 +21,14 @@ Quick's length rule is a host-injected prompt rule, not a provider-level token c
 - `/plan --skill <name> <task>` — force one tagged supplemental Plan skill for the task.
 - `/quick` — toggle Quick mode; `/quick <message>` enables it and sends the message.
 - `/discuss|plan|quick on|off|exit|toggle|status` — explicit mode control.
-- `Shift+Tab` — cycle `Off → Discuss → Plan → Quick → Off` while Pi is idle.
+- `Shift+Tab` — cycle `Off → Discuss → Plan → Quick → Off` at any time.
 - `/skill:plan <task>` — invoke the underlying planning procedure for one task without enabling the host-enforced mode guard or `save_plan`.
 
-Routine mode transitions are silent because the footer already shows the active state. Busy-state warnings, invalid-command errors, fallback warnings, and explicit `status` responses remain visible.
+Mode controls are accepted while the agent is running. The current run keeps the prompt and tool policy it started with; the latest selected mode is persisted and becomes effective after `agent_settled`, before the next user turn. A busy `/discuss <message>`, `/plan <task>`, or `/quick <message>` waits for Pi to settle and then starts a fresh top-level turn, so `before_agent_start` applies the selected mode. A newer mode request cancels an older waiting task.
 
-The active mode, explicit Plan skill, authorized Plan path, and Plan-spawned subagent scope are persisted as branch-local session state. Reload, resume, fork, and `/tree` restore state from the active branch; legacy `{ enabled: boolean }` Plan entries migrate to `plan` or `off`. A new session starts Off.
+Routine mode transitions are silent because the footer already shows the selected next-turn state. Invalid-command errors, queued-task cancellation notices, fallback warnings, and explicit `status` responses remain visible.
+
+The selected mode, explicit Plan skill, authorized Plan path, and Plan-spawned subagent scope are persisted as branch-local session state. Reload, resume, fork, and `/tree` restore state from the active branch; legacy `{ enabled: boolean }` Plan entries migrate to `plan` or `off`. A new session starts Off.
 
 While a restricted mode is active, `pi-plan` publishes its plain mode label under the legacy-compatible `plan-mode` status key. `pi-status-line` renders that dedicated footer segment.
 
@@ -52,7 +54,7 @@ The directly cloneable global configuration exposes the repository's root `skill
 
 ## Tool policy
 
-Entering the first restricted mode snapshots the current active tools. Moving between Discuss, Plan, and Quick re-filters from that same snapshot; returning Off restores it exactly, except `save_plan` remains disabled outside Plan.
+Entering the first effective restricted mode snapshots the current active tools. Moving between Discuss, Plan, and Quick re-filters from that same snapshot; returning Off restores it exactly, except `save_plan` remains disabled outside Plan. A mode selected during a run does not change that run's tools or guards; reconciliation happens only after the run settles.
 
 Every allowed tool must match its expected Pi built-in or local-package provenance, so a colliding custom tool cannot gain access merely by registering an approved name. A default-deny `tool_call` guard remains authoritative if another extension activates a tool after the mode begins.
 
@@ -116,6 +118,7 @@ The canonical base skill is root `skills/plan/SKILL.md`. Pi discovers it as a no
 
 ```bash
 node --test \
+  configs/pi-agent/packages/pi-plan/extensions/plan/mode-lifecycle.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/policy.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/save.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/templates.test.ts

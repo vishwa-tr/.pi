@@ -9,6 +9,7 @@ import type {
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { ModeLifecycle } from "./mode-lifecycle.ts";
 import {
 	applyPlanSubagentPolicy,
 	extractSuccessfulSpawnAddress,
@@ -39,6 +40,7 @@ const STATUS_TEXT: Record<Exclude<AgentMode, "off">, string> = {
 	quick: "󱐋 quick mode", // nf-md-lightning-bolt
 };
 const PLAN_SKILL_NAME = "plan";
+const TASK_START_TIMEOUT_MS = 5 * 60 * 1000;
 const PLAN_ENTRY_PATH = realpathSync(fileURLToPath(import.meta.url));
 const PACKAGES_ROOT = resolve(dirname(PLAN_ENTRY_PATH), "../../..");
 
@@ -138,15 +140,26 @@ function completions(options: string[]) {
 }
 
 export default function planExtension(pi: ExtensionAPI): void {
-	let mode: AgentMode = "off";
+	const modeLifecycle = new ModeLifecycle();
+	let modeIntentRevision = 0;
 	let authorizedPlanPath: string | undefined;
 	let authorizedProjectRoot: string | undefined;
 	let selectedPlanSkill: string | undefined;
 	let planSubagentAddresses = new Set<string>();
+	const admittedPlanSpawnCalls = new Set<string>();
 	let toolsBeforeRestrictedMode: string[] | undefined;
 	let warnedMissingSkill = false;
 	let warnedMissingSelectedTemplate = "";
 	let saveTail: Promise<void> = Promise.resolve();
+	let taskLaunchTail: Promise<void> = Promise.resolve();
+	let pendingTaskLaunch: {
+		task: string;
+		revision: number;
+		prepare?: () => void;
+		inputAccepted: boolean;
+		resolve: (started: boolean) => void;
+		timer: ReturnType<typeof setTimeout>;
+	} | undefined;
 
 	async function serializeSave<T>(operation: () => Promise<T>): Promise<T> {
 		const previous = saveTail;
@@ -162,9 +175,50 @@ export default function planExtension(pi: ExtensionAPI): void {
 		}
 	}
 
+	async function serializeTaskLaunch(operation: () => Promise<void>): Promise<void> {
+		const previous = taskLaunchTail;
+		let release!: () => void;
+		taskLaunchTail = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await previous;
+		try {
+			await operation();
+		} finally {
+			release();
+		}
+	}
+
+	function finishPendingTaskLaunch(started: boolean): void {
+		const pending = pendingTaskLaunch;
+		if (!pending) return;
+		pendingTaskLaunch = undefined;
+		clearTimeout(pending.timer);
+		pending.resolve(started);
+	}
+
+	function waitForTaskStart(
+		task: string,
+		revision: number,
+		prepare?: () => void,
+	): Promise<boolean> {
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => finishPendingTaskLaunch(false), TASK_START_TIMEOUT_MS);
+			timer.unref?.();
+			pendingTaskLaunch = {
+				task,
+				revision,
+				...(prepare ? { prepare } : {}),
+				inputAccepted: false,
+				resolve,
+				timer,
+			};
+		});
+	}
+
 	function currentState(): AgentModeState {
 		return {
-			mode,
+			mode: modeLifecycle.selectedMode,
 			...(authorizedPlanPath && authorizedProjectRoot
 				? { authorizedPlanPath, authorizedProjectRoot }
 				: {}),
@@ -180,17 +234,26 @@ export default function planExtension(pi: ExtensionAPI): void {
 	}
 
 	function updateStatus(ctx: ExtensionContext): void {
-		// Publish plain text; pi-status-line owns the dedicated left-side slot and styling.
-		ctx.ui.setStatus(STATUS_KEY, mode === "off" ? undefined : STATUS_TEXT[mode]);
+		// Publish the user's selected next-turn mode. pi-status-line owns the
+		// dedicated left-side slot and styling.
+		const selectedMode = modeLifecycle.selectedMode;
+		ctx.ui.setStatus(
+			STATUS_KEY,
+			selectedMode === "off" ? undefined : STATUS_TEXT[selectedMode],
+		);
 	}
 
-	function enableRestrictedModeTools(): void {
-		if (mode === "off") return;
+	function enableRestrictedModeTools(restrictedMode: Exclude<AgentMode, "off">): void {
 		if (toolsBeforeRestrictedMode === undefined) {
 			toolsBeforeRestrictedMode = pi.getActiveTools().filter((name) => name !== SAVE_PLAN_TOOL);
 		}
 		pi.setActiveTools(
-			restrictedModeTools(mode, toolsBeforeRestrictedMode, pi.getAllTools(), TRUSTED_CUSTOM_TOOLS),
+			restrictedModeTools(
+				restrictedMode,
+				toolsBeforeRestrictedMode,
+				pi.getAllTools(),
+				TRUSTED_CUSTOM_TOOLS,
+			),
 		);
 	}
 
@@ -203,9 +266,9 @@ export default function planExtension(pi: ExtensionAPI): void {
 		pi.setActiveTools(pi.getActiveTools().filter((name) => name !== SAVE_PLAN_TOOL));
 	}
 
-	function applyModeTools(): void {
-		if (mode === "off") restoreNormalTools();
-		else enableRestrictedModeTools();
+	function applyModeTools(targetMode: AgentMode): void {
+		if (targetMode === "off") restoreNormalTools();
+		else enableRestrictedModeTools(targetMode);
 	}
 
 	function restore(ctx: ExtensionContext): void {
@@ -214,7 +277,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 			if (entry.type !== "custom" || entry.customType !== STATE_ENTRY) continue;
 			restored = parseAgentModeState(entry.data) ?? { mode: "off" };
 		}
-		mode = restored.mode;
+		modeLifecycle.restore(restored.mode);
 		let currentProjectRoot: string | undefined;
 		try {
 			currentProjectRoot = realpathSync(ctx.cwd);
@@ -228,40 +291,70 @@ export default function planExtension(pi: ExtensionAPI): void {
 		authorizedProjectRoot = authorizationMatchesProject ? restored.authorizedProjectRoot : undefined;
 		selectedPlanSkill = restored.selectedPlanSkill;
 		planSubagentAddresses = new Set(restored.planSubagentAddresses ?? []);
-		applyModeTools();
+		applyModeTools(restored.mode);
 		updateStatus(ctx);
 	}
 
 	function setMode(next: AgentMode, ctx: ExtensionContext): boolean {
-		if (mode === next) {
-			if (mode !== "off") enableRestrictedModeTools();
-			return false;
+		const changed = modeLifecycle.select(next);
+		if (ctx.isIdle() && modeLifecycle.runMode === undefined) {
+			applyModeTools(modeLifecycle.selectedMode);
 		}
-		mode = next;
-		applyModeTools();
+		if (!changed) return false;
 		persistState();
 		updateStatus(ctx);
 		return true;
 	}
 
-	function requireIdle(ctx: ExtensionContext): boolean {
-		if (ctx.isIdle()) return true;
-		ctx.ui.notify("Agent mode can only be changed while Pi is idle.", "warning");
-		return false;
+	function requestMode(next: AgentMode, ctx: ExtensionContext): { changed: boolean; revision: number } {
+		modeIntentRevision += 1;
+		return {
+			changed: setMode(next, ctx),
+			revision: modeIntentRevision,
+		};
 	}
 
 	function toggleMode(target: Exclude<AgentMode, "off">, ctx: ExtensionContext): void {
-		setMode(mode === target ? "off" : target, ctx);
+		requestMode(modeLifecycle.selectedMode === target ? "off" : target, ctx);
 	}
 
 	function cycleMode(ctx: ExtensionContext): void {
-		if (!requireIdle(ctx)) return;
-		setMode(nextAgentMode(mode), ctx);
+		requestMode(nextAgentMode(modeLifecycle.selectedMode), ctx);
+	}
+
+	async function sendTaskOnNextRun(
+		task: string,
+		revision: number,
+		ctx: ExtensionCommandContext,
+		prepare?: () => void,
+	): Promise<void> {
+		await serializeTaskLaunch(async () => {
+			if (!ctx.isIdle()) await ctx.waitForIdle();
+			if (revision !== modeIntentRevision) {
+				ctx.ui.notify("Queued mode task cancelled because a newer mode change took precedence.", "info");
+				return;
+			}
+			applyModeTools(modeLifecycle.selectedMode);
+			const started = waitForTaskStart(task, revision, prepare);
+			try {
+				pi.sendUserMessage(task);
+			} catch (error) {
+				finishPendingTaskLaunch(false);
+				throw error;
+			}
+			if (!(await started) && revision === modeIntentRevision) {
+				ctx.ui.notify("Could not confirm that the queued mode task started.", "warning");
+			}
+		});
 	}
 
 	function reportStatus(ctx: ExtensionContext): void {
+		const selectedMode = modeLifecycle.selectedMode;
+		const pending = modeLifecycle.hasPendingChange
+			? ` Current run: ${modeLabel(modeLifecycle.runMode!)}; next turn: ${modeLabel(selectedMode)}.`
+			: "";
 		ctx.ui.notify(
-			`Mode: ${modeLabel(mode)}. Plan template: ${selectedPlanSkill ?? "automatic"}.${authorizedPlanPath ? ` Authorized path: ${authorizedPlanPath}.` : ""}`,
+			`Mode: ${modeLabel(selectedMode)}.${pending} Plan template: ${selectedPlanSkill ?? "automatic"}.${authorizedPlanPath ? ` Authorized path: ${authorizedPlanPath}.` : ""}`,
 			"info",
 		);
 	}
@@ -271,7 +364,6 @@ export default function planExtension(pi: ExtensionAPI): void {
 		args: string,
 		ctx: ExtensionCommandContext,
 	): Promise<void> {
-		if (!requireIdle(ctx)) return;
 		const command = parseModeCommand(args);
 		if (command.kind === "toggle") {
 			toggleMode(target, ctx);
@@ -286,11 +378,11 @@ export default function planExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		if (command.kind === "set") {
-			setMode(command.enabled ? target : "off", ctx);
+			requestMode(command.enabled ? target : "off", ctx);
 			return;
 		}
-		setMode(target, ctx);
-		pi.sendUserMessage(command.task);
+		const { revision } = requestMode(target, ctx);
+		await sendTaskOnNextRun(command.task, revision, ctx);
 	}
 
 	pi.registerTool({
@@ -310,7 +402,9 @@ export default function planExtension(pi: ExtensionAPI): void {
 		}),
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			return serializeSave(async () => {
-				if (mode !== "plan") throw new Error("save_plan is available only while Plan mode is active");
+				if (modeLifecycle.enforcedMode !== "plan") {
+					throw new Error("save_plan is available only while Plan mode is active");
+				}
 				if (signal?.aborted) throw new Error("Plan save cancelled");
 				const bytes = validatePlanContent(params.content);
 				const target = await resolvePlanTarget(ctx.cwd, params.path);
@@ -360,8 +454,6 @@ export default function planExtension(pi: ExtensionAPI): void {
 		description: "Toggle Plan mode, or enable it and plan a task",
 		getArgumentCompletions: completions(["on", "off", "exit", "toggle", "status", "--skill "]),
 		handler: async (args, ctx) => {
-			if (!requireIdle(ctx)) return;
-
 			const command = parsePlanCommand(args);
 			if (command.kind === "toggle") {
 				toggleMode("plan", ctx);
@@ -376,7 +468,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 				return;
 			}
 			if (command.kind === "set") {
-				setMode(command.enabled ? "plan" : "off", ctx);
+				requestMode(command.enabled ? "plan" : "off", ctx);
 				return;
 			}
 
@@ -392,13 +484,13 @@ export default function planExtension(pi: ExtensionAPI): void {
 					ctx.ui.notify(`Unknown, untagged, unreadable, or oversized Plan skill "${command.skillName}". Available: ${names}`, "error");
 					return;
 				}
-				selectedPlanSkill = command.skillName;
-			} else {
-				selectedPlanSkill = undefined;
 			}
-			const changed = setMode("plan", ctx);
-			if (!changed) persistState();
-			pi.sendUserMessage(command.task);
+			const requestedPlanSkill = command.skillName;
+			const { revision } = requestMode("plan", ctx);
+			await sendTaskOnNextRun(command.task, revision, ctx, () => {
+				selectedPlanSkill = requestedPlanSkill;
+				persistState();
+			});
 		},
 	});
 
@@ -413,16 +505,49 @@ export default function planExtension(pi: ExtensionAPI): void {
 		});
 	}
 
+	pi.on("input", (event, ctx) => {
+		const isTopLevelPrompt = ctx.isIdle() && event.streamingBehavior === undefined;
+		if (isTopLevelPrompt) {
+			// Reconcile before Pi rebuilds the base system prompt and selected-tool
+			// metadata for this new top-level prompt.
+			applyModeTools(modeLifecycle.selectedMode);
+		}
+		const pending = pendingTaskLaunch;
+		if (
+			pending
+			&& isTopLevelPrompt
+			&& event.source === "extension"
+			&& event.text === pending.task
+		) {
+			if (pending.revision !== modeIntentRevision) {
+				finishPendingTaskLaunch(false);
+				ctx.ui.notify("Queued mode task cancelled because a newer mode change took precedence.", "info");
+				return { action: "handled" as const };
+			}
+			pending.prepare?.();
+			pending.prepare = undefined;
+			pending.inputAccepted = true;
+		}
+	});
+
+	pi.on("agent_start", () => {
+		// Custom triggerTurn wakes do not emit input/before_agent_start. Latch a
+		// run snapshot here when no normal prompt already created one.
+		if (modeLifecycle.runMode === undefined) modeLifecycle.startRun();
+		if (pendingTaskLaunch?.inputAccepted) finishPendingTaskLaunch(true);
+	});
+
 	pi.on("tool_call", (event) => {
-		if (mode === "off") return;
+		const enforcedMode = modeLifecycle.enforcedMode;
+		if (enforcedMode === "off") return;
 		const tool = pi.getAllTools().find((candidate) => candidate.name === event.toolName);
-		if (!isToolAllowedInMode(mode, tool, TRUSTED_CUSTOM_TOOLS)) {
+		if (!isToolAllowedInMode(enforcedMode, tool, TRUSTED_CUSTOM_TOOLS)) {
 			return {
 				block: true,
-				reason: `${modeLabel(mode)} mode blocked untrusted or disallowed tool "${event.toolName}".`,
+				reason: `${modeLabel(enforcedMode)} mode blocked untrusted or disallowed tool "${event.toolName}".`,
 			};
 		}
-		if (mode !== "plan") return;
+		if (enforcedMode !== "plan") return;
 
 		const decision = applyPlanSubagentPolicy(
 			event.toolName,
@@ -435,11 +560,14 @@ export default function planExtension(pi: ExtensionAPI): void {
 			for (const key of Object.keys(mutableInput)) delete mutableInput[key];
 			Object.assign(mutableInput, decision.normalizedInput);
 		}
+		if (event.toolName === "subagent_spawn") {
+			admittedPlanSpawnCalls.add(event.toolCallId);
+		}
 	});
 
 	pi.on("tool_result", (event) => {
-		if (mode !== "plan") return;
 		if (event.toolName === "subagent_spawn") {
+			if (!admittedPlanSpawnCalls.delete(event.toolCallId)) return;
 			const address = extractSuccessfulSpawnAddress(event.content, event.isError);
 			if (address && !planSubagentAddresses.has(address)) {
 				planSubagentAddresses.add(address);
@@ -447,6 +575,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 			}
 			return;
 		}
+		if (modeLifecycle.enforcedMode !== "plan") return;
 		if (event.toolName === "subagent_retire" && !event.isError) {
 			const target = (event.input as { to?: unknown }).to;
 			if (typeof target === "string" && planSubagentAddresses.delete(target)) persistState();
@@ -454,11 +583,12 @@ export default function planExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
-		if (mode === "off") return;
-		if (mode === "quick") {
+		const runMode = modeLifecycle.startRun();
+		if (runMode === "off") return;
+		if (runMode === "quick") {
 			return { systemPrompt: `${event.systemPrompt}\n\n${buildQuickModeInstructions()}` };
 		}
-		if (mode === "discuss") {
+		if (runMode === "discuss") {
 			return { systemPrompt: `${event.systemPrompt}\n\n${buildDiscussModeInstructions()}` };
 		}
 
@@ -504,12 +634,30 @@ export default function planExtension(pi: ExtensionAPI): void {
 		};
 	});
 
+	pi.on("agent_settled", (_event, ctx) => {
+		// Run snapshots are FIFO so an older settlement cannot clear a newer
+		// overlapping prompt preflight that already latched its mode.
+		const settledMode = modeLifecycle.settleRun();
+		if (modeLifecycle.runMode !== undefined) return;
+		if (!ctx.isIdle()) {
+			// An earlier agent_settled handler started a custom triggerTurn wake,
+			// which skips before_agent_start. Snapshot it before commands can alter
+			// the selected mode during that run.
+			modeLifecycle.startRun();
+			return;
+		}
+		if (settledMode !== modeLifecycle.selectedMode) {
+			applyModeTools(modeLifecycle.selectedMode);
+		}
+	});
 	pi.on("session_start", (_event, ctx) => {
 		restore(ctx);
 		installTerminalShortcut(ctx);
 	});
 	pi.on("session_tree", (_event, ctx) => restore(ctx));
 	pi.on("session_shutdown", (_event, ctx) => {
+		modeIntentRevision += 1;
+		finishPendingTaskLaunch(false);
 		// Reload/session replacement inherits the current active-tool set. Restore
 		// the pre-restricted snapshot so the next extension instance can capture
 		// the real baseline again.

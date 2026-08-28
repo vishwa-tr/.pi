@@ -9,13 +9,13 @@
 3. **Plan** — project research, optional read-only delegated research, and authorized Markdown plan saving.
 4. **Quick** — quick chat, normally 1–4 short sentences, with trusted built-in read-only lookup tools.
 
-`/discuss`, `/plan`, and `/quick` toggle their mode or enable it and submit a task. `Shift+Tab` cycles `Off → Discuss → Plan → Quick → Off`. Mode changes are idle-only. Routine transitions do not emit notifications because the footer already shows the active mode; busy-state warnings, errors, fallback warnings, and explicit status responses remain visible.
+`/discuss`, `/plan`, and `/quick` toggle their mode or enable it and submit a task. `Shift+Tab` cycles `Off → Discuss → Plan → Quick → Off`. Mode changes are accepted at any time. During a run, the current prompt and tool policy remain latched while the latest selection becomes pending for the next top-level turn. Busy task forms wait for `agent_settled` and then start a fresh turn; a newer mode request cancels an older waiting task. Routine transitions do not emit notifications because the footer already shows the selected next-turn mode; errors, queued-task cancellation notices, fallback warnings, and explicit status responses remain visible.
 
 ## State and lifecycle
 
-The extension persists one `plan-mode.state` custom entry containing the active mode, Plan template override, authorized plan root/path, and addresses of read-only subagents created in Plan mode. State follows the active branch across reload, resume, fork, and `/tree`. The parser accepts the former `{ enabled: boolean }` shape and migrates it to `plan` or `off`.
+The extension persists one `plan-mode.state` custom entry containing the selected mode, Plan template override, authorized plan root/path, and addresses of read-only subagents created in Plan mode. The active-run mode is an ephemeral snapshot latched by `before_agent_start` and cleared by `agent_settled`; tool guards, `save_plan`, and Plan subagent bookkeeping use that snapshot so a pending transition cannot relax or rewrite the current run. State follows the active branch across reload, resume, fork, and `/tree`. The parser accepts the former `{ enabled: boolean }` shape and migrates it to `plan` or `off`.
 
-Entering the first restricted mode snapshots the current active tools. Transitions among Discuss, Plan, and Quick filter from the same snapshot. Returning Off restores the snapshot. `session_shutdown` restores it before runtime replacement so the next extension instance does not accidentally snapshot an already-filtered set.
+Entering the first effective restricted mode snapshots the current active tools. Transitions among Discuss, Plan, and Quick filter from the same snapshot after the current run settles. Returning Off restores the snapshot. `session_shutdown` restores it before runtime replacement so the next extension instance does not accidentally snapshot an already-filtered set.
 
 The `plan-mode` status producer uses `󰍩 discuss mode`, ` plan mode`, and `󱐋 quick mode`. `pi-status-line` renders them yellow, green, and blue respectively; the Material Design forum glyph avoids the Font Awesome comments glyph's visual overlap in the configured terminal font.
 
@@ -80,6 +80,7 @@ Automated policy, save, and template tests:
 
 ```bash
 node --test \
+  configs/pi-agent/packages/pi-plan/extensions/plan/mode-lifecycle.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/policy.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/save.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/templates.test.ts
