@@ -91,6 +91,11 @@ use lowercase hyphen-case under `.agents/docs/<type>/<domain>/<artifact>/<artifa
 project-specific material inside that project and exclude secrets, credentials, private paths,
 personal details, and generated logs.
 
+Keep `.agents/README.md` as a short, always-read overview and documentation router. Link directly
+to detailed documents, state when each one should be read, and keep detail out of the README. Start
+each detailed document with a brief `Summary`, followed by `Details`; read the summary first and
+continue into the details only when relevant. Avoid chains of indexes.
+
 Do not use that documentation layout for active resources. Verify the target runtime's discovery
 contract first. In Pi, project skills use `.agents/skills/<skill-name>/SKILL.md`, project subagent
 definitions use `.pi/subagents/<type>.md`, and executable saved procedures use
