@@ -18,17 +18,17 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { createProcedureLayout, type ProcedureLayout } from "./procedure/journal/layout.ts";
-import { listProcedures, resolveByName, resolveByPath } from "./procedure/library/resolve.ts";
-import { runAgent } from "./procedure/runner/agent-runner.ts";
-import { DEFAULT_MAX_CONCURRENT, Scheduler } from "./procedure/runner/scheduler.ts";
-import { makeSafetyConfirm } from "./procedure/sandbox/safety-bridge.ts";
-import { makeCommandDenyCheck, makeSystemDenyCheck } from "./procedure/sandbox/system-deny.ts";
-import { extractMeta } from "./procedure/script/meta.ts";
-import { AgentFailure } from "./procedure/script/semantics.ts";
-import { ProcedureRun } from "./procedure/run.ts";
-import { createProcedureTool, type ProcedureToolHost } from "./procedure/tool.ts";
-import { createTreeWidget, EXPAND_KEY, STOP_KEY, type TreeWidgetController } from "./procedure/tui/tree-widget.ts";
+import { createProcedureLayout, type ProcedureLayout } from "./journal/layout.ts";
+import { listProcedures, resolveByName, resolveByPath } from "./library/resolve.ts";
+import { runAgent } from "./runner/agent-runner.ts";
+import { DEFAULT_MAX_CONCURRENT, Scheduler } from "./runner/scheduler.ts";
+import { makeSafetyConfirm } from "./sandbox/safety-bridge.ts";
+import { makeCommandDenyCheck, makeSystemDenyCheck } from "./sandbox/system-deny.ts";
+import { extractMeta } from "./script/meta.ts";
+import { AgentFailure } from "./script/semantics.ts";
+import { ProcedureRun } from "./run.ts";
+import { createProcedureTool, type ProcedureToolHost } from "./tool.ts";
+import { createTreeWidget, EXPAND_KEY, STOP_KEY, type TreeWidgetController } from "./tui/tree-widget.ts";
 
 export function readMaxConcurrent(settingsFile: string): number {
 	try {

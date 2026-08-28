@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { EXT, jiti } from "./env.mjs";
 import { summary, test } from "./harness.mjs";
 
-const extension = await jiti.import(join(EXT, "..", "index.ts"));
+const extension = await jiti.import(join(EXT, "index.ts"));
 const statusLineExtension = await jiti.import(join(EXT, "..", "..", "..", "pi-status-line", "extensions", "status-line", "index.ts"));
 const { createProcedureTool } = await jiti.import(join(EXT, "tool.ts"));
 const { BOTTOM_PADDING, createTreeWidget, EXPAND_KEY } = await jiti.import(join(EXT, "tui/tree-widget.ts"));

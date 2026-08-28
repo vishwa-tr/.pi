@@ -66,7 +66,7 @@ return { verified }
 
 ## Layout
 
-- `extensions/index.ts` — wiring (tool, command, shortcut, lifecycle).
+- `extensions/procedure/index.ts` — wiring (tool, command, shortcut, lifecycle).
 - `extensions/procedure/` — `run.ts` orchestrator, `tool.ts`,
   `script/` (meta, vm compile, combinators), `runner/` (agent sessions,
   structured output, scheduler), `journal/` (layout, journal, replay cache),
