@@ -5,6 +5,7 @@ import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
 	ExtensionContext,
+	ImageContent,
 } from "@earendil-works/pi-coding-agent";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
@@ -21,6 +22,8 @@ import {
 	PLAN_SUBAGENT_TOOL_NAMES,
 	restrictedModeTools,
 	SAVE_PLAN_TOOL,
+	shouldAbortCurrentRunForModeChange,
+	shouldDeferModeTransitionInput,
 	type AgentMode,
 	type AgentModeState,
 	type TrustedCustomToolOwners,
@@ -41,8 +44,14 @@ const STATUS_TEXT: Record<Exclude<AgentMode, "off">, string> = {
 };
 const PLAN_SKILL_NAME = "plan";
 const TASK_START_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFERRED_INPUT_START_TIMEOUT_MS = 30 * 1000;
 const PLAN_ENTRY_PATH = realpathSync(fileURLToPath(import.meta.url));
 const PACKAGES_ROOT = resolve(dirname(PLAN_ENTRY_PATH), "../../..");
+
+interface DeferredModeInput {
+	text: string;
+	images?: ImageContent[];
+}
 
 function canonicalExistingPath(path: string): string {
 	try {
@@ -152,6 +161,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 	let warnedMissingSelectedTemplate = "";
 	let saveTail: Promise<void> = Promise.resolve();
 	let taskLaunchTail: Promise<void> = Promise.resolve();
+	let queuedCommandTaskCount = 0;
 	let pendingTaskLaunch: {
 		task: string;
 		revision: number;
@@ -160,6 +170,10 @@ export default function planExtension(pi: ExtensionAPI): void {
 		resolve: (started: boolean) => void;
 		timer: ReturnType<typeof setTimeout>;
 	} | undefined;
+	let deferredModeInputs: DeferredModeInput[] = [];
+	let launchingDeferredModeInput: DeferredModeInput | undefined;
+	let deferredModeInputAccepted = false;
+	let deferredModeInputStartTimer: ReturnType<typeof setTimeout> | undefined;
 
 	async function serializeSave<T>(operation: () => Promise<T>): Promise<T> {
 		const previous = saveTail;
@@ -214,6 +228,63 @@ export default function planExtension(pi: ExtensionAPI): void {
 				timer,
 			};
 		});
+	}
+
+	function deferModeTransitionInput(
+		text: string,
+		images: ImageContent[] | undefined,
+		ctx: ExtensionContext,
+	): void {
+		const wasEmpty = deferredModeInputs.length === 0;
+		deferredModeInputs.push({
+			text,
+			...(images?.length ? { images: [...images] } : {}),
+		});
+		if (wasEmpty && ctx.hasUI) {
+			ctx.ui.notify(
+				"Mode change pending; the queued message will start as a new turn after the current run settles.",
+				"info",
+			);
+		}
+	}
+
+	function resetDeferredModeInputLaunch(): void {
+		if (deferredModeInputStartTimer) clearTimeout(deferredModeInputStartTimer);
+		deferredModeInputStartTimer = undefined;
+		launchingDeferredModeInput = undefined;
+		deferredModeInputAccepted = false;
+	}
+
+	function dispatchDeferredModeInput(ctx: ExtensionContext): void {
+		if (launchingDeferredModeInput) return;
+		const pending = deferredModeInputs[0];
+		if (!pending) return;
+		launchingDeferredModeInput = pending;
+		deferredModeInputAccepted = false;
+		deferredModeInputStartTimer = setTimeout(() => {
+			if (launchingDeferredModeInput !== pending) return;
+			resetDeferredModeInputLaunch();
+			if (ctx.hasUI) {
+				ctx.ui.notify(
+					"The queued mode-transition message did not start; it remains queued for the next settled turn.",
+					"warning",
+				);
+			}
+		}, DEFERRED_INPUT_START_TIMEOUT_MS);
+		deferredModeInputStartTimer.unref?.();
+
+		const content = pending.images?.length
+			? [{ type: "text" as const, text: pending.text }, ...pending.images]
+			: pending.text;
+		try {
+			pi.sendUserMessage(content);
+		} catch (error) {
+			resetDeferredModeInputLaunch();
+			if (ctx.hasUI) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Could not start the queued mode-transition message: ${message}`, "warning");
+			}
+		}
 	}
 
 	function currentState(): AgentModeState {
@@ -272,6 +343,8 @@ export default function planExtension(pi: ExtensionAPI): void {
 	}
 
 	function restore(ctx: ExtensionContext): void {
+		resetDeferredModeInputLaunch();
+		deferredModeInputs = [];
 		let restored: AgentModeState = { mode: "off" };
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom" || entry.customType !== STATE_ENTRY) continue;
@@ -308,10 +381,9 @@ export default function planExtension(pi: ExtensionAPI): void {
 
 	function requestMode(next: AgentMode, ctx: ExtensionContext): { changed: boolean; revision: number } {
 		modeIntentRevision += 1;
-		return {
-			changed: setMode(next, ctx),
-			revision: modeIntentRevision,
-		};
+		const changed = setMode(next, ctx);
+		if (shouldAbortCurrentRunForModeChange(changed, ctx.isIdle())) ctx.abort();
+		return { changed, revision: modeIntentRevision };
 	}
 
 	function toggleMode(target: Exclude<AgentMode, "off">, ctx: ExtensionContext): void {
@@ -328,24 +400,29 @@ export default function planExtension(pi: ExtensionAPI): void {
 		ctx: ExtensionCommandContext,
 		prepare?: () => void,
 	): Promise<void> {
-		await serializeTaskLaunch(async () => {
-			if (!ctx.isIdle()) await ctx.waitForIdle();
-			if (revision !== modeIntentRevision) {
-				ctx.ui.notify("Queued mode task cancelled because a newer mode change took precedence.", "info");
-				return;
-			}
-			applyModeTools(modeLifecycle.selectedMode);
-			const started = waitForTaskStart(task, revision, prepare);
-			try {
-				pi.sendUserMessage(task);
-			} catch (error) {
-				finishPendingTaskLaunch(false);
-				throw error;
-			}
-			if (!(await started) && revision === modeIntentRevision) {
-				ctx.ui.notify("Could not confirm that the queued mode task started.", "warning");
-			}
-		});
+		queuedCommandTaskCount += 1;
+		try {
+			await serializeTaskLaunch(async () => {
+				if (!ctx.isIdle()) await ctx.waitForIdle();
+				if (revision !== modeIntentRevision) {
+					ctx.ui.notify("Queued mode task cancelled because a newer mode change took precedence.", "info");
+					return;
+				}
+				applyModeTools(modeLifecycle.selectedMode);
+				const started = waitForTaskStart(task, revision, prepare);
+				try {
+					pi.sendUserMessage(task);
+				} catch (error) {
+					finishPendingTaskLaunch(false);
+					throw error;
+				}
+				if (!(await started) && revision === modeIntentRevision) {
+					ctx.ui.notify("Could not confirm that the queued mode task started.", "warning");
+				}
+			});
+		} finally {
+			queuedCommandTaskCount -= 1;
+		}
 	}
 
 	function reportStatus(ctx: ExtensionContext): void {
@@ -506,7 +583,28 @@ export default function planExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("input", (event, ctx) => {
-		const isTopLevelPrompt = ctx.isIdle() && event.streamingBehavior === undefined;
+		const isIdle = ctx.isIdle();
+		const isTopLevelPrompt = isIdle && event.streamingBehavior === undefined;
+		if (
+			launchingDeferredModeInput
+			&& isTopLevelPrompt
+			&& event.source === "extension"
+			&& event.text === launchingDeferredModeInput.text
+		) {
+			deferredModeInputAccepted = true;
+		}
+		if (
+			!event.text.trimStart().startsWith("/")
+			&& shouldDeferModeTransitionInput(
+				event.source,
+				isIdle,
+				modeLifecycle.hasPendingChange,
+			)
+		) {
+			deferModeTransitionInput(event.text, event.images, ctx);
+			return { action: "handled" as const };
+		}
+
 		if (isTopLevelPrompt) {
 			// Reconcile before Pi rebuilds the base system prompt and selected-tool
 			// metadata for this new top-level prompt.
@@ -534,6 +632,10 @@ export default function planExtension(pi: ExtensionAPI): void {
 		// Custom triggerTurn wakes do not emit input/before_agent_start. Latch a
 		// run snapshot here when no normal prompt already created one.
 		if (modeLifecycle.runMode === undefined) modeLifecycle.startRun();
+		if (launchingDeferredModeInput && deferredModeInputAccepted) {
+			if (deferredModeInputs[0] === launchingDeferredModeInput) deferredModeInputs.shift();
+			resetDeferredModeInputLaunch();
+		}
 		if (pendingTaskLaunch?.inputAccepted) finishPendingTaskLaunch(true);
 	});
 
@@ -649,6 +751,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 		if (settledMode !== modeLifecycle.selectedMode) {
 			applyModeTools(modeLifecycle.selectedMode);
 		}
+		if (queuedCommandTaskCount === 0) dispatchDeferredModeInput(ctx);
 	});
 	pi.on("session_start", (_event, ctx) => {
 		restore(ctx);
@@ -658,6 +761,8 @@ export default function planExtension(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", (_event, ctx) => {
 		modeIntentRevision += 1;
 		finishPendingTaskLaunch(false);
+		resetDeferredModeInputLaunch();
+		deferredModeInputs = [];
 		// Reload/session replacement inherits the current active-tool set. Restore
 		// the pre-restricted snapshot so the next extension instance can capture
 		// the real baseline again.

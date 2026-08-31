@@ -24,9 +24,9 @@ Quick's length rule is a host-injected prompt rule, not a provider-level token c
 - `Shift+Tab` — cycle `Off → Discuss → Plan → Quick → Off` at any time.
 - `/skill:plan <task>` — invoke the underlying planning procedure for one task without enabling the host-enforced mode guard or `save_plan`.
 
-Mode controls are accepted while the agent is running. The current run keeps the prompt and tool policy it started with; the latest selected mode is persisted and becomes effective after `agent_settled`, before the next user turn. A busy `/discuss <message>`, `/plan <task>`, or `/quick <message>` waits for Pi to settle and then starts a fresh top-level turn, so `before_agent_start` applies the selected mode. A newer mode request cancels an older waiting task.
+Mode controls are accepted while the agent is running. Selecting a different mode aborts the old run so its prompt and tool policy cannot carry into later work; the latest selection is persisted and becomes effective after `agent_settled`. If the user submits ordinary interactive input or an RPC `prompt` during that short transition, `pi-plan` holds it and starts it as a fresh top-level turn after settlement. Multiple held messages start one at a time on successive settled turns, and an item remains queued until its replacement run reaches `agent_start`. A busy `/discuss <message>`, `/plan <task>`, or `/quick <message>` follows the same fresh-turn boundary. A newer mode request cancels an older waiting command task. Explicit RPC `steer` and `follow_up` operations retain their native meaning and are not rerouted.
 
-Routine mode transitions are silent because the footer already shows the selected next-turn state. Invalid-command errors, queued-task cancellation notices, fallback warnings, and explicit `status` responses remain visible.
+Routine mode transitions are silent because the footer already shows the selected next-turn state. Invalid-command errors, deferred-input notices, queued-task cancellation notices, fallback warnings, and explicit `status` responses remain visible.
 
 The selected mode, explicit Plan skill, authorized Plan path, and Plan-spawned subagent scope are persisted as branch-local session state. Reload, resume, fork, and `/tree` restore state from the active branch; legacy `{ enabled: boolean }` Plan entries migrate to `plan` or `off`. A new session starts Off.
 

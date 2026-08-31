@@ -22,6 +22,7 @@ const MAX_PERSISTED_PLAN_SUBAGENTS = 256;
 const ADHOC_ADDRESS_RE = /^adhoc\/[a-z0-9][a-z0-9._-]*$/i;
 
 export type AgentMode = "off" | "discuss" | "plan" | "quick";
+export type ModeInputSource = "interactive" | "rpc" | "extension";
 
 export interface ToolSource {
 	name: string;
@@ -86,6 +87,18 @@ function isAgentMode(value: unknown): value is AgentMode {
 export function nextAgentMode(mode: AgentMode): AgentMode {
 	const currentIndex = AGENT_MODE_ORDER.indexOf(mode);
 	return AGENT_MODE_ORDER[(currentIndex + 1) % AGENT_MODE_ORDER.length]!;
+}
+
+export function shouldAbortCurrentRunForModeChange(changed: boolean, isIdle: boolean): boolean {
+	return changed && !isIdle;
+}
+
+export function shouldDeferModeTransitionInput(
+	source: ModeInputSource,
+	isIdle: boolean,
+	hasPendingModeChange: boolean,
+): boolean {
+	return source !== "extension" && !isIdle && hasPendingModeChange;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

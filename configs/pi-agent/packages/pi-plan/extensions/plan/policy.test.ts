@@ -12,6 +12,8 @@ import {
 	PLAN_SUBAGENT_TOOL_NAMES,
 	restrictedModeTools,
 	SAVE_PLAN_TOOL,
+	shouldAbortCurrentRunForModeChange,
+	shouldDeferModeTransitionInput,
 	type ToolSource,
 	type TrustedCustomToolOwners,
 } from "./policy.ts";
@@ -93,6 +95,20 @@ test("mode cycle follows Off, Discuss, Plan, Quick, then Off", () => {
 	assert.equal(nextAgentMode("discuss"), "plan");
 	assert.equal(nextAgentMode("plan"), "quick");
 	assert.equal(nextAgentMode("quick"), "off");
+});
+
+test("a changed mode aborts the old run before accepting work for the new mode", () => {
+	assert.equal(shouldAbortCurrentRunForModeChange(true, false), true);
+	assert.equal(shouldAbortCurrentRunForModeChange(false, false), false);
+	assert.equal(shouldAbortCurrentRunForModeChange(true, true), false);
+});
+
+test("user input waits for a pending mode change instead of joining the old run", () => {
+	assert.equal(shouldDeferModeTransitionInput("interactive", false, true), true);
+	assert.equal(shouldDeferModeTransitionInput("rpc", false, true), true);
+	assert.equal(shouldDeferModeTransitionInput("extension", false, true), false);
+	assert.equal(shouldDeferModeTransitionInput("interactive", true, true), false);
+	assert.equal(shouldDeferModeTransitionInput("interactive", false, false), false);
 });
 
 test("Plan commands preserve template selection syntax", () => {
