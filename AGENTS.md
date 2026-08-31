@@ -36,8 +36,12 @@ sent to an external service:
   restore, unstage, or commit it.
 - Use an isolated worktree when the user requests one, relevant paths already contain unrelated
   changes, parallel or high-risk work benefits from isolation, or project instructions require it.
-  Otherwise, work in the current checkout. Follow the global `using-git-worktrees` skill whenever a
-  worktree is appropriate.
+  Otherwise, work in the current checkout. Follow project-local worktree placement rules. When none
+  exists and the user has not specified another destination, use the repository's `./.worktrees/`
+  directory. Before creating a worktree there, ensure `/.worktrees/` is covered by the repository's
+  `.gitignore` and verify it with `git check-ignore -q .worktrees/`. If verification fails, do not
+  create the worktree there until the ignore boundary is handled safely and verified again. Follow
+  the global `using-git-worktrees` skill whenever a worktree is appropriate.
 - Use the `gh` CLI for GitHub operations.
 - Match the repository's recent commit subject style.
 - Commit or push only when I ask.

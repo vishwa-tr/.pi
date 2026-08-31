@@ -10,9 +10,10 @@ Use a linked Git worktree when work should be isolated from the current checkout
 The safety model is:
 
 1. Detect existing isolation before creating anything.
-2. Follow repository instructions for worktree placement, review and landing.
+2. Follow repository instructions for worktree placement, review and landing; otherwise use the
+   repository's `./.worktrees/` directory after verifying its ignore boundary.
 3. Prefer worktree support provided by the current agent harness or IDE.
-4. Confirm the branch, base and destination when the user has not already specified them.
+4. Confirm the branch and base, plus any requested exception to the default destination.
 5. Keep setup and tests consistent with the project—containerized when applicable.
 6. Require explicit approval before transferring dirty changes, staging or committing work, cleaning up a worktree or deleting its branch.
 
@@ -62,7 +63,7 @@ Clarify only missing decisions:
 
 - Branch name.
 - Start point: current branch, default branch, a tag, or a named commit.
-- Destination location when project instructions do not define one.
+- Any requested exception to the default `./.worktrees/` destination.
 - Whether an existing local branch should be checked out instead of creating a new branch.
 
 Validate a proposed branch name:
@@ -81,25 +82,31 @@ Use manual Git commands only when no native worktree mechanism is available.
 
 ## 4. Choose a safe destination
 
-Follow this order:
+If native worktree support requires a particular destination, follow its verified contract. Otherwise,
+follow this order:
 
-1. An explicit location in project or user instructions.
-2. An existing project convention, such as `.worktrees/` or `worktrees/`.
-3. A user-approved sibling directory outside the repository.
+1. A destination explicitly supplied by the user.
+2. A project-local placement instruction or established convention.
+3. The repository's `./.worktrees/` directory.
 
-For a project-local destination, verify the container directory is ignored:
+The third option is the default, not a decision to ask the user to make. Use a task- or branch-specific
+child path beneath that container.
+
+Before using the default, ensure the repository's root `.gitignore` covers `/.worktrees/`, then verify
+the directory is actually ignored:
 
 ```bash
-git check-ignore -q .worktrees
-git check-ignore -q worktrees
+repo_root=$(git rev-parse --show-toplevel)
+git -C "$repo_root" check-ignore -q .worktrees/
 ```
 
-If it is not ignored:
+If verification fails, do not create the worktree there. Ask before adding an appropriate root-anchored
+rule such as `/.worktrees/` to `.gitignore`, then run the check again. If the user does not want the
+ignore boundary changed, obtain an explicit alternative destination outside the repository.
 
-- Prefer an external sibling location that cannot pollute repository status; or
-- Ask before editing `.gitignore`.
-
-Never commit a `.gitignore` change unless the user explicitly asks for a commit. Never place a linked worktree inside a tracked, non-ignored directory.
+Apply the same ignore verification to any other destination inside the repository. Never commit a
+`.gitignore` change unless the user explicitly asks for a commit. Never place a linked worktree inside
+a tracked, non-ignored directory.
 
 Before creation, verify that the destination does not contain unrelated data and is not already registered:
 
@@ -266,6 +273,7 @@ Use `git worktree prune` only for genuinely stale administrative entries after r
 |---|---|
 | Already in a linked worktree | Validate its branch, status and purpose; use it only when appropriate, and do not create another by default. |
 | Current checkout is dirty | Explain that dirty changes will not appear in the new worktree; ask before transferring anything. |
+| Default `.worktrees/` is not ignored | Do not create it; safely establish and reverify the ignore boundary or obtain an explicit external destination. |
 | Destination exists | Refuse to overwrite it; choose another path with the user. |
 | Branch is checked out elsewhere | Report its registered path; do not force. |
 | Native tool denies or fails | Report the error; do not bypass policy with manual Git unless appropriate and authorized. |
