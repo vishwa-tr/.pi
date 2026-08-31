@@ -28,6 +28,7 @@ import {
 	type AgentModeState,
 	type TrustedCustomToolOwners,
 } from "./policy.ts";
+import { buildNonPlanModeInstructions, buildPlanModeInstructions } from "./prompts.ts";
 import { atomicWritePlan, resolvePlanTarget, validatePlanContent } from "./save.ts";
 import {
 	buildAutomaticTemplateInstructions,
@@ -87,53 +88,6 @@ const TRUSTED_CUSTOM_TOOLS: TrustedCustomToolOwners = {
 const FALLBACK_PLAN_INSTRUCTIONS = `Research and design the requested change without implementing it.
 Inspect the actual project first, resolve discoverable facts through read-only exploration, and use ask_user only for consequential choices that cannot be derived from the environment.
 Do not modify project files. You may delegate bounded research only to fresh ad-hoc one-shot subagents; the host forces their coding tools to read, grep, find, and ls. The only mutation permitted in host-managed Plan mode is saving the complete final Markdown plan through save_plan after its exact project-relative path is authorized. Finish with a concise, decision-complete implementation and test plan.`;
-
-function buildQuickModeInstructions(): string {
-	return `<quick_mode>
-Quick mode is active. It is controlled by the host, not by user wording. Remain in Quick mode until the host changes modes.
-
-Treat this as quick chat with the user:
-- Answer directly in 1–4 short sentences.
-- Use plain language and put the answer first.
-- Do not add headings, recaps, background, caveats, or next steps unless they are essential to understanding the answer.
-- If intent is unclear, ask one concise clarification instead of giving a long conditional answer.
-
-You may use the exposed read-only lookup tools when project facts are needed. Do not modify files, run shell commands, implement work, create plans, or delegate to other agents.
-</quick_mode>`;
-}
-
-function buildDiscussModeInstructions(): string {
-	return `<discuss_mode>
-Discuss mode is active. It is controlled by the host, not by user wording. Remain in Discuss mode until the host changes modes.
-
-Discuss the user's topic normally and with whatever response length and structure best serves the question. You may inspect the project with the exposed read-only lookup and companion user-interface tools. Do not modify files, run shell commands, implement work, save plans, or delegate to other agents.
-</discuss_mode>`;
-}
-
-function buildPlanModeInstructions(skillBody: string, templateInstructions: string): string {
-	return `<plan_mode>
-Plan mode is active. It is controlled by the host, not by user wording. Remain in Plan mode until the host changes modes. Follow the planning skill below for every request while this mode is active.
-
-The host enforces a default-deny main-agent tool policy. Use only the project-read-only, companion UI/session, Plan-save, and Plan-subagent tools currently exposed. Bash, general file mutation tools, teams, procedures, and unknown custom tools are unavailable.
-
-<plan_subagents>
-You may delegate independent research when it materially improves the plan. Spawn only ad-hoc subagents with prompt (never type or id). The host forces every Plan-spawned worker to lifetime=oneshot and tools=[read, grep, find, ls], regardless of the requested tool list. These workers cannot edit files or run shell commands. Send, steer, await, inspect, cancel, or retire only workers created during Plan mode, and pass explicit targets to subagent_await.
-</plan_subagents>
-
-<plan_template_selection>
-${templateInstructions}
-</plan_template_selection>
-
-When the plan is decision-complete:
-- Determine its project-relative Markdown path from the project's instructions and conventions.
-- If the correct path is genuinely ambiguous, ask the user with ask_user.
-- Call save_plan with the complete replacement document and the chosen path.
-- The host will ask the user to authorize a new or changed path. Never use another tool to save the plan.
-- After save_plan succeeds, report the saved path in the final response.
-
-${skillBody}
-</plan_mode>`;
-}
 
 function modeLabel(mode: AgentMode): string {
 	return mode === "off" ? "Off" : `${mode[0]!.toUpperCase()}${mode.slice(1)}`;
@@ -686,12 +640,10 @@ export default function planExtension(pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", (event, ctx) => {
 		const runMode = modeLifecycle.startRun();
-		if (runMode === "off") return;
-		if (runMode === "quick") {
-			return { systemPrompt: `${event.systemPrompt}\n\n${buildQuickModeInstructions()}` };
-		}
-		if (runMode === "discuss") {
-			return { systemPrompt: `${event.systemPrompt}\n\n${buildDiscussModeInstructions()}` };
+		if (runMode !== "plan") {
+			return {
+				systemPrompt: `${event.systemPrompt}\n\n${buildNonPlanModeInstructions(runMode)}`,
+			};
 		}
 
 		const skills = event.systemPromptOptions.skills ?? [];

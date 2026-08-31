@@ -28,6 +28,8 @@ Mode controls are accepted while the agent is running. Selecting a different mod
 
 Routine mode transitions are silent because the footer already shows the selected next-turn state. Invalid-command errors, deferred-input notices, queued-task cancellation notices, fallback warnings, and explicit `status` responses remain visible.
 
+Every run receives an authoritative current-mode prompt block. In Off mode, that block disables only pi-plan's Discuss, Plan, and Quick restrictions, marks earlier mode claims as historical, and preserves every other current instruction, safety policy, and active-tool restriction.
+
 The selected mode, explicit Plan skill, authorized Plan path, and Plan-spawned subagent scope are persisted as branch-local session state. Reload, resume, fork, and `/tree` restore state from the active branch; legacy `{ enabled: boolean }` Plan entries migrate to `plan` or `off`. A new session starts Off.
 
 While a restricted mode is active, `pi-plan` publishes its plain mode label under the legacy-compatible `plan-mode` status key. `pi-status-line` renders that dedicated footer segment.
@@ -120,6 +122,7 @@ The canonical base skill is root `skills/plan/SKILL.md`. Pi discovers it as a no
 node --test \
   configs/pi-agent/packages/pi-plan/extensions/plan/mode-lifecycle.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/policy.test.ts \
+  configs/pi-agent/packages/pi-plan/extensions/plan/prompts.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/save.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/templates.test.ts
 ```

@@ -4,7 +4,7 @@
 
 `configs/pi-agent/packages/pi-plan/` implements four mutually exclusive main-agent states:
 
-1. **Off** — normal unrestricted Pi with the pre-mode active tool set.
+1. **Off** — normal Pi behavior with the pre-mode active tool set; only pi-plan restrictions are inactive.
 2. **Discuss** — normal response length with trusted read-only lookup plus `ask_user` and `show_files`.
 3. **Plan** — project research, optional read-only delegated research, and authorized Markdown plan saving.
 4. **Quick** — quick chat, normally 1–4 short sentences, with trusted built-in read-only lookup tools.
@@ -21,8 +21,9 @@ The `plan-mode` status producer uses `󰍩 discuss mode`, ` plan mode`, and `
 
 ## Prompt behavior
 
-`before_agent_start` appends a host-controlled block for the active restricted mode:
+`before_agent_start` appends a host-controlled block for every active mode:
 
+- Off marks pi-plan restrictions as inactive for the current run and supersedes historical mode claims without weakening unrelated instructions, safety policies, or active-tool restrictions.
 - Discuss permits normal response length and organization but forbids implementation and delegation.
 - Plan loads the shared `skills/plan/` boundaries and at most one supplemental tagged planning template.
 - Quick requires a direct 1–4 sentence response with no padding or extra sections.
