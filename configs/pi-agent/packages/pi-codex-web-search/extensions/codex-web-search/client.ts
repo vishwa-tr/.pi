@@ -1,5 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+	link,
+	lstat,
+	mkdir,
+	mkdtemp,
+	realpath,
+	rm,
+	symlink,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -446,7 +454,7 @@ export async function runCodexWebSearch(
 	}
 
 	const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-	let workDir: string | undefined;
+	let tempRoot: string | undefined;
 	let client: CodexAppServerClient | undefined;
 	let collector: TurnCollector | undefined;
 	let cancellationError: Error | undefined;
@@ -468,12 +476,17 @@ export async function runCodexWebSearch(
 
 	try {
 		if (cancellationError) throw cancellationError;
-		workDir = await mkdtemp(join(tmpdir(), "pi-codex-web-search-"));
+		tempRoot = await mkdtemp(join(runtimeTempParent(process.env), "pi-codex-web-search-"));
+		const workDir = join(tempRoot, "work");
+		await mkdir(workDir, { recursive: true });
 		if (cancellationError) throw cancellationError;
 
 		const command = options.command ?? (process.env.CODEX_BIN?.trim() || "codex");
 		const appServerArgs = options.appServerArgs ?? ["app-server", "--stdio"];
-		const childEnvironment = options.env ?? buildCodexEnvironment(process.env);
+		const childEnvironment = options.env ?? buildCodexEnvironment(
+			process.env,
+			await prepareIsolatedCodexHome(process.env, tempRoot),
+		);
 		client = new CodexAppServerClient(command, appServerArgs, workDir, childEnvironment);
 		if (cancellationError) {
 			client.dispose(cancellationError);
@@ -511,7 +524,7 @@ export async function runCodexWebSearch(
 			throw new Error("Installed Codex does not report instruction sources; update Codex before using isolated web search.");
 		}
 		if (threadResponse.instructionSources.length > 0) {
-			throw new Error("Codex web search refused inherited instruction sources. Use a clean PI_CODEX_WEB_SEARCH_HOME and run `codex login` for it.");
+			throw new Error("Codex web search refused unexpected inherited instruction sources.");
 		}
 
 		collector = collectSearchTurn(client, threadId, options.onProgress);
@@ -550,30 +563,16 @@ export async function runCodexWebSearch(
 		const closeReason = cancellationError ?? new Error("Codex web search finished");
 		collector?.dispose(closeReason);
 		await client?.close(closeReason);
-		if (workDir) await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+		if (tempRoot) await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
 	}
 }
 
-const CODEX_ENVIRONMENT_KEYS = [
+const CODEX_RUNTIME_ENVIRONMENT_KEYS = [
 	"PATH",
-	"HOME",
-	"USER",
-	"LOGNAME",
-	"SHELL",
-	"TMPDIR",
-	"TMP",
-	"TEMP",
 	"TERM",
 	"LANG",
 	"LC_ALL",
 	"LC_CTYPE",
-	"XDG_CONFIG_HOME",
-	"XDG_DATA_HOME",
-	"XDG_CACHE_HOME",
-	"XDG_STATE_HOME",
-	"XDG_RUNTIME_DIR",
-	"DBUS_SESSION_BUS_ADDRESS",
-	"CODEX_HOME",
 	"SSL_CERT_FILE",
 	"SSL_CERT_DIR",
 	"NODE_EXTRA_CA_CERTS",
@@ -589,21 +588,94 @@ const CODEX_ENVIRONMENT_KEYS = [
 	"WINDIR",
 	"COMSPEC",
 	"PATHEXT",
-	"USERPROFILE",
-	"APPDATA",
-	"LOCALAPPDATA",
 ] as const;
 
-export function buildCodexEnvironment(source: NodeJS.ProcessEnv): Record<string, string | undefined> {
+const ISOLATED_HOME_DIRECTORIES = {
+	XDG_CONFIG_HOME: "xdg-config",
+	XDG_DATA_HOME: "xdg-data",
+	XDG_CACHE_HOME: "xdg-cache",
+	XDG_STATE_HOME: "xdg-state",
+	XDG_RUNTIME_DIR: "xdg-runtime",
+	APPDATA: "app-data",
+	LOCALAPPDATA: "local-app-data",
+	TMPDIR: "tmp",
+	TMP: "tmp",
+	TEMP: "tmp",
+} as const;
+
+export function buildCodexEnvironment(
+	source: NodeJS.ProcessEnv,
+	codexHomeOverride?: string,
+): Record<string, string | undefined> {
 	const environment: Record<string, string | undefined> = {};
-	for (const key of CODEX_ENVIRONMENT_KEYS) {
+	for (const key of CODEX_RUNTIME_ENVIRONMENT_KEYS) {
 		if (source[key] !== undefined) environment[key] = source[key];
 	}
-	const isolatedHome = source.PI_CODEX_WEB_SEARCH_HOME?.trim()
-		|| source.CODEX_HOME?.trim()
-		|| (source.HOME ? join(source.HOME, ".codex", "web-search") : undefined);
-	if (isolatedHome) environment.CODEX_HOME = isolatedHome;
+	const codexHome = codexHomeOverride ?? configuredCodexHome(source);
+	if (!codexHome) return environment;
+
+	environment.CODEX_HOME = codexHome;
+	if (codexHomeOverride) {
+		environment.HOME = codexHome;
+		environment.USERPROFILE = codexHome;
+		for (const [key, directory] of Object.entries(ISOLATED_HOME_DIRECTORIES)) {
+			environment[key] = join(codexHome, directory);
+		}
+	} else if (source.HOME) {
+		environment.HOME = source.HOME;
+	}
 	return environment;
+}
+
+export async function prepareIsolatedCodexHome(
+	source: NodeJS.ProcessEnv,
+	tempRoot: string,
+): Promise<string> {
+	const sourceHome = configuredCodexHome(source);
+	if (!sourceHome) {
+		throw new Error("Cannot locate the Codex login. Set HOME, CODEX_HOME, or PI_CODEX_WEB_SEARCH_HOME.");
+	}
+	const sourceAuthPath = join(sourceHome, "auth.json");
+	const resolvedAuthPath = await realpath(sourceAuthPath).catch(() => undefined);
+	if (!resolvedAuthPath || !(await lstat(resolvedAuthPath).catch(() => undefined))?.isFile()) {
+		throw new Error("Codex web search requires a ChatGPT Codex login. Run `codex login` first.");
+	}
+
+	const isolatedHome = join(tempRoot, "codex-home");
+	await mkdir(isolatedHome, { recursive: true, mode: 0o700 });
+	await Promise.all(
+		[...new Set(Object.values(ISOLATED_HOME_DIRECTORIES))].map((directory) => {
+			return mkdir(join(isolatedHome, directory), { recursive: true, mode: 0o700 });
+		}),
+	);
+	const isolatedAuthPath = join(isolatedHome, "auth.json");
+	try {
+		await link(resolvedAuthPath, isolatedAuthPath);
+	} catch (hardLinkError) {
+		try {
+			await symlink(resolvedAuthPath, isolatedAuthPath, "file");
+		} catch (symbolicLinkError) {
+			throw new AggregateError(
+				[hardLinkError, symbolicLinkError],
+				"Could not securely bridge the Codex login into the isolated web-search profile.",
+			);
+		}
+	}
+	return isolatedHome;
+}
+
+export function runtimeTempParent(
+	source: NodeJS.ProcessEnv,
+	platform = process.platform,
+): string {
+	if (platform === "win32") return configuredCodexHome(source) ?? tmpdir();
+	return tmpdir();
+}
+
+function configuredCodexHome(source: NodeJS.ProcessEnv): string | undefined {
+	return source.PI_CODEX_WEB_SEARCH_HOME?.trim()
+		|| source.CODEX_HOME?.trim()
+		|| (source.HOME ? join(source.HOME, ".codex") : undefined);
 }
 
 async function requireCleanCodexConfiguration(client: CodexAppServerClient, cwd: string): Promise<void> {
@@ -624,8 +696,7 @@ async function requireCleanCodexConfiguration(client: CodexAppServerClient, cwd:
 	}
 	if (riskyPaths.size > 0) {
 		throw new Error(
-			"Codex web search refused inherited MCP, hook, plugin, app, skill, or instruction configuration. "
-			+ "Use a clean PI_CODEX_WEB_SEARCH_HOME and run `codex login` for it.",
+			"Codex web search could not establish clean MCP, hook, plugin, app, skill, and instruction configuration.",
 		);
 	}
 }
