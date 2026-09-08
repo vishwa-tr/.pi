@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 function findPiPackage(): string {
 	const home = process.env.HOME ?? "";
@@ -18,7 +19,8 @@ function findPiPackage(): string {
 }
 
 const piPackage = findPiPackage();
-const { createJiti } = await import(join(piPackage, "node_modules", "jiti", "lib", "jiti.mjs"));
+const jitiUrl = pathToFileURL(join(piPackage, "node_modules", "jiti", "lib", "jiti.mjs"));
+const { createJiti } = await import(jitiUrl.href);
 const jiti = createJiti(import.meta.url, {
 	interopDefault: true,
 	moduleCache: true,

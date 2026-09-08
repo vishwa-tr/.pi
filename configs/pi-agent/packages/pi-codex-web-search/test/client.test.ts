@@ -38,14 +38,19 @@ test("builds a minimal Codex environment and honors login-source overrides", () 
 		PI_OFFLINE: "1",
 		SECRET_TOKEN: "secret",
 	});
-	assert.equal(environment.CODEX_HOME, "/test-home/.codex");
+	assert.equal(environment.CODEX_HOME, join("/test-home", ".codex"));
 	assert.equal(environment.PATH, "/bin");
 	assert.equal(environment.PI_OFFLINE, undefined);
 	assert.equal(environment.SECRET_TOKEN, undefined);
 
 	assert.equal(
+		buildCodexEnvironment({ USERPROFILE: "/windows-user" }).CODEX_HOME,
+		join("/windows-user", ".codex"),
+	);
+	assert.equal(
 		buildCodexEnvironment({
 			HOME: "/test-home",
+			USERPROFILE: "/windows-user",
 			CODEX_HOME: "/profiles/codex",
 			PI_CODEX_WEB_SEARCH_HOME: "/profiles/web-search",
 		}).CODEX_HOME,
@@ -60,8 +65,8 @@ test("builds a minimal Codex environment and honors login-source overrides", () 
 	}, "/isolated-codex-home");
 	assert.equal(isolated.HOME, "/isolated-codex-home");
 	assert.equal(isolated.CODEX_HOME, "/isolated-codex-home");
-	assert.equal(isolated.XDG_CONFIG_HOME, "/isolated-codex-home/xdg-config");
-	assert.equal(isolated.APPDATA, "/isolated-codex-home/app-data");
+	assert.equal(isolated.XDG_CONFIG_HOME, join("/isolated-codex-home", "xdg-config"));
+	assert.equal(isolated.APPDATA, join("/isolated-codex-home", "app-data"));
 	assert.equal(isolated.PATH, "/bin");
 });
 
