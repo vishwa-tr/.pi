@@ -16,7 +16,6 @@ import {
 	buildCodexEnvironment,
 	prepareIsolatedCodexHome,
 	runCodexWebSearch,
-	runtimeTempParent,
 	type RunCodexWebSearchOptions,
 } from "../extensions/codex-web-search/client.ts";
 
@@ -49,11 +48,19 @@ test("builds a minimal Codex environment and honors login-source overrides", () 
 	);
 	assert.equal(
 		buildCodexEnvironment({ HOME: "/test-home", USERPROFILE: "/windows-user" }, undefined, "win32").CODEX_HOME,
+		join("/windows-user", ".codex"),
+	);
+	assert.equal(
+		buildCodexEnvironment({ HOME: "/test-home", USERPROFILE: "/windows-user" }, undefined, "linux").CODEX_HOME,
 		join("/test-home", ".codex"),
 	);
 	assert.equal(
-		buildCodexEnvironment({ USERPROFILE: "/windows-user" }, undefined, "linux").CODEX_HOME,
-		undefined,
+		buildCodexEnvironment({
+			HOME: "/test-home",
+			USERPROFILE: "/windows-user",
+			CODEX_HOME: "/profiles/codex",
+		}, undefined, "win32").CODEX_HOME,
+		"/profiles/codex",
 	);
 	assert.equal(
 		buildCodexEnvironment({
@@ -61,7 +68,7 @@ test("builds a minimal Codex environment and honors login-source overrides", () 
 			USERPROFILE: "/windows-user",
 			CODEX_HOME: "/profiles/codex",
 			PI_CODEX_WEB_SEARCH_HOME: "/profiles/web-search",
-		}).CODEX_HOME,
+		}, undefined, "win32").CODEX_HOME,
 		"/profiles/web-search",
 	);
 
@@ -78,8 +85,9 @@ test("builds a minimal Codex environment and honors login-source overrides", () 
 	assert.equal(isolated.PATH, "/bin");
 });
 
-test("discovers a Windows login from USERPROFILE when HOME is unset", async () => {
+test("discovers the Windows login from USERPROFILE before HOME", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-web-search-userprofile-test-"));
+	const home = join(root, "home");
 	const userProfile = join(root, "profile");
 	const sourceHome = join(userProfile, ".codex");
 	const tempRoot = join(root, "temporary");
@@ -89,8 +97,25 @@ test("discovers a Windows login from USERPROFILE when HOME is unset", async () =
 	]);
 	await writeFile(join(sourceHome, "auth.json"), "test authentication material", { mode: 0o600 });
 	try {
-		const isolatedHome = await prepareIsolatedCodexHome({ USERPROFILE: userProfile }, tempRoot, "win32");
+		const isolatedHome = await prepareIsolatedCodexHome({ HOME: home, USERPROFILE: userProfile }, tempRoot, "win32");
 		assert.equal(await readFile(join(isolatedHome, "auth.json"), "utf8"), "test authentication material");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("reports missing Windows login material before creating runtime state", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-web-search-missing-login-test-"));
+	try {
+		await assert.rejects(
+			runCodexWebSearch("Fail before startup", {
+				command: "should-not-run",
+				sourceEnvironment: { USERPROFILE: join(root, "profile") },
+				platform: "win32",
+			}),
+			/Codex web search requires a ChatGPT Codex login\. Run `codex login` first\./,
+		);
+		assert.deepEqual(await readdir(root), []);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
@@ -126,16 +151,13 @@ test("creates a clean temporary Codex home backed by the existing login", async 
 	}
 });
 
-test("uses the selected Codex home for Windows temporary files", () => {
-	assert.equal(
-		runtimeTempParent({ HOME: "C:\\Users\\tester", CODEX_HOME: "D:\\Codex" }, "win32"),
-		"D:\\Codex",
-	);
-	assert.equal(
-		runtimeTempParent({ USERPROFILE: "C:\\Users\\tester" }, "win32"),
-		join("C:\\Users\\tester", ".codex"),
-	);
-	assert.equal(runtimeTempParent({ USERPROFILE: "/windows-user" }, "linux"), tmpdir());
+test("keeps injected app-server environments independent of the real login", async () => {
+	const result = await runCodexWebSearch("Use the injected server", {
+		...fakeOptions(),
+		sourceEnvironment: { USERPROFILE: "Z:\\missing-profile" },
+		platform: "win32",
+	});
+	assert.match(result.answer, /current answer/);
 });
 
 test("runs an isolated Codex search and normalizes structured sources", async () => {
