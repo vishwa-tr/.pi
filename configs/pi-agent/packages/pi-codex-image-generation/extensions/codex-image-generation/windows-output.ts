@@ -1,12 +1,14 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { once } from "node:events";
-import { isAbsolute, relative, sep } from "node:path";
+import { constants as fsConstants } from "node:fs";
+import { access } from "node:fs/promises";
+import { isAbsolute, relative, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const helperPath = fileURLToPath(new URL("./windows-output.py", import.meta.url));
 const MAX_PROTOCOL_CHARS = 4_000;
+const WSL_REQUIREMENT_ERROR = "Secure image output on Windows requires WSL with Python 3";
 const WSL_PATH_TIMEOUT_MS = 15_000;
 const OUTPUT_HELPER_TIMEOUT_MS = 60_000;
 const OUTPUT_HELPER_TERMINATION_GRACE_MS = 5_000;
@@ -23,12 +25,18 @@ interface WindowsOutputRequest {
 interface PreparedWindowsOutputRequest {
 	helperPath: string;
 	request: WindowsOutputRequest;
+	wslExecutable: string;
 }
 
 interface WindowsOutputRuntimeOptions {
 	helperTimeoutMs?: number;
 	terminationGraceMs?: number;
+	execFile?: typeof execFileAsync;
+	spawn?: typeof spawn;
+	wslExecutable?: string;
 }
+
+type AccessFile = (path: string, mode?: number) => Promise<void>;
 
 export function validateWindowsOutputPath(requestedPath: string): void {
 	const cleaned = requestedPath.startsWith("@") ? requestedPath.slice(1).trim() : requestedPath.trim();
@@ -56,9 +64,19 @@ export async function validateWindowsOutput(
 	absolutePath: string,
 	requestedPath: string,
 	overwrite: boolean,
+	signal?: AbortSignal,
+	runtimeOptions: WindowsOutputRuntimeOptions = {},
 ): Promise<void> {
-	const prepared = await buildRequest("validate", rootPath, absolutePath, requestedPath, overwrite);
-	await runHelper(prepared);
+	const prepared = await buildRequest(
+		"validate",
+		rootPath,
+		absolutePath,
+		requestedPath,
+		overwrite,
+		signal,
+		runtimeOptions,
+	);
+	await runHelper(prepared, undefined, signal, runtimeOptions);
 }
 
 export async function saveWindowsOutput(
@@ -71,7 +89,7 @@ export async function saveWindowsOutput(
 	runtimeOptions: WindowsOutputRuntimeOptions = {},
 ): Promise<void> {
 	if (signal?.aborted) throw new Error("Codex image generation cancelled");
-	const prepared = await buildRequest("save", rootPath, absolutePath, requestedPath, overwrite, signal);
+	const prepared = await buildRequest("save", rootPath, absolutePath, requestedPath, overwrite, signal, runtimeOptions);
 	prepared.request.byteLength = image.length;
 	await runHelper(prepared, image, signal, runtimeOptions);
 }
@@ -83,13 +101,20 @@ async function buildRequest(
 	requestedPath: string,
 	overwrite: boolean,
 	signal?: AbortSignal,
+	runtimeOptions: WindowsOutputRuntimeOptions = {},
 ): Promise<PreparedWindowsOutputRequest> {
 	const pathWithinRoot = relative(rootPath, absolutePath);
 	const segments = pathWithinRoot.split(sep).filter(Boolean);
 	if (!pathWithinRoot || pathWithinRoot.startsWith("..") || segments.length === 0) {
 		throw new Error("Output path must stay within the current working directory");
 	}
-	const [wslHelperPath, wslRootPath] = await convertToWslPaths([helperPath, rootPath], signal);
+	const wslExecutable = runtimeOptions.wslExecutable ?? await resolveWslExecutable();
+	const [wslHelperPath, wslRootPath] = await convertToWslPaths(
+		[helperPath, rootPath],
+		wslExecutable,
+		signal,
+		runtimeOptions,
+	);
 	return {
 		helperPath: wslHelperPath,
 		request: {
@@ -99,17 +124,24 @@ async function buildRequest(
 			requestedPath,
 			overwrite,
 		},
+		wslExecutable,
 	};
 }
 
-async function convertToWslPaths(paths: string[], signal?: AbortSignal): Promise<string[]> {
+async function convertToWslPaths(
+	paths: string[],
+	wslExecutable: string,
+	signal: AbortSignal | undefined,
+	runtimeOptions: WindowsOutputRuntimeOptions,
+): Promise<string[]> {
 	const cancellableSignal = typeof signal?.addEventListener === "function" ? signal : undefined;
+	const execFileCommand = runtimeOptions.execFile ?? execFileAsync;
 	return Promise.all(paths.map(async (path) => {
 		let stdout: string;
 		try {
 			const wslCompatiblePath = path.replaceAll("\\", "/");
-			({ stdout } = await execFileAsync(
-				"wsl.exe",
+			({ stdout } = await execFileCommand(
+				wslExecutable,
 				["--exec", "wslpath", "-a", "-u", wslCompatiblePath],
 				{
 					encoding: "utf8",
@@ -122,7 +154,7 @@ async function convertToWslPaths(paths: string[], signal?: AbortSignal): Promise
 		} catch (error) {
 			if (signal?.aborted) throw new Error("Codex image generation cancelled");
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-				throw new Error("Secure image output on Windows requires WSL with Python 3");
+				throw new Error(WSL_REQUIREMENT_ERROR);
 			}
 			throw new Error("WSL could not map the image output path");
 		}
@@ -134,17 +166,54 @@ async function convertToWslPaths(paths: string[], signal?: AbortSignal): Promise
 	}));
 }
 
+export async function resolveWslExecutable(
+	source: NodeJS.ProcessEnv = process.env,
+	accessFile: AccessFile = access,
+): Promise<string> {
+	const systemRoot = source.SystemRoot?.trim();
+	const systemDrive = source.SystemDrive?.trim();
+	if (!systemRoot || !systemDrive || !isSystemDrivePath(systemRoot, systemDrive)) {
+		throw new Error(WSL_REQUIREMENT_ERROR);
+	}
+
+	const resolved = win32.join(systemRoot, "System32", "wsl.exe");
+	try {
+		await accessFile(resolved, fsConstants.X_OK);
+	} catch {
+		throw new Error(WSL_REQUIREMENT_ERROR);
+	}
+	return resolved;
+}
+
+function isSystemDrivePath(path: string, systemDrive: string): boolean {
+	const parsed = win32.parse(path);
+	if (!win32.isAbsolute(path) || !/^[a-z]:[\\/]$/i.test(parsed.root)) return false;
+	if (!/^[a-z]:$/i.test(systemDrive) || parsed.root.slice(0, 2).toLowerCase() !== systemDrive.toLowerCase()) {
+		return false;
+	}
+	return !path.slice(parsed.root.length).split(/[\\/]/).some((segment) => segment === "." || segment === "..");
+}
+
 async function runHelper(
 	prepared: PreparedWindowsOutputRequest,
 	image?: Buffer,
 	signal?: AbortSignal,
 	runtimeOptions: WindowsOutputRuntimeOptions = {},
 ): Promise<void> {
-	const child = spawn("wsl.exe", ["--exec", "python3", prepared.helperPath], {
-		stdio: ["pipe", "pipe", "pipe"],
-		windowsHide: true,
+	const spawnChild = runtimeOptions.spawn ?? spawn;
+	let child: ChildProcessWithoutNullStreams;
+	try {
+		child = spawnChild(prepared.wslExecutable, ["--exec", "python3", prepared.helperPath], {
+			stdio: ["pipe", "pipe", "pipe"],
+			windowsHide: true,
+		});
+	} catch (error) {
+		throw normalizeHelperStartError(error);
+	}
+	const closePromise = new Promise<[number | null, NodeJS.Signals | null]>((resolve, reject) => {
+		child.once("error", reject);
+		child.once("close", (code, childSignal) => resolve([code, childSignal]));
 	});
-	const closePromise = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>;
 	let stdoutBuffer = "";
 	let helperError: string | undefined;
 	let inputWritten = false;
@@ -168,20 +237,26 @@ async function runHelper(
 		commitAuthorized = decision === "COMMIT";
 		child.stdin.end(`${decision}\n`);
 	};
+	const armTermination = () => {
+		if (terminationTimer) return;
+		terminationTimer = setTimeout(() => child.kill(), terminationGraceMs);
+		terminationTimer.unref?.();
+	};
 	const requestCancellation = () => {
 		if (commitAuthorized) return;
 		abortRequested = true;
 		if (inputWritten && image) sendDecision("CANCEL");
+		armTermination();
 	};
 	const onAbort = () => requestCancellation();
 	const operationTimer = setTimeout(() => {
 		helperTimedOut = true;
-		requestCancellation();
-		terminationTimer = setTimeout(() => child.kill(), terminationGraceMs);
-		terminationTimer.unref?.();
+		if (commitAuthorized) armTermination();
+		else requestCancellation();
 	}, helperTimeoutMs);
 	operationTimer.unref?.();
 	if (canListenForAbort) signal.addEventListener("abort", onAbort, { once: true });
+	if (abortRequested) requestCancellation();
 
 	child.stdin.on("error", () => {
 		helperError ??= "Windows image-output helper input failed";
@@ -223,16 +298,20 @@ async function runHelper(
 			}
 		} catch (error) {
 			child.stdin.destroy();
-			await closePromise.catch(() => undefined);
+			const startupError = await closePromise.then(
+				() => undefined,
+				(closeError) => normalizeHelperStartError(closeError),
+			);
 			if (abortRequested) throw new Error("Codex image generation cancelled");
+			if (startupError) throw startupError;
 			throw helperError ? new Error(helperError) : error;
 		}
 
 		let code: number | null;
 		try {
 			[code] = await closePromise;
-		} catch {
-			throw new Error("Secure image output on Windows requires WSL with Python 3");
+		} catch (error) {
+			throw normalizeHelperStartError(error);
 		}
 		if (helperTimedOut) throw new Error("Windows image-output helper timed out");
 		if (abortRequested && !commitAuthorized) throw new Error("Codex image generation cancelled");
@@ -246,6 +325,13 @@ async function runHelper(
 		if (terminationTimer) clearTimeout(terminationTimer);
 		if (canListenForAbort) signal.removeEventListener("abort", onAbort);
 	}
+}
+
+function normalizeHelperStartError(error: unknown): Error {
+	if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+		return new Error(WSL_REQUIREMENT_ERROR);
+	}
+	return new Error("Windows image-output helper failed to start");
 }
 
 async function writeChunk(child: ChildProcessWithoutNullStreams, chunk: Buffer): Promise<void> {

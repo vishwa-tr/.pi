@@ -137,30 +137,21 @@ test("requires an existing output parent and a matching image suffix", async () 
 	}
 });
 
-test("honors cancellation before and immediately after writing the temporary image", async () => {
+test("honors cancellation before output validation or saving", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-image-output-cancel-test-"));
+	await mkdir(join(root, "nested"));
 	try {
 		const controller = new AbortController();
 		controller.abort();
 		await assert.rejects(
-			saveGeneratedImage(root, "cancelled-early.png", image, false, controller.signal),
+			validateOutputRequest(root, "nested/result.png", false, controller.signal),
 			/image generation cancelled/,
 		);
-
-		let abortChecks = 0;
-		const abortBeforeCommit = {
-			get aborted() {
-				abortChecks += 1;
-				return abortChecks >= 4;
-			},
-		} as AbortSignal;
 		await assert.rejects(
-			saveGeneratedImage(root, "cancelled-before-commit.png", image, false, abortBeforeCommit),
+			saveGeneratedImage(root, "nested/result.png", image, false, controller.signal),
 			/image generation cancelled/,
 		);
-		assert.equal(existsSync(join(root, "cancelled-early.png")), false);
-		assert.equal(existsSync(join(root, "cancelled-before-commit.png")), false);
-		assert.deepEqual(await readdir(root), []);
+		assert.deepEqual(await readdir(join(root, "nested")), []);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

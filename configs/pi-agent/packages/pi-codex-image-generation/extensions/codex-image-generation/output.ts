@@ -32,18 +32,22 @@ export async function validateOutputRequest(
 	cwd: string,
 	requestedPath: string,
 	overwrite: boolean,
+	signal?: AbortSignal,
 ): Promise<void> {
+	throwIfAborted(signal);
 	const absolutePath = await resolveConfinedOutputPath(cwd, requestedPath);
 	if (process.platform === "win32") validateWindowsOutputPath(requestedPath);
 	requireOutputMimeType(absolutePath);
 	await withFileMutationQueue(absolutePath, async () => {
+		throwIfAborted(signal);
 		if (process.platform === "win32") {
 			const rootPath = await realpath(resolve(cwd));
-			await validateWindowsOutput(rootPath, absolutePath, requestedPath, overwrite);
+			await validateWindowsOutput(rootPath, absolutePath, requestedPath, overwrite, signal);
 			return;
 		}
 		const anchored = await openAnchoredOutputParent(absolutePath);
 		try {
+			throwIfAborted(signal);
 			await requireWritableTargetState(anchored.targetPath, requestedPath, overwrite);
 		} finally {
 			await anchored.handle.close();

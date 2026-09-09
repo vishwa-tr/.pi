@@ -62,6 +62,21 @@ test("registers a create-and-edit tool and returns a saved inline image", async 
 		await chmod(shim, 0o700);
 		process.env.CODEX_BIN = shim;
 		process.env.PI_CODEX_IMAGE_HOME = codexHome;
+
+		const cancelled = new AbortController();
+		cancelled.abort();
+		await assert.rejects(
+			tool.execute(
+				"cancelled-output",
+				{ prompt: "Must not start", outputPath: "cancelled.png", overwrite: false },
+				cancelled.signal,
+				undefined,
+				{ cwd: root },
+			),
+			/image generation cancelled/,
+		);
+		assert.equal(existsSync(join(root, "cancelled.png")), false);
+
 		await assert.rejects(
 			tool.execute(
 				"invalid-output",

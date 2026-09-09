@@ -50,7 +50,7 @@ const imageGenerationTool = defineTool({
 
 	async execute(_toolCallId, params, signal, onUpdate, ctx) {
 		const overwrite = params.overwrite ?? false;
-		await validateOutputRequest(ctx.cwd, params.outputPath, overwrite);
+		await validateOutputRequest(ctx.cwd, params.outputPath, overwrite, signal);
 		const inputImages = await resolveInputImagePaths(ctx.cwd, params.inputImages ?? []);
 		const result = await runCodexImageGeneration(params.prompt, inputImages, {
 			signal,
