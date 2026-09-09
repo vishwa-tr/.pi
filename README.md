@@ -102,8 +102,9 @@ root `skills/` is the canonical global skill library.
   Ticks coalesce while the agent is busy, and timers disappear on cancellation,
   reload, session replacement, or process exit. `/timers` and `Alt+R` expose
   list/cancel controls.
-- **Sessions:** `pi-clear`, `pi-sessions`, and `pi-prune` provide `/clear`,
-  `/sessions`, and lifecycle-safe session replacement/removal helpers.
+- **Sessions:** `pi-clear`, `pi-sessions`, `pi-prune`, and `pi-handoff` provide `/clear`,
+  `/sessions`, lifecycle-safe session replacement/removal, and fresh continuation sessions
+  built from editable active-branch summaries.
 - **Safety:** `pi-safety` gates agent-originated `bash` calls by category through
   `/safety off|on|max`, with local privacy-preserving audit state. It does not
   gate user-entered `!` commands.

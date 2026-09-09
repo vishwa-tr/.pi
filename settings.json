@@ -24,6 +24,7 @@
     "./configs/pi-agent/packages/pi-clear",
     "./configs/pi-agent/packages/pi-sessions",
     "./configs/pi-agent/packages/pi-prune",
+    "./configs/pi-agent/packages/pi-handoff",
     "./configs/pi-agent/packages/pi-changes",
     "./configs/pi-agent/packages/pi-questions",
     "./configs/pi-agent/packages/pi-plan",
