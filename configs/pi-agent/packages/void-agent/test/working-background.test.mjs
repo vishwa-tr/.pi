@@ -108,7 +108,9 @@ try {
 		indicator = new WorkingStatusIndicator({ requestRender() {} }, workingMessage, workingIndicator);
 		interactiveModePrototype.showStatusIndicator.call({
 			activeStatusIndicator: undefined,
+			activeWorkingIndicatorEmbedded: false,
 			statusContainer: { clear() {}, addChild() {} },
+			setEditorWorkingStatusIndicator() { return false; },
 		}, indicator);
 	};
 
