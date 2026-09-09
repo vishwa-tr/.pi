@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 function findPiPackage(source: NodeJS.ProcessEnv = process.env): string {
 	const home = source.HOME?.trim();
@@ -25,11 +25,12 @@ function findPiPackage(source: NodeJS.ProcessEnv = process.env): string {
 const piPackage = findPiPackage();
 const jitiUrl = pathToFileURL(join(piPackage, "node_modules", "jiti", "lib", "jiti.mjs"));
 const { createJiti } = await import(jitiUrl.href);
+const codingAgentStub = fileURLToPath(new URL("./fixtures/pi-coding-agent.mjs", import.meta.url));
 const jiti = createJiti(import.meta.url, {
 	interopDefault: true,
 	moduleCache: true,
 	alias: {
-		"@earendil-works/pi-coding-agent": join(piPackage, "dist", "index.js"),
+		"@earendil-works/pi-coding-agent": codingAgentStub,
 		"@earendil-works/pi-ai": join(piPackage, "node_modules", "@earendil-works", "pi-ai", "dist", "index.js"),
 		"@earendil-works/pi-tui": join(piPackage, "node_modules", "@earendil-works", "pi-tui", "dist", "index.js"),
 		typebox: join(piPackage, "node_modules", "typebox", "build", "index.mjs"),
