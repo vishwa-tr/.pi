@@ -16,8 +16,9 @@ through a hard link or symbolic link. The extension never parses, logs, or
 returns credential values, and token refreshes remain attached to the normal
 Codex login instead of diverging into a stale search-only profile.
 
-The login source defaults to `$HOME/.codex`. An explicit `CODEX_HOME` is honored,
-and `PI_CODEX_WEB_SEARCH_HOME` takes precedence when the login lives elsewhere.
+The login source defaults to `$HOME/.codex`, or `%USERPROFILE%\.codex` on
+Windows when `HOME` is unset. An explicit `CODEX_HOME` is honored, and
+`PI_CODEX_WEB_SEARCH_HOME` takes precedence when the login lives elsewhere.
 Configuration from that source home is not copied or loaded. On Windows, the
 temporary runtime is placed in the selected Codex home so the authentication
 file can be hard-linked on the same volume without requiring elevated symbolic
