@@ -31,6 +31,7 @@ export interface ToolSource {
 		source: string;
 		scope: string;
 		origin: string;
+		baseDir?: string;
 	};
 }
 
@@ -180,7 +181,10 @@ export function isTrustedTool(
 	}
 	const owner = trustedCustomTools[tool.name];
 	if (!owner) return false;
-	return normalizedPath(tool.sourceInfo.source) === normalizedPath(owner.source)
+	// Package source is the configured spec, which may be relative to settings
+	// rather than the process cwd. Pi supplies its resolved root as baseDir.
+	const packageRoot = tool.sourceInfo.baseDir ?? tool.sourceInfo.source;
+	return normalizedPath(packageRoot) === normalizedPath(owner.source)
 		&& normalizedPath(tool.sourceInfo.path) === normalizedPath(owner.path)
 		&& tool.sourceInfo.scope === owner.scope
 		&& tool.sourceInfo.origin === owner.origin;
