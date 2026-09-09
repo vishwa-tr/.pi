@@ -817,12 +817,13 @@ const ISOLATED_HOME_DIRECTORIES = {
 export function buildCodexEnvironment(
 	source: NodeJS.ProcessEnv,
 	codexHomeOverride?: string,
+	platform = process.platform,
 ): Record<string, string | undefined> {
 	const environment: Record<string, string | undefined> = {};
 	for (const key of CODEX_RUNTIME_ENVIRONMENT_KEYS) {
 		if (source[key] !== undefined) environment[key] = source[key];
 	}
-	const codexHome = codexHomeOverride ?? configuredCodexHome(source);
+	const codexHome = codexHomeOverride ?? configuredCodexHome(source, platform);
 	if (!codexHome) return environment;
 
 	environment.CODEX_HOME = codexHome;
@@ -841,8 +842,9 @@ export function buildCodexEnvironment(
 export async function prepareIsolatedCodexHome(
 	source: NodeJS.ProcessEnv,
 	tempRoot: string,
+	platform = process.platform,
 ): Promise<string> {
-	const sourceHome = configuredCodexHome(source);
+	const sourceHome = configuredCodexHome(source, platform);
 	if (!sourceHome) {
 		throw new Error("Cannot locate the Codex login. Set HOME, USERPROFILE, CODEX_HOME, or PI_CODEX_IMAGE_HOME.");
 	}
@@ -871,11 +873,16 @@ export async function prepareIsolatedCodexHome(
 	return isolatedHome;
 }
 
-function configuredCodexHome(source: NodeJS.ProcessEnv): string | undefined {
-	const homeDirectory = source.HOME?.trim() || source.USERPROFILE?.trim();
+function configuredCodexHome(
+	source: NodeJS.ProcessEnv,
+	platform = process.platform,
+): string | undefined {
+	const home = source.HOME?.trim();
+	const userProfile = platform === "win32" ? source.USERPROFILE?.trim() : undefined;
+	const userHome = platform === "win32" ? userProfile || home : home;
 	return source.PI_CODEX_IMAGE_HOME?.trim()
 		|| source.CODEX_HOME?.trim()
-		|| (homeDirectory ? join(homeDirectory, ".codex") : undefined);
+		|| (userHome ? join(userHome, ".codex") : undefined);
 }
 
 async function requireChatGptLogin(client: CodexAppServerClient): Promise<void> {

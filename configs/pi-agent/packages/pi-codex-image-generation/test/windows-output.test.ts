@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, realpath, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import {
+	resolveWslExecutable,
 	saveWindowsOutput,
 	validateWindowsOutput,
 	validateWindowsOutputPath,
@@ -12,6 +16,40 @@ import {
 
 const windowsOnly = { skip: process.platform !== "win32" };
 const nonWindowsOnly = { skip: process.platform === "win32" };
+const mappedPathExecutor = (async (_command: string, args: string[]) => ({
+	stdout: `${args.at(-1)?.replaceAll("\\", "/")}\n`,
+	stderr: "",
+})) as any;
+
+async function writeFakeWslExecutable(root: string, body: string): Promise<string> {
+	const wslExecutable = join(root, "wsl.exe");
+	await writeFile(wslExecutable, `#!/usr/bin/env node\n${body}\n`);
+	await chmod(wslExecutable, 0o700);
+	return wslExecutable;
+}
+
+async function waitForFile(path: string): Promise<void> {
+	for (let attempt = 0; attempt < 100; attempt++) {
+		if (existsSync(path)) return;
+		await delay(10);
+	}
+	throw new Error(`Timed out waiting for test marker: ${path}`);
+}
+
+function asynchronouslyFailingSpawn(code: string): any {
+	return () => {
+		const child = new EventEmitter() as any;
+		child.stdin = new PassThrough();
+		child.stdout = new PassThrough();
+		child.stderr = new PassThrough();
+		child.kill = () => true;
+		queueMicrotask(() => {
+			const error = Object.assign(new Error("synthetic spawn failure"), { code });
+			child.emit("error", error);
+		});
+		return child;
+	};
+}
 
 test("rejects ambiguous and reserved Windows output paths", () => {
 	validateWindowsOutputPath("images/result.png");
@@ -24,6 +62,73 @@ test("rejects ambiguous and reserved Windows output paths", () => {
 		"images/CON.png",
 	]) {
 		assert.throws(() => validateWindowsOutputPath(path));
+	}
+});
+
+test("resolves WSL only beneath a local Windows SystemRoot", async () => {
+	const checkedPaths: string[] = [];
+	const resolved = await resolveWslExecutable(
+		{ SystemDrive: "C:", SystemRoot: "C:\\Windows" },
+		async (path) => checkedPaths.push(path),
+	);
+	assert.equal(resolved, "C:\\Windows\\System32\\wsl.exe");
+	assert.deepEqual(checkedPaths, [resolved]);
+
+	for (const systemRoot of [
+		".",
+		"D:\\Windows",
+		"\\\\server\\share\\Windows",
+		"\\\\?\\C:\\Windows",
+		"C:\\Windows\\..\\workspace",
+	]) {
+		await assert.rejects(
+			resolveWslExecutable({ SystemDrive: "C:", SystemRoot: systemRoot }, async () => undefined),
+			/Secure image output on Windows requires WSL with Python 3/,
+		);
+	}
+	await assert.rejects(
+		resolveWslExecutable({}, async () => undefined),
+		/Secure image output on Windows requires WSL with Python 3/,
+	);
+	await assert.rejects(
+		resolveWslExecutable({ SystemDrive: "C:", SystemRoot: "C:\\Windows" }, async () => {
+			throw Object.assign(new Error("missing"), { code: "ENOENT" });
+		}),
+		/Secure image output on Windows requires WSL with Python 3/,
+	);
+});
+
+test("normalizes asynchronous WSL startup failures", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-image-windows-spawn-test-"));
+	try {
+		const commonOptions = {
+			execFile: mappedPathExecutor,
+			wslExecutable: "C:\\Windows\\System32\\wsl.exe",
+		};
+		await assert.rejects(
+			validateWindowsOutput(
+				await realpath(root),
+				join(root, "result.png"),
+				"result.png",
+				false,
+				undefined,
+				{ ...commonOptions, spawn: asynchronouslyFailingSpawn("ENOENT") },
+			),
+			/Secure image output on Windows requires WSL with Python 3/,
+		);
+		await assert.rejects(
+			validateWindowsOutput(
+				await realpath(root),
+				join(root, "result.png"),
+				"result.png",
+				false,
+				undefined,
+				{ ...commonOptions, spawn: asynchronouslyFailingSpawn("EACCES") },
+			),
+			/Windows image-output helper failed to start/,
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
 	}
 });
 
@@ -86,13 +191,11 @@ test("rejects Windows symlink parents and targets", windowsOnly, async () => {
 
 test("times out if the helper stalls after commit authorization", nonWindowsOnly, async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-image-windows-timeout-test-"));
-	const fakeWslPath = join(root, "wsl.exe");
-	const previousPath = process.env.PATH;
 	try {
-		await writeFile(fakeWslPath, `#!/usr/bin/env node
+		const fakeWsl = await writeFakeWslExecutable(root, `
 const args = process.argv.slice(2);
 if (args[0] === "--exec" && args[1] === "wslpath") {
-	process.stdout.write(args.at(-1) + "\\n");
+	process.stdout.write(args.at(-1).replace(/\\\\/g, "/") + "\\n");
 	process.exit(0);
 }
 process.stdout.write("READY\\n");
@@ -101,9 +204,6 @@ process.stdin.on("data", (chunk) => {
 	if (chunk.includes("COMMIT\\n")) setInterval(() => undefined, 1_000);
 });
 `);
-		await chmod(fakeWslPath, 0o700);
-		process.env.PATH = `${root}${delimiter}${previousPath ?? ""}`;
-
 		const target = join(root, "stalled.png");
 		await assert.rejects(
 			saveWindowsOutput(
@@ -113,42 +213,105 @@ process.stdin.on("data", (chunk) => {
 				Buffer.from("stalled"),
 				false,
 				undefined,
-				{ helperTimeoutMs: 50, terminationGraceMs: 25 },
+				{ wslExecutable: fakeWsl, helperTimeoutMs: 50, terminationGraceMs: 25 },
 			),
 			/Windows image-output helper timed out/,
 		);
 		assert.equal(existsSync(target), false);
 	} finally {
-		if (previousPath === undefined) delete process.env.PATH;
-		else process.env.PATH = previousPath;
 		await rm(root, { recursive: true, force: true });
 	}
 });
 
-test("cancels before committing and removes its temporary image", windowsOnly, async () => {
+test("sends CANCEL and terminates a stalled helper before commit", nonWindowsOnly, async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-image-windows-cancel-test-"));
+	const readyMarker = join(root, "payload-ready");
+	const cancelMarker = join(root, "cancel-received");
 	try {
-		const approvedRoot = await realpath(root);
-		const target = join(root, "cancelled.png");
-		let checks = 0;
-		const abortBeforeCommit = {
-			get aborted() {
-				checks += 1;
-				return checks >= 2;
-			},
-		} as AbortSignal;
-		await assert.rejects(
-			saveWindowsOutput(
-				approvedRoot,
-				target,
-				"cancelled.png",
-				Buffer.from("cancelled"),
-				false,
-				abortBeforeCommit,
-			),
-			/image generation cancelled/,
+		const fakeWsl = await writeFakeWslExecutable(root, `
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--exec" && args[1] === "wslpath") {
+	process.stdout.write(args.at(-1).replace(/\\\\/g, "/") + "\\n");
+	process.exit(0);
+}
+let input = Buffer.alloc(0);
+let expectedBytes;
+let payloadReady = false;
+process.stdin.on("data", (chunk) => {
+	input = Buffer.concat([input, chunk]);
+	if (expectedBytes === undefined) {
+		const newline = input.indexOf(10);
+		if (newline < 0) return;
+		expectedBytes = JSON.parse(input.subarray(0, newline)).byteLength;
+		input = input.subarray(newline + 1);
+	}
+	if (!payloadReady && input.length >= expectedBytes) {
+		input = input.subarray(expectedBytes);
+		payloadReady = true;
+		fs.writeFileSync(${JSON.stringify(readyMarker)}, "ready");
+	}
+	if (payloadReady && input.toString().includes("CANCEL\\n")) {
+		fs.writeFileSync(${JSON.stringify(cancelMarker)}, "cancelled");
+	}
+});
+setInterval(() => undefined, 1_000);
+`);
+		const controller = new AbortController();
+		const result = saveWindowsOutput(
+			await realpath(root),
+			join(root, "cancelled.png"),
+			"cancelled.png",
+			Buffer.from("cancelled"),
+			false,
+			controller.signal,
+			{ wslExecutable: fakeWsl, helperTimeoutMs: 30_000, terminationGraceMs: 50 },
 		);
-		assert.deepEqual(await readdir(root), []);
+		await waitForFile(readyMarker);
+		controller.abort();
+		await assert.rejects(result, /image generation cancelled/);
+		await waitForFile(cancelMarker);
+		assert.equal(existsSync(join(root, "cancelled.png")), false);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("treats COMMIT as the cancellation point of no return", nonWindowsOnly, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-image-windows-commit-test-"));
+	const commitMarker = join(root, "commit-received");
+	try {
+		const fakeWsl = await writeFakeWslExecutable(root, `
+const fs = require("fs");
+const args = process.argv.slice(2);
+if (args[0] === "--exec" && args[1] === "wslpath") {
+	process.stdout.write(args.at(-1).replace(/\\\\/g, "/") + "\\n");
+	process.exit(0);
+}
+process.stdout.write("READY\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+	if (!chunk.includes("COMMIT\\n")) return;
+	fs.writeFileSync(${JSON.stringify(commitMarker)}, "committed");
+	setTimeout(() => {
+		process.stdout.write("OK\\n");
+		process.exit(0);
+	}, 100);
+});
+`);
+		const controller = new AbortController();
+		const result = saveWindowsOutput(
+			await realpath(root),
+			join(root, "committed.png"),
+			"committed.png",
+			Buffer.from("committed"),
+			false,
+			controller.signal,
+			{ wslExecutable: fakeWsl, helperTimeoutMs: 2_000, terminationGraceMs: 25 },
+		);
+		await waitForFile(commitMarker);
+		controller.abort();
+		await result;
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

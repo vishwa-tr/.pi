@@ -265,12 +265,28 @@ test("builds a minimal Codex environment without Pi offline state or unrelated s
 	assert.equal(environment.PI_OFFLINE, undefined);
 	assert.equal(environment.SECRET_TOKEN, undefined);
 	assert.equal(
-		buildCodexEnvironment({ USERPROFILE: "/test-profile" }).CODEX_HOME,
-		join("/test-profile", ".codex"),
+		buildCodexEnvironment({ HOME: "/home", USERPROFILE: "/profile" }, undefined, "win32").CODEX_HOME,
+		join("/profile", ".codex"),
 	);
-
 	assert.equal(
-		buildCodexEnvironment({ HOME: "/home", CODEX_HOME: "/profiles/default", PI_CODEX_IMAGE_HOME: "/profiles/image" }).CODEX_HOME,
+		buildCodexEnvironment({ HOME: "/home", USERPROFILE: "/profile" }, undefined, "linux").CODEX_HOME,
+		join("/home", ".codex"),
+	);
+	assert.equal(
+		buildCodexEnvironment({
+			HOME: "/home",
+			USERPROFILE: "/profile",
+			CODEX_HOME: "/profiles/default",
+		}, undefined, "win32").CODEX_HOME,
+		"/profiles/default",
+	);
+	assert.equal(
+		buildCodexEnvironment({
+			HOME: "/home",
+			USERPROFILE: "/profile",
+			CODEX_HOME: "/profiles/default",
+			PI_CODEX_IMAGE_HOME: "/profiles/image",
+		}, undefined, "win32").CODEX_HOME,
 		"/profiles/image",
 	);
 

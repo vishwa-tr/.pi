@@ -35,7 +35,7 @@ Each call sends the explicit prompt, static image-worker instructions, and any l
 
 Every request runs with a fresh temporary working directory, isolated HOME/XDG/application-data roots, a clean temporary Codex home, and a fresh ephemeral Codex thread. The clean home bridges only the existing Codex authentication material; the extension does not parse or log token values and does not load the user's Codex configuration. Source images are bounded-read through no-follow file handles, checked for concurrent replacement, and embedded as image data, so the nested native tool receives the image without receiving its local path. The nested turn disables shell, unified execution, code mode, web search, browser/computer use, MCP servers, plugins, apps, multi-agent features, plan updates, and user interaction. Any unexpected turn item or server request fails the call. Temporary files and the app-server subprocess are cleaned up on success, failure, cancellation, and timeout.
 
-Use `PI_CODEX_IMAGE_HOME` to select the Codex login source. Otherwise the extension uses `CODEX_HOME`, then `~/.codex`.
+Use `PI_CODEX_IMAGE_HOME` to select the Codex login source. Otherwise the extension uses `CODEX_HOME`, then `%USERPROFILE%/.codex` on Windows, or `~/.codex` elsewhere.
 
 ## Lifecycle
 
