@@ -1,7 +1,7 @@
 {
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.6-sol",
-  "defaultThinkingLevel": "high",
+  "defaultModel": "gpt6-astra",
+  "defaultThinkingLevel": "low",
   "theme": "void-agent-one-dark",
   "packages": [
     "./configs/pi-agent/packages/pi-teams",
