@@ -94,6 +94,8 @@ export interface RunCodexWebSearchOptions {
 	timeoutMs?: number;
 	signal?: AbortSignal;
 	env?: Record<string, string | undefined>;
+	sourceEnvironment?: NodeJS.ProcessEnv;
+	platform?: NodeJS.Platform;
 	onProgress?: (message: string, sources: SearchSource[]) => void;
 }
 
@@ -476,17 +478,28 @@ export async function runCodexWebSearch(
 
 	try {
 		if (cancellationError) throw cancellationError;
-		tempRoot = await mkdtemp(join(runtimeTempParent(process.env), "pi-codex-web-search-"));
+		const sourceEnvironment = options.sourceEnvironment ?? process.env;
+		const platform = options.platform ?? process.platform;
+		const loginSource = options.env
+			? undefined
+			: await resolveCodexLoginSource(sourceEnvironment, platform);
+		if (cancellationError) throw cancellationError;
+
+		const tempParent = loginSource && platform === "win32"
+			? loginSource.home
+			: tmpdir();
+		tempRoot = await mkdtemp(join(tempParent, "pi-codex-web-search-"));
 		const workDir = join(tempRoot, "work");
 		await mkdir(workDir, { recursive: true });
 		if (cancellationError) throw cancellationError;
 
-		const command = options.command ?? (process.env.CODEX_BIN?.trim() || "codex");
+		const command = options.command ?? (sourceEnvironment.CODEX_BIN?.trim() || "codex");
 		const appServerArgs = options.appServerArgs ?? ["app-server", "--stdio"];
-		const childEnvironment = options.env ?? buildCodexEnvironment(
-			process.env,
-			await prepareIsolatedCodexHome(process.env, tempRoot),
-		);
+		const isolatedHome = loginSource
+			? await createIsolatedCodexHome(loginSource.authPath, tempRoot)
+			: undefined;
+		const childEnvironment = options.env
+			?? buildCodexEnvironment(sourceEnvironment, isolatedHome, platform);
 		client = new CodexAppServerClient(command, appServerArgs, workDir, childEnvironment);
 		if (cancellationError) {
 			client.dispose(cancellationError);
@@ -628,24 +641,44 @@ export function buildCodexEnvironment(
 	return environment;
 }
 
+interface CodexLoginSource {
+	home: string;
+	authPath: string;
+}
+
 export async function prepareIsolatedCodexHome(
 	source: NodeJS.ProcessEnv,
 	tempRoot: string,
 	platform = process.platform,
 ): Promise<string> {
+	const loginSource = await resolveCodexLoginSource(source, platform);
+	return createIsolatedCodexHome(loginSource.authPath, tempRoot);
+}
+
+async function resolveCodexLoginSource(
+	source: NodeJS.ProcessEnv,
+	platform = process.platform,
+): Promise<CodexLoginSource> {
 	const sourceHome = configuredCodexHome(source, platform);
 	if (!sourceHome) {
 		const variables = platform === "win32"
-			? "HOME, USERPROFILE, CODEX_HOME, or PI_CODEX_WEB_SEARCH_HOME"
+			? "USERPROFILE, HOME, CODEX_HOME, or PI_CODEX_WEB_SEARCH_HOME"
 			: "HOME, CODEX_HOME, or PI_CODEX_WEB_SEARCH_HOME";
 		throw new Error(`Cannot locate the Codex login. Set ${variables}.`);
 	}
+
 	const sourceAuthPath = join(sourceHome, "auth.json");
 	const resolvedAuthPath = await realpath(sourceAuthPath).catch(() => undefined);
 	if (!resolvedAuthPath || !(await lstat(resolvedAuthPath).catch(() => undefined))?.isFile()) {
 		throw new Error("Codex web search requires a ChatGPT Codex login. Run `codex login` first.");
 	}
+	return { home: sourceHome, authPath: resolvedAuthPath };
+}
 
+async function createIsolatedCodexHome(
+	resolvedAuthPath: string,
+	tempRoot: string,
+): Promise<string> {
 	const isolatedHome = join(tempRoot, "codex-home");
 	await mkdir(isolatedHome, { recursive: true, mode: 0o700 });
 	await Promise.all(
@@ -669,21 +702,13 @@ export async function prepareIsolatedCodexHome(
 	return isolatedHome;
 }
 
-export function runtimeTempParent(
-	source: NodeJS.ProcessEnv,
-	platform = process.platform,
-): string {
-	if (platform === "win32") return configuredCodexHome(source, platform) ?? tmpdir();
-	return tmpdir();
-}
-
 function configuredCodexHome(
 	source: NodeJS.ProcessEnv,
 	platform = process.platform,
 ): string | undefined {
 	const home = source.HOME?.trim();
 	const userProfile = platform === "win32" ? source.USERPROFILE?.trim() : undefined;
-	const userHome = home || userProfile;
+	const userHome = platform === "win32" ? userProfile || home : home;
 	return source.PI_CODEX_WEB_SEARCH_HOME?.trim()
 		|| source.CODEX_HOME?.trim()
 		|| (userHome ? join(userHome, ".codex") : undefined);
