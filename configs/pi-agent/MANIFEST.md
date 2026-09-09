@@ -13,6 +13,7 @@ Pi packages live under `packages/<name>/` and are enabled through portable relat
 | `pi-clear` | `/clear` alias |
 | `pi-sessions` | `/sessions` alias for Pi's native `/resume` session selector |
 | `pi-prune` | `/prune` lifecycle-safe session replacement followed by trash-backed cleanup of the previous session file |
+| `pi-handoff` | `/handoff [focus]` editable active-branch summary transferred into a fresh, parent-linked session |
 | `pi-codex-usage` | Shortest available Codex rate-limit status and all-window `/codex-usage` details |
 | `pi-codex-web-search` | LLM-callable `web_search` backed by an isolated ephemeral Codex app-server turn and ChatGPT login |
 | `pi-codex-image-generation` | LLM-callable `image_generation` backed by an isolated ephemeral Codex image-generation turn and ChatGPT login |
