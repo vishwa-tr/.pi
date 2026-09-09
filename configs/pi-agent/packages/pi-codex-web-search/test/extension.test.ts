@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-function findPiPackage(): string {
-	const home = process.env.HOME ?? "";
+function findPiPackage(source: NodeJS.ProcessEnv = process.env): string {
+	const home = source.HOME?.trim();
+	const appData = source.APPDATA?.trim();
+	const packagePath = join("@earendil-works", "pi-coding-agent");
 	const candidates = [
-		process.env.PI_SDK_DIR,
-		join(home, ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
-		"/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
-		"/usr/lib/node_modules/@earendil-works/pi-coding-agent",
+		source.PI_SDK_DIR?.trim(),
+		home ? join(home, ".local", "lib", "node_modules", packagePath) : undefined,
+		appData ? join(appData, "npm", "node_modules", packagePath) : undefined,
+		join("/usr/local/lib/node_modules", packagePath),
+		join("/usr/lib/node_modules", packagePath),
 	].filter((candidate): candidate is string => Boolean(candidate));
 	for (const candidate of candidates) {
 		if (existsSync(join(candidate, "dist", "index.js"))) return candidate;
@@ -30,6 +34,16 @@ const jiti = createJiti(import.meta.url, {
 		"@earendil-works/pi-tui": join(piPackage, "node_modules", "@earendil-works", "pi-tui", "dist", "index.js"),
 		typebox: join(piPackage, "node_modules", "typebox", "build", "index.mjs"),
 	},
+});
+
+test("discovers a Windows npm-global Pi installation without HOME", (t) => {
+	const appData = mkdtempSync(join(tmpdir(), "pi-web-search-appdata-test-"));
+	t.after(() => rmSync(appData, { recursive: true, force: true }));
+	const expected = join(appData, "npm", "node_modules", "@earendil-works", "pi-coding-agent");
+	mkdirSync(join(expected, "dist"), { recursive: true });
+	writeFileSync(join(expected, "dist", "index.js"), "");
+
+	assert.equal(findPiPackage({ APPDATA: appData }), expected);
 });
 
 test("loads the extension and wires compact transcript rendering", async () => {

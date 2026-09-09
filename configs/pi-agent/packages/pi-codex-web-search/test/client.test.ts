@@ -44,8 +44,16 @@ test("builds a minimal Codex environment and honors login-source overrides", () 
 	assert.equal(environment.SECRET_TOKEN, undefined);
 
 	assert.equal(
-		buildCodexEnvironment({ USERPROFILE: "/windows-user" }).CODEX_HOME,
+		buildCodexEnvironment({ USERPROFILE: "/windows-user" }, undefined, "win32").CODEX_HOME,
 		join("/windows-user", ".codex"),
+	);
+	assert.equal(
+		buildCodexEnvironment({ HOME: "/test-home", USERPROFILE: "/windows-user" }, undefined, "win32").CODEX_HOME,
+		join("/test-home", ".codex"),
+	);
+	assert.equal(
+		buildCodexEnvironment({ USERPROFILE: "/windows-user" }, undefined, "linux").CODEX_HOME,
+		undefined,
 	);
 	assert.equal(
 		buildCodexEnvironment({
@@ -68,6 +76,24 @@ test("builds a minimal Codex environment and honors login-source overrides", () 
 	assert.equal(isolated.XDG_CONFIG_HOME, join("/isolated-codex-home", "xdg-config"));
 	assert.equal(isolated.APPDATA, join("/isolated-codex-home", "app-data"));
 	assert.equal(isolated.PATH, "/bin");
+});
+
+test("discovers a Windows login from USERPROFILE when HOME is unset", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-web-search-userprofile-test-"));
+	const userProfile = join(root, "profile");
+	const sourceHome = join(userProfile, ".codex");
+	const tempRoot = join(root, "temporary");
+	await Promise.all([
+		mkdir(sourceHome, { recursive: true }),
+		mkdir(tempRoot, { recursive: true }),
+	]);
+	await writeFile(join(sourceHome, "auth.json"), "test authentication material", { mode: 0o600 });
+	try {
+		const isolatedHome = await prepareIsolatedCodexHome({ USERPROFILE: userProfile }, tempRoot, "win32");
+		assert.equal(await readFile(join(isolatedHome, "auth.json"), "utf8"), "test authentication material");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
 
 test("creates a clean temporary Codex home backed by the existing login", async () => {
@@ -105,7 +131,11 @@ test("uses the selected Codex home for Windows temporary files", () => {
 		runtimeTempParent({ HOME: "C:\\Users\\tester", CODEX_HOME: "D:\\Codex" }, "win32"),
 		"D:\\Codex",
 	);
-	assert.equal(runtimeTempParent({}, "linux"), tmpdir());
+	assert.equal(
+		runtimeTempParent({ USERPROFILE: "C:\\Users\\tester" }, "win32"),
+		join("C:\\Users\\tester", ".codex"),
+	);
+	assert.equal(runtimeTempParent({ USERPROFILE: "/windows-user" }, "linux"), tmpdir());
 });
 
 test("runs an isolated Codex search and normalizes structured sources", async () => {

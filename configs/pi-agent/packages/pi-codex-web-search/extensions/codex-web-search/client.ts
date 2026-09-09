@@ -606,12 +606,13 @@ const ISOLATED_HOME_DIRECTORIES = {
 export function buildCodexEnvironment(
 	source: NodeJS.ProcessEnv,
 	codexHomeOverride?: string,
+	platform = process.platform,
 ): Record<string, string | undefined> {
 	const environment: Record<string, string | undefined> = {};
 	for (const key of CODEX_RUNTIME_ENVIRONMENT_KEYS) {
 		if (source[key] !== undefined) environment[key] = source[key];
 	}
-	const codexHome = codexHomeOverride ?? configuredCodexHome(source);
+	const codexHome = codexHomeOverride ?? configuredCodexHome(source, platform);
 	if (!codexHome) return environment;
 
 	environment.CODEX_HOME = codexHome;
@@ -630,10 +631,14 @@ export function buildCodexEnvironment(
 export async function prepareIsolatedCodexHome(
 	source: NodeJS.ProcessEnv,
 	tempRoot: string,
+	platform = process.platform,
 ): Promise<string> {
-	const sourceHome = configuredCodexHome(source);
+	const sourceHome = configuredCodexHome(source, platform);
 	if (!sourceHome) {
-		throw new Error("Cannot locate the Codex login. Set HOME, USERPROFILE, CODEX_HOME, or PI_CODEX_WEB_SEARCH_HOME.");
+		const variables = platform === "win32"
+			? "HOME, USERPROFILE, CODEX_HOME, or PI_CODEX_WEB_SEARCH_HOME"
+			: "HOME, CODEX_HOME, or PI_CODEX_WEB_SEARCH_HOME";
+		throw new Error(`Cannot locate the Codex login. Set ${variables}.`);
 	}
 	const sourceAuthPath = join(sourceHome, "auth.json");
 	const resolvedAuthPath = await realpath(sourceAuthPath).catch(() => undefined);
@@ -668,12 +673,17 @@ export function runtimeTempParent(
 	source: NodeJS.ProcessEnv,
 	platform = process.platform,
 ): string {
-	if (platform === "win32") return configuredCodexHome(source) ?? tmpdir();
+	if (platform === "win32") return configuredCodexHome(source, platform) ?? tmpdir();
 	return tmpdir();
 }
 
-function configuredCodexHome(source: NodeJS.ProcessEnv): string | undefined {
-	const userHome = source.HOME?.trim() || source.USERPROFILE?.trim();
+function configuredCodexHome(
+	source: NodeJS.ProcessEnv,
+	platform = process.platform,
+): string | undefined {
+	const home = source.HOME?.trim();
+	const userProfile = platform === "win32" ? source.USERPROFILE?.trim() : undefined;
+	const userHome = home || userProfile;
 	return source.PI_CODEX_WEB_SEARCH_HOME?.trim()
 		|| source.CODEX_HOME?.trim()
 		|| (userHome ? join(userHome, ".codex") : undefined);
