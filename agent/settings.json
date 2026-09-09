@@ -1,6 +1,6 @@
 {
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt6-astra",
+  "defaultModel": "gpt-6-astra",
   "defaultThinkingLevel": "low",
   "theme": "void-agent-one-dark",
   "packages": [
