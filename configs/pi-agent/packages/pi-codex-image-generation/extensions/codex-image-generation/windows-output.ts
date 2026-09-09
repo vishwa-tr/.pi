@@ -25,6 +25,11 @@ interface PreparedWindowsOutputRequest {
 	request: WindowsOutputRequest;
 }
 
+interface WindowsOutputRuntimeOptions {
+	helperTimeoutMs?: number;
+	terminationGraceMs?: number;
+}
+
 export function validateWindowsOutputPath(requestedPath: string): void {
 	const cleaned = requestedPath.startsWith("@") ? requestedPath.slice(1).trim() : requestedPath.trim();
 	if (isAbsolute(cleaned) || /^[a-z]:/i.test(cleaned) || /^[/\\]{2}/.test(cleaned)) {
@@ -63,11 +68,12 @@ export async function saveWindowsOutput(
 	image: Buffer,
 	overwrite: boolean,
 	signal?: AbortSignal,
+	runtimeOptions: WindowsOutputRuntimeOptions = {},
 ): Promise<void> {
 	if (signal?.aborted) throw new Error("Codex image generation cancelled");
 	const prepared = await buildRequest("save", rootPath, absolutePath, requestedPath, overwrite, signal);
 	prepared.request.byteLength = image.length;
-	await runHelper(prepared, image, signal);
+	await runHelper(prepared, image, signal, runtimeOptions);
 }
 
 async function buildRequest(
@@ -132,6 +138,7 @@ async function runHelper(
 	prepared: PreparedWindowsOutputRequest,
 	image?: Buffer,
 	signal?: AbortSignal,
+	runtimeOptions: WindowsOutputRuntimeOptions = {},
 ): Promise<void> {
 	const child = spawn("wsl.exe", ["--exec", "python3", prepared.helperPath], {
 		stdio: ["pipe", "pipe", "pipe"],
@@ -149,12 +156,16 @@ async function runHelper(
 	let sawOk = false;
 	let terminationTimer: ReturnType<typeof setTimeout> | undefined;
 	const canListenForAbort = typeof signal?.addEventListener === "function";
+	const helperTimeoutMs = Math.max(1, runtimeOptions.helperTimeoutMs ?? OUTPUT_HELPER_TIMEOUT_MS);
+	const terminationGraceMs = Math.max(
+		1,
+		runtimeOptions.terminationGraceMs ?? OUTPUT_HELPER_TERMINATION_GRACE_MS,
+	);
 
 	const sendDecision = (decision: "CANCEL" | "COMMIT") => {
 		if (decisionSent) return;
 		decisionSent = true;
 		commitAuthorized = decision === "COMMIT";
-		if (commitAuthorized) clearTimeout(operationTimer);
 		child.stdin.end(`${decision}\n`);
 	};
 	const requestCancellation = () => {
@@ -164,15 +175,17 @@ async function runHelper(
 	};
 	const onAbort = () => requestCancellation();
 	const operationTimer = setTimeout(() => {
-		if (commitAuthorized) return;
 		helperTimedOut = true;
 		requestCancellation();
-		terminationTimer = setTimeout(() => child.kill(), OUTPUT_HELPER_TERMINATION_GRACE_MS);
+		terminationTimer = setTimeout(() => child.kill(), terminationGraceMs);
 		terminationTimer.unref?.();
-	}, OUTPUT_HELPER_TIMEOUT_MS);
+	}, helperTimeoutMs);
 	operationTimer.unref?.();
 	if (canListenForAbort) signal.addEventListener("abort", onAbort, { once: true });
 
+	child.stdin.on("error", () => {
+		helperError ??= "Windows image-output helper input failed";
+	});
 	child.stdout.setEncoding("utf8");
 	child.stdout.on("data", (chunk: string) => {
 		stdoutBuffer = `${stdoutBuffer}${chunk}`;

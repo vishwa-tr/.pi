@@ -9,25 +9,19 @@ a concise answer with direct source citations.
 - `codex` installed on `PATH` (or set `CODEX_BIN` to the executable path)
 - Codex 0.145.0 or newer
 - Codex authenticated with a ChatGPT-backed login (`codex login`)
-- No active Codex MCP servers, hooks, plugins, apps, skills, or inherited
-  instruction sources in the selected Codex home
 
-No separate OpenAI API key is required. The Pi extension never opens, parses,
-copies, or returns Codex credential files; the spawned Codex process owns its
-authentication and token refresh.
+No separate OpenAI API key or second Codex login is required. Each call creates a
+clean temporary Codex home and bridges only the existing authentication file
+through a hard link or symbolic link. The extension never parses, logs, or
+returns credential values, and token refreshes remain attached to the normal
+Codex login instead of diverging into a stale search-only profile.
 
-By default the process uses an isolated profile at `$HOME/.codex/web-search` so
-normal Codex MCP, hook, plugin, app, skill, and instruction configuration cannot
-leak into searches. The extension intentionally ignores a general `CODEX_HOME`
-because that profile may contain unsafe inherited configuration;
-`PI_CODEX_WEB_SEARCH_HOME` is the only supported override. Authenticate the
-selected profile once with:
-
-```bash
-CODEX_HOME="$HOME/.codex/web-search" codex login
-```
-
-Use the same path in `PI_CODEX_WEB_SEARCH_HOME` when overriding the default.
+The login source defaults to `$HOME/.codex`. An explicit `CODEX_HOME` is honored,
+and `PI_CODEX_WEB_SEARCH_HOME` takes precedence when the login lives elsewhere.
+Configuration from that source home is not copied or loaded. On Windows, the
+temporary runtime is placed in the selected Codex home so the authentication
+file can be hard-linked on the same volume without requiring elevated symbolic
+link permissions.
 
 ## Isolation and privacy
 
@@ -45,7 +39,9 @@ to Pi or the model.
 
 Each search uses:
 
-- a fresh empty temporary working directory;
+- a fresh empty temporary working directory and clean temporary Codex home;
+- only a hard-linked or symlinked authentication file from the selected Codex home;
+- isolated HOME, XDG, temporary, and Windows application-data directories;
 - an ephemeral Codex thread;
 - `environments: []` to remove local shell/file execution environments;
 - read-only sandboxing and a `never` approval policy;

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import {
 	saveWindowsOutput,
@@ -11,6 +11,7 @@ import {
 } from "../extensions/codex-image-generation/windows-output.ts";
 
 const windowsOnly = { skip: process.platform !== "win32" };
+const nonWindowsOnly = { skip: process.platform === "win32" };
 
 test("rejects ambiguous and reserved Windows output paths", () => {
 	validateWindowsOutputPath("images/result.png");
@@ -80,6 +81,47 @@ test("rejects Windows symlink parents and targets", windowsOnly, async () => {
 	} finally {
 		await rm(root, { recursive: true, force: true });
 		await rm(outside, { recursive: true, force: true });
+	}
+});
+
+test("times out if the helper stalls after commit authorization", nonWindowsOnly, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-image-windows-timeout-test-"));
+	const fakeWslPath = join(root, "wsl.exe");
+	const previousPath = process.env.PATH;
+	try {
+		await writeFile(fakeWslPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "--exec" && args[1] === "wslpath") {
+	process.stdout.write(args.at(-1) + "\\n");
+	process.exit(0);
+}
+process.stdout.write("READY\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+	if (chunk.includes("COMMIT\\n")) setInterval(() => undefined, 1_000);
+});
+`);
+		await chmod(fakeWslPath, 0o700);
+		process.env.PATH = `${root}${delimiter}${previousPath ?? ""}`;
+
+		const target = join(root, "stalled.png");
+		await assert.rejects(
+			saveWindowsOutput(
+				await realpath(root),
+				target,
+				"stalled.png",
+				Buffer.from("stalled"),
+				false,
+				undefined,
+				{ helperTimeoutMs: 50, terminationGraceMs: 25 },
+			),
+			/Windows image-output helper timed out/,
+		);
+		assert.equal(existsSync(target), false);
+	} finally {
+		if (previousPath === undefined) delete process.env.PATH;
+		else process.env.PATH = previousPath;
+		await rm(root, { recursive: true, force: true });
 	}
 });
 

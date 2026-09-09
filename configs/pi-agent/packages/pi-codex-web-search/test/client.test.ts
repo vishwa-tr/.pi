@@ -1,12 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
 	buildCodexEnvironment,
+	prepareIsolatedCodexHome,
 	runCodexWebSearch,
+	runtimeTempParent,
 	type RunCodexWebSearchOptions,
 } from "../extensions/codex-web-search/client.ts";
 
@@ -21,19 +31,18 @@ function fakeOptions(mode = "success"): RunCodexWebSearchOptions {
 	};
 }
 
-test("selects a dedicated Codex home and honors only the web-search override", () => {
-	assert.equal(
-		buildCodexEnvironment({ HOME: "/test-home" }).CODEX_HOME,
-		join("/test-home", ".codex", "web-search"),
-	);
-	assert.equal(
-		buildCodexEnvironment({ USERPROFILE: "/test-profile" }).CODEX_HOME,
-		join("/test-profile", ".codex", "web-search"),
-	);
-	assert.equal(
-		buildCodexEnvironment({ HOME: "/test-home", CODEX_HOME: "/profiles/codex" }).CODEX_HOME,
-		join("/test-home", ".codex", "web-search"),
-	);
+test("builds a minimal Codex environment and honors login-source overrides", () => {
+	const environment = buildCodexEnvironment({
+		HOME: "/test-home",
+		PATH: "/bin",
+		PI_OFFLINE: "1",
+		SECRET_TOKEN: "secret",
+	});
+	assert.equal(environment.CODEX_HOME, "/test-home/.codex");
+	assert.equal(environment.PATH, "/bin");
+	assert.equal(environment.PI_OFFLINE, undefined);
+	assert.equal(environment.SECRET_TOKEN, undefined);
+
 	assert.equal(
 		buildCodexEnvironment({
 			HOME: "/test-home",
@@ -42,6 +51,56 @@ test("selects a dedicated Codex home and honors only the web-search override", (
 		}).CODEX_HOME,
 		"/profiles/web-search",
 	);
+
+	const isolated = buildCodexEnvironment({
+		HOME: "/real-home",
+		XDG_CONFIG_HOME: "/real-config",
+		APPDATA: "/real-app-data",
+		PATH: "/bin",
+	}, "/isolated-codex-home");
+	assert.equal(isolated.HOME, "/isolated-codex-home");
+	assert.equal(isolated.CODEX_HOME, "/isolated-codex-home");
+	assert.equal(isolated.XDG_CONFIG_HOME, "/isolated-codex-home/xdg-config");
+	assert.equal(isolated.APPDATA, "/isolated-codex-home/app-data");
+	assert.equal(isolated.PATH, "/bin");
+});
+
+test("creates a clean temporary Codex home backed by the existing login", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-web-search-codex-home-test-"));
+	const sourceHome = join(root, "source");
+	const tempRoot = join(root, "temporary");
+	await Promise.all([
+		mkdir(sourceHome, { recursive: true }),
+		mkdir(tempRoot, { recursive: true }),
+	]);
+	const sourceAuthPath = join(sourceHome, "auth.json");
+	await writeFile(sourceAuthPath, "test authentication material", { mode: 0o600 });
+	await writeFile(join(sourceHome, "config.toml"), "[mcp_servers.unsafe]", { mode: 0o600 });
+	try {
+		const isolatedHome = await prepareIsolatedCodexHome({ CODEX_HOME: sourceHome }, tempRoot);
+		const isolatedEntries = await readdir(isolatedHome);
+		assert.ok(isolatedEntries.includes("auth.json"));
+		assert.equal(isolatedEntries.includes("config.toml"), false);
+		assert.ok(isolatedEntries.includes("xdg-config"));
+		assert.ok(isolatedEntries.includes("tmp"));
+
+		const isolatedAuthPath = join(isolatedHome, "auth.json");
+		assert.equal(await readFile(isolatedAuthPath, "utf8"), "test authentication material");
+		await writeFile(isolatedAuthPath, "refreshed authentication material");
+		assert.equal(await readFile(sourceAuthPath, "utf8"), "refreshed authentication material");
+		const isolatedAuth = await lstat(isolatedAuthPath);
+		assert.ok(isolatedAuth.isSymbolicLink() || isolatedAuth.isFile());
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("uses the selected Codex home for Windows temporary files", () => {
+	assert.equal(
+		runtimeTempParent({ HOME: "C:\\Users\\tester", CODEX_HOME: "D:\\Codex" }, "win32"),
+		"D:\\Codex",
+	);
+	assert.equal(runtimeTempParent({}, "linux"), tmpdir());
 });
 
 test("runs an isolated Codex search and normalizes structured sources", async () => {
@@ -105,11 +164,11 @@ test("requires a ChatGPT-backed Codex login", async () => {
 test("refuses inherited Codex tool configuration and instruction sources", async () => {
 	await assert.rejects(
 		runCodexWebSearch("Configured MCP", fakeOptions("risky-config")),
-		/refused inherited MCP, hook, plugin, app, skill, or instruction configuration/,
+		/could not establish clean MCP, hook, plugin, app, skill, and instruction configuration/,
 	);
 	await assert.rejects(
 		runCodexWebSearch("Global instructions", fakeOptions("inherited-instructions")),
-		/refused inherited instruction sources/,
+		/refused unexpected inherited instruction sources/,
 	);
 });
 
@@ -266,6 +325,7 @@ test("reports a missing Codex executable without reading credential files", asyn
 		runCodexWebSearch("Cannot start", {
 			command: "/definitely/not/a/codex-executable",
 			timeoutMs: 500,
+			env: { PATH: process.env.PATH },
 		}),
 		/Codex CLI was not found/,
 	);
