@@ -17,6 +17,7 @@ import {
 	estimateSummaryInputTokens,
 	getHandoffMessages,
 } from "./core.ts";
+import { persistHandoffSession } from "./persistence.ts";
 
 const EXTENSION_ID = "handoff";
 const MAX_SUMMARY_TOKENS = 6_000;
@@ -43,6 +44,8 @@ interface SummaryGeneration {
 	usage: Usage;
 	inputTokensEstimate: number;
 }
+
+type SummaryResult = SummaryGeneration | { error: string } | undefined;
 
 interface HandoffDetails {
 	version: 1;
@@ -88,6 +91,11 @@ async function runHandoff(ctx: ExtensionCommandContext, args: string): Promise<v
 		return;
 	}
 
+	if ("error" in generation) {
+		ctx.ui.notify(`Handoff summary generation failed: ${generation.error}`, "error");
+		return;
+	}
+
 	ctx.ui.notify(buildUsageNotice(generation.usage), "info");
 	const editedSummary = await ctx.ui.editor("Review handoff summary", generation.text);
 	if (editedSummary === undefined) {
@@ -116,6 +124,7 @@ async function runHandoff(ctx: ExtensionCommandContext, args: string): Promise<v
 		setup: async (sessionManager) => {
 			sessionManager.appendSessionInfo(sessionName);
 			sessionManager.appendCustomMessageEntry(EXTENSION_ID, editedSummary.trim(), true, details);
+			persistHandoffSession(sessionManager);
 		},
 		withSession: async (replacementCtx) => {
 			replacementCtx.ui.notify("Handoff session created. Continue from the summary above.", "info");
@@ -125,8 +134,8 @@ async function runHandoff(ctx: ExtensionCommandContext, args: string): Promise<v
 	if (result.cancelled) ctx.ui.notify("Handoff session creation cancelled", "info");
 }
 
-async function generateSummary(ctx: ExtensionCommandContext, prompt: string): Promise<SummaryGeneration | undefined> {
-	return ctx.ui.custom<SummaryGeneration | undefined>((tui, theme, _keybindings, done) => {
+async function generateSummary(ctx: ExtensionCommandContext, prompt: string): Promise<SummaryResult> {
+	return ctx.ui.custom<SummaryResult>((tui, theme, _keybindings, done) => {
 		const request: Message = {
 			role: "user",
 			content: [{ type: "text", text: prompt }],
@@ -150,8 +159,16 @@ async function generateSummary(ctx: ExtensionCommandContext, prompt: string): Pr
 				},
 			)
 			.then((response) => {
-				if (response.stopReason === "aborted") {
+				if (response.stopReason === "aborted" || loader.signal.aborted) {
 					done(undefined);
+					return;
+				}
+				if (response.stopReason === "error") {
+					done({ error: response.errorMessage || "The provider returned an error." });
+					return;
+				}
+				if (response.stopReason === "length") {
+					done({ error: "The summary reached its output limit. Retry with a narrower focus." });
 					return;
 				}
 				const text = response.content
@@ -162,8 +179,11 @@ async function generateSummary(ctx: ExtensionCommandContext, prompt: string): Pr
 				done(text ? { text, usage: response.usage, inputTokensEstimate } : undefined);
 			})
 			.catch((error) => {
-				console.error("Handoff summary generation failed:", error);
-				done(undefined);
+				if (loader.signal.aborted) {
+					done(undefined);
+					return;
+				}
+				done({ error: error instanceof Error ? error.message : String(error) });
 			});
 
 		return loader;

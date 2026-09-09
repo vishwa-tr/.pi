@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import { strict as assert } from "node:assert";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -107,8 +109,10 @@ test("usage notice calculates a total when the provider omits one", () => {
 	);
 });
 
-test("extension loads in the installed Pi runtime", (t) => {
-	const rpc = spawnSync(
+test("extension loads and passes offline lifecycle checks in the installed Pi runtime", async (t) => {
+	const agentDir = mkdtempSync(join(tmpdir(), "pi-handoff-test-agent-"));
+	t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+	const child = spawn(
 		process.env.PI_BIN ?? "pi",
 		[
 			"--mode", "rpc",
@@ -119,13 +123,59 @@ test("extension loads in the installed Pi runtime", (t) => {
 			"--no-prompt-templates",
 			"--no-context-files",
 			"-e", EXTENSION,
+			"-e", join(HERE, "fixtures", "runtime-check.ts"),
 		],
 		{
-			encoding: "utf8",
-			input: '{"id":"load-check","type":"get_state"}\n',
-			timeout: 15_000,
+			env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
+			stdio: ["pipe", "pipe", "pipe"],
 		},
 	);
+	const rpc = await new Promise((resolve, reject) => {
+		let stdout = "";
+		let stderr = "";
+		let buffer = "";
+		const timeout = setTimeout(() => {
+			child.kill();
+			reject(new Error(`Runtime checks timed out: ${stdout}\n${stderr}`));
+		}, 15_000);
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
+		child.stdout.on("data", (chunk) => {
+			stdout += chunk;
+			buffer += chunk;
+			while (buffer.includes("\n")) {
+				const newline = buffer.indexOf("\n");
+				const line = buffer.slice(0, newline);
+				buffer = buffer.slice(newline + 1);
+				if (!line) continue;
+				try {
+					const record = JSON.parse(line);
+					if (record.id === "regression-check" || record.type === "extension_error") child.stdin.end();
+				} catch (error) {
+					clearTimeout(timeout);
+					child.kill();
+					reject(error);
+				}
+			}
+		});
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		child.once("error", (error) => {
+			clearTimeout(timeout);
+			resolve({ error, stdout, stderr });
+		});
+		child.once("close", (status) => {
+			clearTimeout(timeout);
+			resolve({ status, stdout, stderr });
+		});
+		child.once("spawn", () => {
+			child.stdin.write([
+				'{"id":"load-check","type":"get_state"}',
+				'{"id":"command-check","type":"get_commands"}',
+				'{"id":"regression-check","type":"prompt","message":"/handoff-regression-check"}',
+				"",
+			].join("\n"));
+		});
+	});
 	if (rpc.error?.code === "ENOENT") {
 		t.skip("Pi executable not found; set PI_BIN to run the runtime load test.");
 		return;
@@ -136,4 +186,10 @@ test("extension loads in the installed Pi runtime", (t) => {
 	const records = rpc.stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 	assert.equal(records.find((record) => record.id === "load-check")?.success, true);
 	assert.equal(records.some((record) => record.type === "extension_error"), false, rpc.stdout);
+	assert.ok(records.find((record) => record.id === "command-check")?.data.commands.some(
+		(command) => command.name === "handoff",
+	), rpc.stdout);
+	assert.ok(records.some((record) => record.type === "extension_ui_request"
+		&& record.method === "notify" && record.message === "Handoff regression checks passed"), rpc.stdout);
+	assert.equal(records.find((record) => record.id === "regression-check")?.success, true, rpc.stdout);
 });
