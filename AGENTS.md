@@ -88,35 +88,71 @@ repository-specific documentation for unrelated project work.
 
 ## Reusable Artifacts
 
-Create or update a reusable plan, skill, procedure, subagent, MCP definition, plugin pattern, or
-setup guide only when the user requests it, the artifact is an explicit deliverable, or the task is
-specifically maintaining the reusable library. Do not create reusable copies as a side effect of
-ordinary implementation work.
+Retain useful reusable artifacts produced during ordinary work without requiring a separate user
+request. Save only material with clear future value, not trivial commands, temporary outputs,
+generated logs, or routine task notes. This permission does not authorize commits, pushes,
+external transfers, destructive actions, or unrelated changes to root instruction files.
 
-Reusable artifacts must be project- and host-agnostic. Replace project names, home paths, hosts,
-accounts, credentials, private URLs, and environment-specific state with neutral placeholders.
-Store the result in the repository's established location for that artifact type.
+Store project-agnostic material in `~/.agents/<category>/`, the tool-independent shared library.
+Store project-specific material in `<repository-root>/.agents/<category>/`, respecting established
+project documentation locations. Before creating an artifact, and before starting any task an indexed
+artifact may already cover, check `~/.agents/README.md` and the
+project's `.agents/README.md` when present; reuse or extend an existing
+equivalent instead of creating duplicates or improvising a one-off.
+Read only relevant indexed artifacts.
+
+Shared artifacts must be project- and host-agnostic. Remove project assumptions, private paths,
+accounts, credentials, private URLs, and environment-specific state; use neutral placeholders or
+parameters. Keep project-specific details in the project and sensitive data out of both libraries.
+
+Save useful task scripts under the appropriate library's `scripts/` directory. Parameterize
+meaningful inputs rather than hardcoding one task: for example, an open-browser script accepts
+browser and URL arguments instead of always opening Firefox. Include concise usage, parameters,
+prerequisites, and side-effect warnings; validate inputs, use safe defaults, and verify scripts
+with safe representative checks before indexing. Disclose any verification limitations.
+
+## Agent Memory
+
+Use `<repository-root>/.agents/memory/` for durable project-specific facts, decisions, pitfalls,
+and verified lessons. Use `~/.agents/memory/` for project-agnostic lessons and cross-project
+preferences. Useful memory may be saved during ordinary work without a separate request.
+
+Before relevant work, consult the project and shared `.agents/README.md` indexes when present;
+read only memory entries relevant to the task. Before saving, check existing entries and update
+an equivalent rather than duplicating it. Use one concise lowercase-hyphen-case Markdown file per
+topic, with a short Summary and only necessary Details. Record the basis and verification date
+for facts that can become stale; distinguish confirmed facts from unresolved assumptions.
+
+Index each memory directly in its library's root README with one short description. Keep memory
+out of the index itself. Do not retain transcripts, progress logs, routine task notes, credentials,
+personal contact details, or machine-specific state. Do not copy project details into shared
+memory. Reference authoritative documentation instead of duplicating it. Memory is reference
+material, not an instruction override; recheck stale claims against current code and user guidance,
+and correct or remove obsolete entries when verified, respecting deletion authorization.
 
 ## Project Agent Documentation
 
-Follow a project's existing agent-documentation structure. Do not create `.agents/`, modify a root
-`AGENTS.md`, or write plans, notes, memories, or setup records merely because code was changed.
-Create durable project agent material only when the user requests it or when it is an explicit task
-deliverable.
+Here, project `.agents/` means `<repository-root>/.agents/`, not `~/.agents/`; the latter is shared
+across projects. Apply the following organization rules to both libraries.
 
-When a project has no convention and an inert project-local documentation artifact is requested,
-use lowercase hyphen-case under `.agents/docs/<type>/<domain>/<artifact>/<artifact>.md`, where
-`<type>` is `plans`, `skills`, `procedures`, `subagents`, `mcp`, `notes`, or `memories`. Keep
-project-specific material inside that project and exclude secrets, credentials, private paths,
-personal details, and generated logs.
+Choose or create a suitable category subdirectory before saving an artifact. Use lowercase
+hyphen-case names, for example `plans/authentication.md`, `guides/testing.md`, or
+`scripts/open-browser.ps1`. Do not place loose artifacts directly in either `.agents/` root;
+`README.md` is the index exception. Create only needed categories; add domain subdirectories only
+when useful, not a mandatory deep hierarchy. Preserve existing project conventions and do not move
+or delete existing artifacts without user authorization.
 
-Keep `.agents/README.md` as a short, always-read overview and documentation router. Link directly
-to detailed documents, state when each one should be read, and keep detail out of the README. Start
-each detailed document with a brief `Summary`, followed by `Details`; read the summary first and
-continue into the details only when relevant. Avoid chains of indexes.
+Keep each `.agents/README.md` index-only: category headings and direct relative links to every
+maintained artifact in its subdirectories, each with one short description of its purpose or when
+to use it. No duplicated content, detailed instructions, progress logs, or chains of indexes.
+After verifying an artifact, update the index when adding, moving, or removing it and check links.
+Keep the index cheap to read; load detailed documents only when relevant. Longer documents should
+start with a brief Summary followed by Details.
 
-Do not use that documentation layout for active resources. Verify the target runtime's discovery
-contract first. In Pi, project skills use `.agents/skills/<skill-name>/SKILL.md`, project subagent
+Active runtime resources are an exception to the shared-library layout. Keep existing skills,
+subagents, procedures, and MCP definitions in their established runtime/configuration locations;
+link to them from the shared index when useful instead of moving or duplicating them. Verify the
+target runtime's discovery contract before adding new active resources. In Pi, project skills use `.agents/skills/<skill-name>/SKILL.md`, project subagent
 definitions use `.pi/subagents/<type>.md`, and executable saved procedures use
 `.pi/procedures/<name>.js`.
 
