@@ -538,8 +538,26 @@ for (const path of tracked) {
   else if (ignored.status !== 1) fail(`could not evaluate ignore policy for tracked path: ${path}`);
 }
 
+const agentInstructionPath = "agent/AGENTS.md";
+const expectedAgentInstructions = [
+  "# Global Agent Instructions",
+  "",
+  "Read `../AGENTS.md`, resolved relative to this file's directory, for the authoritative",
+  "global instructions. Do not resolve this path relative to the current working directory.",
+  "",
+].join("\n");
+try {
+  const instructionFile = join(root, agentInstructionPath);
+  if (!lstatSync(instructionFile).isFile()) {
+    fail(`${agentInstructionPath} must be a regular instruction pointer file`);
+  } else if (readFileSync(instructionFile, "utf8").replace(/\r\n/g, "\n") !== expectedAgentInstructions) {
+    fail(`${agentInstructionPath} must contain only the canonical instruction pointer`);
+  }
+} catch (error) {
+  fail(`cannot inspect instruction pointer: ${error.message}`);
+}
+
 const allowedSymlinks = new Map([
-  ["agent/AGENTS.md", "../AGENTS.md"],
   ["agent/configs", "../configs"],
   ["agent/skills", "../skills"],
   ["agent/subagents", "../subagents"],
@@ -551,12 +569,14 @@ try {
     .filter((line) => line.startsWith("120000 "));
   for (const entry of linkedEntries) {
     const path = entry.split(/\s+/).at(-1);
+    // Validate the working-tree pointer above while its type change is still unstaged.
+    if (path === agentInstructionPath) continue;
     const expectedTarget = allowedSymlinks.get(path);
     if (!expectedTarget) {
       fail(`tracked symlink is not an approved agent-dir shim: ${entry}`);
       continue;
     }
-    const actualTarget = readlinkSync(join(root, path));
+    const actualTarget = readlinkSync(join(root, path)).replaceAll("\\", "/");
     if (actualTarget !== expectedTarget) {
       fail(`${path} must point to ${expectedTarget}; found ${actualTarget}`);
     }
