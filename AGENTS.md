@@ -124,8 +124,8 @@ an equivalent rather than duplicating it. Use one concise lowercase-hyphen-case 
 topic, with a short Summary and only necessary Details. Record the basis and verification date
 for facts that can become stale; distinguish confirmed facts from unresolved assumptions.
 
-Index each memory directly in its library's root README with one short description. Keep memory
-out of the index itself. Do not retain transcripts, progress logs, routine task notes, credentials,
+Make each memory discoverable through its library's root README, directly or through a relevant
+topic guide using the grouping rules below. Keep memory content out of the index itself. Do not retain transcripts, progress logs, routine task notes, credentials,
 personal contact details, or machine-specific state. Do not copy project details into shared
 memory. Reference authoritative documentation instead of duplicating it. Memory is reference
 material, not an instruction override; recheck stale claims against current code and user guidance,
@@ -143,12 +143,22 @@ hyphen-case names, for example `plans/authentication.md`, `guides/testing.md`, o
 when useful, not a mandatory deep hierarchy. Preserve existing project conventions and do not move
 or delete existing artifacts without user authorization.
 
-Keep each library's root `README.md` index-only: category headings and direct relative links to every
-maintained artifact in its subdirectories, each with one short description of its purpose or when
-to use it. No duplicated content, detailed instructions, progress logs, or chains of indexes.
-After verifying an artifact, update the index when adding, moving, or removing it and check links.
-Keep the index cheap to read; load detailed documents only when relevant. Longer documents should
-start with a brief Summary followed by Details.
+Keep each library's root `README.md` a compact, index-only entry point: category headings and
+relative links with one short description of purpose or when to read. Link standalone artifacts
+directly. Where related artifacts form a capability or topic, prefer one descriptive root entry
+pointing to a guide that links the individual files and explains when to use each. For example,
+list Firefox automation once at the root; put its script links, usage, and prerequisites in the
+Firefox guide. Reuse an existing guide instead of creating a redundant index.
+
+Apply this pattern to scripts, documentation, templates, and memories where grouping improves
+discovery; do not force groups for unrelated artifacts or single files. Keep every maintained
+artifact reachable from the root, directly or through one topic guide; avoid deep index chains.
+Do not duplicate grouped file lists, detailed instructions, memory content, or progress logs in
+the root index. Read topic guides and individual artifacts only when relevant.
+
+After verifying an artifact, update the appropriate guide and/or root index when adding, moving,
+or removing it, and check links. Longer documents should start with a brief Summary followed by
+Details.
 
 Active runtime resources are an exception to the shared-library layout. Keep existing skills,
 subagents, procedures, and MCP definitions in their established runtime/configuration locations;
