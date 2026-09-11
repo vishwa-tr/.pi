@@ -93,10 +93,10 @@ request. Save only material with clear future value, not trivial commands, tempo
 generated logs, or routine task notes. This permission does not authorize commits, pushes,
 external transfers, destructive actions, or unrelated changes to root instruction files.
 
-Store project-agnostic material in `~/.agents/<category>/`, the tool-independent shared library.
+Store project-agnostic material in `~/.pi/agent/library/<category>/`, the tool-independent shared library.
 Store project-specific material in `<repository-root>/.agents/<category>/`, respecting established
 project documentation locations. Before creating an artifact, and before starting any task an indexed
-artifact may already cover, check `~/.agents/README.md` and the
+artifact may already cover, check `~/.pi/agent/library/README.md` and the
 project's `.agents/README.md` when present; reuse or extend an existing
 equivalent instead of creating duplicates or improvising a one-off.
 Read only relevant indexed artifacts.
@@ -114,10 +114,11 @@ with safe representative checks before indexing. Disclose any verification limit
 ## Agent Memory
 
 Use `<repository-root>/.agents/memory/` for durable project-specific facts, decisions, pitfalls,
-and verified lessons. Use `~/.agents/memory/` for project-agnostic lessons and cross-project
+and verified lessons. Use `~/.pi/agent/library/memory/` for project-agnostic lessons and cross-project
 preferences. Useful memory may be saved during ordinary work without a separate request.
 
-Before relevant work, consult the project and shared `.agents/README.md` indexes when present;
+Before relevant work, consult `<repository-root>/.agents/README.md` and
+`~/.pi/agent/library/README.md` when present;
 read only memory entries relevant to the task. Before saving, check existing entries and update
 an equivalent rather than duplicating it. Use one concise lowercase-hyphen-case Markdown file per
 topic, with a short Summary and only necessary Details. Record the basis and verification date
@@ -132,17 +133,17 @@ and correct or remove obsolete entries when verified, respecting deletion author
 
 ## Project Agent Documentation
 
-Here, project `.agents/` means `<repository-root>/.agents/`, not `~/.agents/`; the latter is shared
-across projects. Apply the following organization rules to both libraries.
+Here, project `.agents/` means `<repository-root>/.agents/`. The shared library lives at
+`~/.pi/agent/library/`. Apply the following organization rules to both libraries.
 
 Choose or create a suitable category subdirectory before saving an artifact. Use lowercase
 hyphen-case names, for example `plans/authentication.md`, `guides/testing.md`, or
-`scripts/open-browser.ps1`. Do not place loose artifacts directly in either `.agents/` root;
+`scripts/open-browser.ps1`. Do not place loose artifacts directly in either library root;
 `README.md` is the index exception. Create only needed categories; add domain subdirectories only
 when useful, not a mandatory deep hierarchy. Preserve existing project conventions and do not move
 or delete existing artifacts without user authorization.
 
-Keep each `.agents/README.md` index-only: category headings and direct relative links to every
+Keep each library's root `README.md` index-only: category headings and direct relative links to every
 maintained artifact in its subdirectories, each with one short description of its purpose or when
 to use it. No duplicated content, detailed instructions, progress logs, or chains of indexes.
 After verifying an artifact, update the index when adding, moving, or removing it and check links.
@@ -155,6 +156,30 @@ link to them from the shared index when useful instead of moving or duplicating 
 target runtime's discovery contract before adding new active resources. In Pi, project skills use `.agents/skills/<skill-name>/SKILL.md`, project subagent
 definitions use `.pi/subagents/<type>.md`, and executable saved procedures use
 `.pi/procedures/<name>.js`.
+
+## Extension And Efficiency Feedback
+
+When using Pi extensions, report observed failures, unexpected behavior, suspected bugs, and
+concrete improvement opportunities. Also report meaningful opportunities to reduce token usage
+without sacrificing correctness or useful visibility, such as oversized tool responses, repeated
+context, duplicate reads, or unnecessarily broad searches.
+
+When there are actionable findings, add an **Extension and efficiency findings** section at the
+end of the final response. Keep each finding brief: identify the extension/tool or workflow,
+expected versus observed behavior with minimal reproduction context, impact, and any workaround
+or specific improvement. For token-efficiency findings, name the observed source of waste and
+proposed change; distinguish extension changes from improvements to the agent's own workflow.
+Do not claim measured savings without evidence.
+
+Distinguish confirmed defects from suspected causes and suggestions. Report only observed,
+actionable findings; do not invent issues, give generic advice, or repeat previous findings
+without new evidence. Exclude secrets and unnecessary private details. Apply safe, obvious
+workflow improvements immediately and report only meaningful opportunities that remain
+actionable. Keep feedback proportional to its value rather than adding more token overhead.
+
+Omit the section when there are no meaningful findings. Report blocking failures immediately,
+not only at turn end. This reporting rule does not authorize modifying extensions, creating
+issues, or publishing feedback; obtain user authorization for those actions.
 
 ## Working Style
 
