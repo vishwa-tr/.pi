@@ -36,9 +36,11 @@ Before writing PR descriptions, commit messages, issue bodies, review comments, 
 sent to an external service:
 
 - Do not name ignored, redacted, local-only, or environment files or describe what was excluded.
-- Do not include home paths, private network addresses, unrelated projects, secrets, tokens,
-  credentials, personal contact details, or account identifiers.
-- Keep local-only details in chat with me, not in public artifacts.
+- Portable, non-identifying paths such as `~/.pi/agent/library/` are allowed when useful. Do not
+  include absolute home paths, usernames, private network addresses or hosts, unrelated projects,
+  secrets, tokens, credentials, personal contact details, account identifiers, or other sensitive
+  local details.
+- Keep identifying or sensitive local-only details in chat with me, not in public artifacts.
 - Do not put my personal email or contact details into commands, headers, code, config, logs,
   telemetry, User-Agent strings, or external requests. Use a neutral placeholder such as
   `noreply@example.com`, or omit the field.
@@ -99,17 +101,24 @@ project documentation locations. Before creating an artifact, and before startin
 artifact may already cover, check `~/.pi/agent/library/README.md` and the
 project's `.agents/README.md` when present; reuse or extend an existing
 equivalent instead of creating duplicates or improvising a one-off.
-Read only relevant indexed artifacts.
+Read only relevant indexed artifacts. Reuse an index already read during the current task unless
+its contents changed or the task scope expanded.
 
-Shared artifacts must be project- and host-agnostic. Remove project assumptions, private paths,
-accounts, credentials, private URLs, and environment-specific state; use neutral placeholders or
-parameters. Keep project-specific details in the project and sensitive data out of both libraries.
+Shared artifacts must be project-agnostic and avoid assumptions about one particular machine.
+Document platform requirements when a capability inherently depends on an operating system,
+browser, runtime, or other platform feature; do not claim unsupported portability. Remove project
+assumptions, private paths, accounts, credentials, private URLs, and environment-specific state;
+use neutral placeholders or parameters. Keep project-specific details in the project and sensitive
+data out of both libraries.
 
 Save useful task scripts under the appropriate library's `scripts/` directory. Parameterize
 meaningful inputs rather than hardcoding one task: for example, an open-browser script accepts
 browser and URL arguments instead of always opening Firefox. Include concise usage, parameters,
 prerequisites, and side-effect warnings; validate inputs, use safe defaults, and verify scripts
 with safe representative checks before indexing. Disclose any verification limitations.
+Discovering, saving, indexing, or reusing an artifact does not authorize executing it, installing
+dependencies, accessing the network, performing destructive actions, or bypassing project
+verification and approval rules.
 
 ## Agent Memory
 
