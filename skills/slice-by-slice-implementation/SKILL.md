@@ -12,7 +12,7 @@ Use short implementation-and-review loops so the user can steer design decisions
 Before editing:
 
 1. Read applicable repository instructions, the implementation plan, and nearby code.
-2. Inspect the current branch and working tree. Preserve existing user changes.
+2. Inspect the current branch and working tree. Preserve existing user changes. Record which modified files predate the slice and treat them as user-owned: do not edit, stage, unstage, restore, or commit them unless the user explicitly brings them into a dedicated slice.
 3. Identify the smallest dependency-ordered change that advances the plan.
 4. State the proposed slice boundary briefly, including what will remain untouched.
 
@@ -40,6 +40,8 @@ Examples of appropriately small slices include:
 
 Avoid bundling adjacent work merely because it is straightforward. Do not add migrations, UI behavior, tests, refactors, or related entities until their own slice unless they are required to keep the current change safe and coherent.
 
+Defer cross-cutting integration files until the prerequisite schema, query, and lifecycle decisions they depend on have been reviewed. Editing them early causes repeated churn and makes unrelated user work difficult to isolate. If such a file is already modified, leave it untouched until its dedicated slice unless the user explicitly approves combining the work.
+
 ## Implement and stop
 
 For each slice:
@@ -66,7 +68,9 @@ Treat feedback as a checkpoint, not as resistance to the plan:
 - Explain a design choice concisely when asked, then wait for acceptance or correction.
 - Preserve approved earlier commits; do not rewrite them unless the user explicitly authorizes an amend or history change.
 
-When the user approves a slice and asks to commit, follow repository verification and commit-authorization rules. Commit only the approved files. Do not push unless separately requested.
+When the user approves a slice and asks to commit, follow repository verification and commit-authorization rules. Inspect the index first and commit only the changes that are already staged. Do not stage additional files, and do not include unstaged or partially staged changes, unless the user explicitly asks. If the staged set does not match the approved slice, stop and clarify rather than silently changing the index.
+
+Keep commit count low without obscuring history. When the staged slice logically completes the immediately preceding local commit, prefer amending that commit when permitted by the applicable Git authorization rules. Never amend merely because it is technically possible, and never fold unrelated slices or user work together. Do not push unless separately requested.
 
 When the user says “bring the next slice,” choose the next smallest dependency-ordered change, announce its boundary, implement it, inspect it, and stop again for review.
 

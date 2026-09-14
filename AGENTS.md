@@ -60,8 +60,11 @@ sent to an external service:
 - Use the `gh` CLI for GitHub operations.
 - Match the repository's recent commit subject style.
 - Commit or push only when I ask.
-- Do not amend, force-push, skip hooks, or use destructive Git commands unless I explicitly ask for
-  that exact operation.
+- When I ask to commit staged changes, you may amend the immediately preceding commit without
+  separate confirmation when it was created during the current task, has not been pushed or shared,
+  and the staged changes belong to the same logical change.
+- Do not force-push, skip hooks, or use destructive Git commands unless I explicitly ask for that
+  exact operation.
 - After a multi-line commit, verify the stored message with `git log -1 --format=%B`.
 - Do not add agent attribution, session trailers, generated-by footers, internal model details, or
   tool runtime details to commits, PRs, issues, or review comments.
