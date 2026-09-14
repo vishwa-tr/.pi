@@ -10,7 +10,7 @@ const failures = [];
 const notes = [];
 
 const EXPECTED_PACKAGE_COUNT = 32;
-const EXPECTED_SKILL_COUNT = 31;
+const EXPECTED_SKILL_COUNT = 32;
 const EXPECTED_PROVIDER = "openai-codex";
 const EXPECTED_MODEL = "gpt-5.6-sol";
 const EXPECTED_THINKING_LEVEL = "high";
