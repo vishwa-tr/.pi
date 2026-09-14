@@ -34,6 +34,41 @@ The selected mode, explicit Plan skill, authorized Plan path, and Plan-spawned s
 
 While a restricted mode is active, `pi-plan` publishes its plain mode label under the legacy-compatible `plan-mode` status key. `pi-status-line` renders that dedicated footer segment.
 
+## Inter-extension mode bridge
+
+Other trusted extensions can observe mode authority through the public `pi.events` bus; no package-internal imports or session-entry parsing are needed:
+
+```ts
+pi.events.on("pi-plan:mode-changed", (snapshot) => { /* invalidate stale permissions */ });
+pi.events.emit("pi-plan:query-mode", {
+  version: 1,
+  respond(snapshot) { /* called synchronously before emit returns */ },
+});
+```
+
+Both channels supply the same read-only snapshot shape:
+
+```ts
+{
+  version: 1,
+  instanceId: string,
+  revision: number,
+  contextRevision: number,
+  ready: boolean,
+  sessionId: string | null,
+  selectedMode: "off" | "discuss" | "plan" | "quick",
+  enforcedMode: "off" | "discuss" | "plan" | "quick",
+  runMode: "off" | "discuss" | "plan" | "quick" | null,
+  pendingChange: boolean,
+}
+```
+
+`instanceId` is unique to the extension instance. `revision` starts at zero and increases on coherent observable changes; duplicate publications are silent. `contextRevision` starts at zero and increases on every branch/session restore and at shutdown, even when the mode stays Off. Ordinary Off run start/end changes `revision`, not `contextRevision`, so consumers can distinguish harmless run bookkeeping from approval-invalidating context changes. Reload and session replacement recreate the extension and therefore change `instanceId`.
+
+`ready` is false before the first restore and from the beginning of shutdown. `sessionId` is null before restore; `runMode` is null when no run is latched. Restore uses `session_start` and `session_tree`. Mode changes publish synchronously before the mode-change abort request; pending transitions retain the old run's enforced mode. Settlement publishes the coherent final state, including overlapping preflights and custom-turn fallback starts.
+
+Consumers requiring unrestricted mode must require a ready snapshot for their current session, **both selected and enforced modes Off**, and no pending change. Missing, malformed, unsupported, or stale responses must not grant permission. Bind approvals to the instance/session/context epoch and revoke on restrictive snapshots or epoch changes; becoming Off again is not renewed approval. Queries validate `version: 1` and a callable `respond`, and never persist state or change mode. This cooperative bridge is not a security boundary against other installed extensions.
+
 ## Plan-skill templates
 
 The base `plan` skill always supplies the host-controlled planning and save boundaries. Supplemental skills opt into routing with this top-level frontmatter field:
@@ -120,11 +155,18 @@ The canonical base skill is root `skills/plan/SKILL.md`. Pi discovers it as a no
 
 ```bash
 node --test \
+  configs/pi-agent/packages/pi-plan/extensions/plan/mode-bridge.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/mode-lifecycle.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/policy.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/prompts.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/save.test.ts \
   configs/pi-agent/packages/pi-plan/extensions/plan/templates.test.ts
+```
+
+Factory-level bridge tests use the real public SDK event bus and stubbed host handlers, without starting a session or calling a model. With the package's SDK peers resolvable (or an installed-SDK resolution preloader), run:
+
+```bash
+node --test configs/pi-agent/packages/pi-plan/extensions/plan/mode-bridge.integration.test.ts
 ```
 
 An offline RPC `get_commands` smoke test should report `discuss`, `plan`, `quick`, and `skill:plan`, confirming that the package and shared skill load successfully.

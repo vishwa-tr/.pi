@@ -1,0 +1,14 @@
+{
+	"name": "pi-swarm",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Inactive Swarm foundation with guarded workspace operations and offline SDK integration.",
+	"scripts": {
+		"test": "node --experimental-import-meta-resolve --import ./test/sdk-register.mjs --test test/*.test.mjs",
+		"test:foundation": "node --test test/core.test.mjs test/state.test.mjs test/storage.test.mjs test/regressions.test.mjs test/shell.test.mjs test/workspace*.test.mjs test/session-state.test.mjs test/specializations.test.mjs"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}

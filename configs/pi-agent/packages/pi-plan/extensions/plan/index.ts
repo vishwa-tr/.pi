@@ -10,6 +10,7 @@ import type {
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { MODE_CHANGED_EVENT, ModeBridge, QUERY_MODE_EVENT } from "./mode-bridge.ts";
 import { ModeLifecycle } from "./mode-lifecycle.ts";
 import {
 	applyPlanSubagentPolicy,
@@ -104,6 +105,10 @@ function completions(options: string[]) {
 
 export default function planExtension(pi: ExtensionAPI): void {
 	const modeLifecycle = new ModeLifecycle();
+	const modeBridge = new ModeBridge(modeLifecycle, (snapshot) => {
+		pi.events.emit(MODE_CHANGED_EVENT, snapshot);
+	});
+	pi.events.on(QUERY_MODE_EVENT, (request) => modeBridge.query(request));
 	let modeIntentRevision = 0;
 	let authorizedPlanPath: string | undefined;
 	let authorizedProjectRoot: string | undefined;
@@ -320,10 +325,13 @@ export default function planExtension(pi: ExtensionAPI): void {
 		planSubagentAddresses = new Set(restored.planSubagentAddresses ?? []);
 		applyModeTools(restored.mode);
 		updateStatus(ctx);
+		modeBridge.restored(ctx.sessionManager.getSessionId());
 	}
 
 	function setMode(next: AgentMode, ctx: ExtensionContext): boolean {
 		const changed = modeLifecycle.select(next);
+		// Revoke downstream permissions synchronously, before aborting the run.
+		modeBridge.publish();
 		if (ctx.isIdle() && modeLifecycle.runMode === undefined) {
 			applyModeTools(modeLifecycle.selectedMode);
 		}
@@ -586,6 +594,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 		// Custom triggerTurn wakes do not emit input/before_agent_start. Latch a
 		// run snapshot here when no normal prompt already created one.
 		if (modeLifecycle.runMode === undefined) modeLifecycle.startRun();
+		modeBridge.publish();
 		if (launchingDeferredModeInput && deferredModeInputAccepted) {
 			if (deferredModeInputs[0] === launchingDeferredModeInput) deferredModeInputs.shift();
 			resetDeferredModeInputLaunch();
@@ -640,6 +649,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", (event, ctx) => {
 		const runMode = modeLifecycle.startRun();
+		modeBridge.publish();
 		if (runMode !== "plan") {
 			return {
 				systemPrompt: `${event.systemPrompt}\n\n${buildNonPlanModeInstructions(runMode)}`,
@@ -692,17 +702,22 @@ export default function planExtension(pi: ExtensionAPI): void {
 		// Run snapshots are FIFO so an older settlement cannot clear a newer
 		// overlapping prompt preflight that already latched its mode.
 		const settledMode = modeLifecycle.settleRun();
-		if (modeLifecycle.runMode !== undefined) return;
+		if (modeLifecycle.runMode !== undefined) {
+			modeBridge.publish();
+			return;
+		}
 		if (!ctx.isIdle()) {
 			// An earlier agent_settled handler started a custom triggerTurn wake,
 			// which skips before_agent_start. Snapshot it before commands can alter
 			// the selected mode during that run.
 			modeLifecycle.startRun();
+			modeBridge.publish();
 			return;
 		}
 		if (settledMode !== modeLifecycle.selectedMode) {
 			applyModeTools(modeLifecycle.selectedMode);
 		}
+		modeBridge.publish();
 		if (queuedCommandTaskCount === 0) dispatchDeferredModeInput(ctx);
 	});
 	pi.on("session_start", (_event, ctx) => {
@@ -711,6 +726,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 	});
 	pi.on("session_tree", (_event, ctx) => restore(ctx));
 	pi.on("session_shutdown", (_event, ctx) => {
+		modeBridge.shutdown();
 		modeIntentRevision += 1;
 		finishPendingTaskLaunch(false);
 		resetDeferredModeInputLaunch();

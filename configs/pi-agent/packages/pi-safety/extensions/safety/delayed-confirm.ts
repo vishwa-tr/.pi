@@ -52,16 +52,21 @@ function sleep(ms: number, signal?: AbortSignal): Promise<boolean> {
 	});
 }
 
-export async function delayedConfirm(ctx: ExtensionContext, opts: DelayedConfirmOptions): Promise<boolean> {
-	if (!ctx.hasUI) return false;
+export async function delayedConfirm(
+	ctx: ExtensionContext,
+	opts: DelayedConfirmOptions,
+	signal: AbortSignal | undefined = ctx.signal,
+): Promise<boolean> {
+	if (!ctx.hasUI || signal?.aborted) return false;
 
 	const title = `${opts.label} command${opts.step ? ` — confirm ${opts.step}` : ""}`;
 
 	// RPC and other non-terminal UI: no custom component, so enforce the delay
 	// out-of-band, then use the built-in confirm dialog.
 	if (ctx.mode !== "tui") {
-		if (!(await sleep(opts.delayMs, ctx.signal))) return false;
-		return ctx.ui.confirm(title, `Run this command?\n\n  ${opts.command.slice(0, MAX_DISPLAY_CHARS)}`);
+		if (!(await sleep(opts.delayMs, signal)) || signal?.aborted) return false;
+		const approved = await ctx.ui.confirm(title, `Run this command?\n\n  ${opts.command.slice(0, MAX_DISPLAY_CHARS)}`, { signal });
+		return approved && !signal?.aborted;
 	}
 
 	return ctx.ui.custom<boolean>((tui, theme, _kb, done) => {
@@ -70,7 +75,6 @@ export async function delayedConfirm(ctx: ExtensionContext, opts: DelayedConfirm
 		let lastShownSecond = -1;
 		let timer: ReturnType<typeof setInterval> | undefined;
 		let finished = false;
-		const signal = ctx.signal;
 
 		const remainingMs = () => Math.max(0, opts.delayMs - (Date.now() - startedAt));
 		const ready = () => remainingMs() <= 0;

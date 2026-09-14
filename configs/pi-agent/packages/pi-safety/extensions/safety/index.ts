@@ -9,12 +9,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { AUDIT_PATH, auditLog, readRecentEntries } from "./audit.ts";
 import { CATEGORY_META, type Category, classifyCommand } from "./categories.ts";
-import { confirmGatedCommand } from "./confirm.ts";
+import { createSerialConfirmation } from "./confirm.ts";
 
 export type SafetyMode = "off" | "on" | "max";
 
 const MODES: SafetyMode[] = ["off", "on", "max"];
 const DEFAULT_MODE: SafetyMode = "max";
+// Bound direct bus callers too, not only requesters with their own deadlines.
+export const SWARM_CONFIRM_TIMEOUT_MS = 120_000;
 const STATUS_KEY = "safety";
 const CONFIG_PATH = join(getAgentDir(), "safety.json");
 const ICON_SHIELD = ""; // nf-fa-shield — text always names the feature and state
@@ -71,48 +73,67 @@ function updateStatus(ctx: ExtensionContext, mode: SafetyMode): void {
 	ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg(color, `${ICON_SHIELD} ${mode}`));
 }
 
+interface SwarmConfirmRequest {
+	agent?: string;
+	tool: "bash" | "edit" | "write";
+	command?: string;
+	path?: string;
+	signal: AbortSignal;
+}
+
+function parseSwarmRequest(value: unknown): SwarmConfirmRequest | undefined {
+	if (!value || typeof value !== "object") return;
+	const { agent, tool, command, path, signal } = value as SwarmConfirmRequest;
+	if (!(signal instanceof AbortSignal)) return;
+	if (agent !== undefined && typeof agent !== "string") return;
+	if (tool !== "bash" && tool !== "edit" && tool !== "write") return;
+	const target = tool === "bash" ? command : path;
+	if (typeof target !== "string" || !target.trim()) return;
+	// Snapshot the fields before any asynchronous wait.
+	return { agent, tool, command, path, signal };
+}
+
 export default function safetyExtension(pi: ExtensionAPI): void {
 	const initialConfig = loadMode();
 	let currentMode = initialConfig.mode;
 	/** Opt-in (default off): also gate the MAIN agent's edit/write tool calls. */
 	let gateWrites = initialConfig.gateWrites;
-	let confirmationTail: Promise<void> = Promise.resolve();
+	const confirmSerial = createSerialConfirmation();
+	let swarmLifetime = new AbortController();
+	const revokeSwarmRequests = () => {
+		swarmLifetime.abort();
+		swarmLifetime = new AbortController();
+	};
 	// Captured at session_start so the pi.events confirmation provider can render
 	// on this process's TUI when a pi-teams subagent forwards a guarded tool call.
 	let currentCtx: ExtensionContext | undefined;
 
-	async function confirmSerial(ctx: ExtensionContext, category: Category, command: string): Promise<boolean> {
-		const previous = confirmationTail;
-		let release!: () => void;
-		confirmationTail = new Promise<void>((resolve) => {
-			release = resolve;
-		});
-		await previous;
-		try {
-			return await confirmGatedCommand(ctx, category, command);
-		} finally {
-			release();
-		}
-	}
-
 	/**
 	 * The single confirmation gate: serialize the prompt, audit the outcome, and
-	 * fail closed if confirmation itself errors. `display` is both what the user
-	 * confirms and what gets audited. All three gated paths (main-agent bash,
-	 * main-agent writes, subagent confirm provider) route through here so
+	 * fail closed if confirmation itself errors. Swarm supplies an undecorated
+	 * audit command so its agent label is not persisted. All gated paths
+	 * (main-agent bash, main-agent writes, confirmation providers) route here so
 	 * confirm/audit/error handling can never diverge; callers only phrase their
 	 * own block/decline messages. `reason` is set only on a confirmation error
 	 * (the raw error message); a plain decline is `{ approved: false }`.
 	 */
-	async function gate(ctx: ExtensionContext, category: Category, display: string): Promise<{ approved: boolean; reason?: string }> {
+	async function gate(
+		ctx: ExtensionContext,
+		category: Category,
+		display: string,
+		signal: AbortSignal | undefined = ctx.signal,
+		isCurrent?: () => boolean,
+		auditCommand = display,
+	): Promise<{ approved: boolean; reason?: string }> {
 		let approved: boolean;
 		try {
-			approved = await confirmSerial(ctx, category, display);
+			approved = await confirmSerial(ctx, category, display, signal, isCurrent);
+			approved = approved && !signal?.aborted && (isCurrent?.() ?? true);
 		} catch (error) {
-			auditLog({ rawCommand: display, category, mode: currentMode, decision: "denied", source: "auto" });
+			auditLog({ rawCommand: auditCommand, category, mode: currentMode, decision: "denied", source: "auto" });
 			return { approved: false, reason: error instanceof Error ? error.message : String(error) };
 		}
-		auditLog({ rawCommand: display, category, mode: currentMode, decision: approved ? "approved" : "denied", source: "user" });
+		auditLog({ rawCommand: auditCommand, category, mode: currentMode, decision: approved ? "approved" : "denied", source: "user" });
 		return { approved };
 	}
 
@@ -216,6 +237,55 @@ export default function safetyExtension(pi: ExtensionAPI): void {
 	pi.events.on("subagents:confirm-request", handleConfirmRequest);
 	pi.events.on("procedure:confirm-request", handleConfirmRequest);
 
+	// Keep Swarm's stricter validation/lifetime contract separate from legacy channels.
+	pi.events.on("swarm:confirm-request", (data: unknown) => {
+		try {
+			if (!data || typeof data !== "object") return;
+			const { method, request, claim } = data as {
+				method?: unknown;
+				request?: unknown;
+				claim?: (fn: (req: unknown) => Promise<{ approved: boolean; note?: string }>) => void;
+			};
+			if (method !== "confirm" || typeof claim !== "function") return;
+			const ctx = currentCtx;
+			if (!ctx || ctx.mode !== "tui" || !ctx.hasUI) return;
+			const lifetime = swarmLifetime;
+			const mode = currentMode;
+			const envelope = parseSwarmRequest(request);
+			claim(async (value) => {
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					const req = parseSwarmRequest(value);
+					if (!envelope || !req) return { approved: false, note: "invalid confirmation request" };
+					const deadline = new AbortController();
+					timer = setTimeout(() => deadline.abort(), SWARM_CONFIRM_TIMEOUT_MS);
+					timer.unref?.();
+					// ctx.signal belongs to the MAIN agent run, not this background worker.
+					const signal = AbortSignal.any([req.signal, envelope.signal, lifetime.signal, deadline.signal]);
+					const isCurrent = () => !signal.aborted && currentCtx === ctx && ctx.mode === "tui" && ctx.hasUI
+						&& swarmLifetime === lifetime && currentMode === mode;
+					if (!isCurrent()) return { approved: false, note: "confirmation revoked" };
+					const category = req.tool === "bash" ? classifyCommand(req.command!) : "other";
+					const display = req.tool === "bash" ? req.command! : `${req.tool} ${req.path}`;
+					if (!category || !MODE_CATEGORIES[currentMode].has(category)) {
+						auditLog({ rawCommand: display, category: category ?? "read-only", mode: currentMode, decision: "auto-allowed", source: "auto" });
+						return { approved: isCurrent() };
+					}
+					const verdict = await gate(ctx, category, `[${req.agent ?? "swarm"}] ${display}`, signal, isCurrent, display);
+					if (!isCurrent()) return { approved: false, note: "confirmation revoked" };
+					return verdict.approved ? { approved: true } : { approved: false, note: "confirmation denied" };
+				} catch {
+					return { approved: false, note: "confirmation failed" };
+				} finally {
+					if (timer) clearTimeout(timer);
+				}
+			});
+		} catch {
+			// Malformed envelopes (including throwing accessors/claim callbacks) cannot
+			// escape into the shared event bus. An unclaimed request fails closed.
+		}
+	});
+
 	pi.registerCommand("safety", {
 		description: "Set main-agent Bash safety: off | on | max",
 		getArgumentCompletions: (prefix) => {
@@ -245,6 +315,7 @@ export default function safetyExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify(`Unknown mode "${arg}". Use: off | on | max`, "error");
 				return;
 			}
+			if (currentMode !== arg) revokeSwarmRequests();
 			currentMode = arg;
 			const saveError = saveMode(arg, gateWrites);
 			updateStatus(ctx, currentMode);
@@ -298,6 +369,7 @@ export default function safetyExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		revokeSwarmRequests();
 		currentCtx = ctx;
 		const loaded = loadMode();
 		currentMode = loaded.mode;
@@ -305,7 +377,9 @@ export default function safetyExtension(pi: ExtensionAPI): void {
 		updateStatus(ctx, currentMode);
 		if (loaded.warning && ctx.hasUI) ctx.ui.notify(loaded.warning, "warning");
 	});
+	pi.on("session_tree", () => revokeSwarmRequests());
 	pi.on("session_shutdown", (_event, ctx) => {
+		revokeSwarmRequests();
 		currentCtx = undefined;
 		if (ctx.mode === "tui") ctx.ui.setStatus(STATUS_KEY, undefined);
 	});

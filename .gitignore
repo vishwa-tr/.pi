@@ -121,6 +121,8 @@ configs/pi-agent/archive/*.zip
 !.env.sample
 !.env.template
 
+/.worktrees/
+
 # Host and editor artifacts.
 .DS_Store
 Thumbs.db
