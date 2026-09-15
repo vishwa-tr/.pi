@@ -13,11 +13,13 @@ import { makeWorld, test, summary, until } from "./harness.mjs";
 const { markDone, readPending, writeEnvelope } = await jiti.import(join(EXT, "mail/mailbox.ts"));
 const { makeEnvelope } = await jiti.import(join(EXT, "mail/envelope.ts"));
 const { closeOpenTask, readOpenTasks, recordOpenTask } = await jiti.import(join(EXT, "store/open-tasks.ts"));
+const { createAwaitTool } = await jiti.import(join(EXT, "tools/main-agent.ts"));
 
 const world = await makeWorld("phase4");
 world.writeDef("worker", "You are WORKER.");
 const layout = world.makeLayout("sess-4");
 const core = world.makeCore(layout, { maxConcurrent: 4 });
+const awaitTool = createAwaitTool(() => core);
 
 console.log("await single:");
 await test("await blocks until the final report and consumes exactly it", async () => {
@@ -92,6 +94,18 @@ await test("timeout returns partials + pending, consumes nothing for pending", a
 	const late = await core.awaitResults({ targets: [{ to: "worker/glacial", anchorId: spawn.taskEnvelopeId }], mode: "all", timeoutSeconds: 5 });
 	assert.equal(late.status, "completed", "a timed-out task is still joinable once it finishes");
 	assert.ok(late.outcomes[0].report.text.includes("eventually"));
+});
+
+console.log("await validation:");
+await test("an unknown address/anchor pair fails immediately with anchor guidance", async () => {
+	const result = await awaitTool.execute("unknown-await", {
+		targets: [{ to: "worker/a", anchorId: "msg_00000000000000000000000000" }],
+		mode: "all",
+		timeoutSeconds: 1,
+	});
+	assert.equal(result.isError, true);
+	assert.match(result.content[0].text, /Cannot await unknown assignment/);
+	assert.match(result.content[0].text, /taskEnvelopeId.*subagent_spawn.*envelopeId.*subagent_send/);
 });
 
 console.log("terminal outcomes:");
@@ -169,7 +183,13 @@ await test("a retired target resolves as retired (unmatched anchor)", async () =
 	await core.spawn({ type: "worker", id: "gone", task: "Do a thing." });
 	await core.whenIdle();
 	await core.retire("worker/gone");
-	const result = await core.awaitResults({ targets: [{ to: "worker/gone", anchorId: "msg_00000000000000000000000000" }], mode: "all", timeoutSeconds: 5 });
+	const toolResult = await awaitTool.execute("retired-await", {
+		targets: [{ to: "worker/gone", anchorId: "msg_00000000000000000000000000" }],
+		mode: "all",
+		timeoutSeconds: 5,
+	});
+	assert.equal(toolResult.isError, undefined, "archived targets retain the retired outcome contract");
+	const result = JSON.parse(toolResult.content[0].text);
 	assert.equal(result.outcomes[0].status, "retired");
 });
 

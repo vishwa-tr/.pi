@@ -35,7 +35,9 @@ assert.deepEqual(keysOf(ext.commands), ["subagents"], "/subagents command");
 const spawn = ext.tools.get("subagent_spawn").definition;
 assert.ok(spawn.parameters.required.includes("label"), "subagent_spawn requires an LLM-provided display label");
 assert.equal(spawn.parameters.properties.label.maxLength, 80, "label schema stays compact");
+assert.equal(spawn.parameters.properties.task.minLength, 1, "explicit tasks cannot be empty strings");
 assert.ok(spawn.promptGuidelines.some((line) => line.includes("task-specific label")), "system guidance tells the LLM to name the widget row");
+assert.ok(spawn.promptGuidelines.some((line) => line.includes("non-empty task for oneshot")), "system guidance distinguishes role prompts from oneshot tasks");
 assert.equal(
 	spawn.prepareArguments({ prompt: "You are a reviewer.", task: "Review authentication." }).label,
 	"Review authentication.",

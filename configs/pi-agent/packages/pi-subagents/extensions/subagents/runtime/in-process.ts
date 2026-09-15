@@ -211,6 +211,14 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		if (lifetime === "oneshot" && options.id !== undefined) {
 			throw new Error("oneshot spawns must not pass an id (named = persistent, anonymous = disposable).");
 		}
+		const hasTask = options.task !== undefined && options.task.trim().length > 0;
+		if (lifetime === "oneshot" && !hasTask) {
+			throw new Error(
+				"oneshot spawns require a non-empty `task` so they can run and auto-retire; for ad-hoc agents, `prompt` defines the role while `task` provides the assignment.",
+			);
+		}
+		if (options.task !== undefined && !hasTask) throw new Error("Spawn `task` must not be empty.");
+
 		let id: string;
 		if (lifetime === "oneshot") id = this.freshTmpId(type);
 		else if (options.id !== undefined) id = options.id;
@@ -445,6 +453,26 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 	 * correlated, superseded progress are consumed; unrelated mail is untouched.
 	 */
 	async awaitResults(options: AwaitOptions): Promise<AwaitResult> {
+		if (options.targets.length > 0) {
+			const openAssignments = this.openTasks();
+			const untracked = options.targets.filter(
+				(target) => !openAssignments.some((task) => task.to === target.to && task.anchorId === target.anchorId),
+			);
+			if (untracked.length > 0) {
+				const retiredAddresses = new Set(this.archived().map((agent) => agent.address));
+				const unknown = untracked.filter((target) => !retiredAddresses.has(target.to));
+				if (unknown.length > 0) {
+					const assignments = unknown
+						.map((target) => `${JSON.stringify(target.to)} / ${JSON.stringify(target.anchorId)}`)
+						.join(", ");
+					throw new Error(
+						`Cannot await unknown assignment${unknown.length === 1 ? "" : "s"}: ${assignments}. ` +
+						"Use `taskEnvelopeId` from `subagent_spawn` or `envelopeId` from `subagent_send`, or omit `targets` to await all open tasks.",
+					);
+				}
+			}
+		}
+
 		const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_AWAIT_TIMEOUT_S;
 		const deadline = Date.now() + timeoutSeconds * 1000;
 		const remaining = new Map<string, AwaitTarget>();

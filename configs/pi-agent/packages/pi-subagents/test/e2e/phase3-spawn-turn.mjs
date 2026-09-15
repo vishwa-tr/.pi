@@ -121,12 +121,27 @@ await test("oneshot ad-hoc: def.md written, turn runs with the prompt, auto-reti
 await test("persistent ad-hoc requires an explicit id; oneshot must not pass one", async () => {
 	await assert.rejects(() => core.spawn({ prompt: "P", lifetime: "persistent" }), /explicit id/);
 	await assert.rejects(() => core.spawn({ type: "scout", lifetime: "oneshot", id: "x" }), /must not pass an id/);
+	const persistent = await core.spawn({ prompt: "P", id: "standing", label: "standing reviewer", lifetime: "persistent" });
+	assert.equal(persistent.state, "dormant", "taskless persistent agents remain supported");
+	assert.equal(persistent.taskEnvelopeId, undefined);
+});
+await test("oneshot requires a non-empty task without creating a dormant agent", async () => {
+	const before = (await core.status()).map((entry) => entry.address).sort();
+	await assert.rejects(
+		() => core.spawn({ prompt: "You are a reviewer.", label: "idle reviewer" }),
+		/prompt.*defines the role.*task.*provides the assignment/,
+	);
+	await assert.rejects(
+		() => core.spawn({ type: "scout", label: "idle scout", lifetime: "oneshot", task: "   " }),
+		/oneshot spawns require a non-empty `task`/,
+	);
+	assert.deepEqual((await core.status()).map((entry) => entry.address).sort(), before, "rejected spawns leave no registry record");
 });
 await test("spawn validation: exactly one of type/prompt; model/thinking/tools ad-hoc-only; unknown tools eager", async () => {
 	await assert.rejects(() => core.spawn({}), /exactly one/);
 	await assert.rejects(() => core.spawn({ type: "scout", prompt: "P" }), /exactly one/);
 	await assert.rejects(() => core.spawn({ type: "scout", model: "mock/mock-1" }), /ad-hoc-only/);
-	await assert.rejects(() => core.spawn({ prompt: "P", tools: ["read", "teleport"] }), /unknown tools/);
+	await assert.rejects(() => core.spawn({ prompt: "P", task: "Review.", tools: ["read", "teleport"] }), /unknown tools/);
 	await assert.rejects(() => core.spawn({ prompt: "P", label: "   " }), /must not be empty/);
 	await assert.rejects(() => core.spawn({ prompt: "P", label: "x".repeat(81) }), /at most 80/);
 	await assert.rejects(() => core.spawn({ type: "nope" }), /Unknown subagent type/);
