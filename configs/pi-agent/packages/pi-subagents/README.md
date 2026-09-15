@@ -20,6 +20,20 @@ Explicit `subagent_await` targets must refer to a currently open assignment or a
 retired agent. Unknown address/anchor pairs fail immediately with guidance to
 use the anchor returned by `subagent_spawn` or `subagent_send`.
 
+## Delivery and completion
+
+Tool results use compact JSON. A successfully delivered `report { final: true }`
+ends the worker's automatic follow-up only when every tool result in that batch
+also terminates; progress reports and failures never terminate. One-shot
+retirement is armed only after durable report delivery.
+
+Idle completions coalesce for 300 ms from the first event (later arrivals cannot
+extend the deadline). User input or a new run cancels that wake. Mail is consumed
+only after its envelope IDs appear in the persisted host transcript, not when
+Pi's void `sendMessage` returns. Failed/interrupted deliveries remain pending;
+subsequent lifecycle/mail events or session resume retry them. Persisted
+injections are not repeated merely because inference failed afterward.
+
 ## Display labels
 
 `subagent_spawn` requires the LLM to provide a concise, task-specific `label`.

@@ -98,14 +98,11 @@ await test("timeout returns partials + pending, consumes nothing for pending", a
 
 console.log("await validation:");
 await test("an unknown address/anchor pair fails immediately with anchor guidance", async () => {
-	const result = await awaitTool.execute("unknown-await", {
+	await assert.rejects(awaitTool.execute("unknown-await", {
 		targets: [{ to: "worker/a", anchorId: "msg_00000000000000000000000000" }],
 		mode: "all",
 		timeoutSeconds: 1,
-	});
-	assert.equal(result.isError, true);
-	assert.match(result.content[0].text, /Cannot await unknown assignment/);
-	assert.match(result.content[0].text, /taskEnvelopeId.*subagent_spawn.*envelopeId.*subagent_send/);
+	}), /Cannot await unknown assignment.*taskEnvelopeId.*subagent_spawn.*envelopeId.*subagent_send/);
 });
 
 console.log("terminal outcomes:");

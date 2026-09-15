@@ -18,6 +18,7 @@ import { createCore, type SubagentsCore } from "./core.ts";
 import { gcArchive, gcDoneMail } from "./store/archive.ts";
 import { createLayout } from "./store/layout.ts";
 import { createWakePump } from "./mail/wake-pump.ts";
+import { readPersistedMailIds } from "./mail/transcript-ack.ts";
 import { claimHostScope, HostScopeLockedError, type HostScopeLease } from "./store/host-lease.ts";
 import { loadSettings } from "./store/settings.ts";
 import { makeSafetyConfirm } from "./sandbox/safety-bridge.ts";
@@ -71,13 +72,17 @@ export default function (pi: ExtensionAPI): void {
 	// The POLICY lives in mail/wake-pump.ts (pure, unit-tested). This is only the
 	// port binding: core for the digest, pi.sendMessage for the injection. Keep it
 	// that way — logic added here is logic the suite cannot reach.
+	const deliveredIds = (): Set<string> => readPersistedMailIds(uiCtx?.sessionManager.getSessionFile(), "teams-mail");
 	const pump = createWakePump({
-		takeDigest: () => (core && uiCtx ? core.takeMainMailDigest() : null),
-		inject: (digest) => {
-			// sendMessage is fire-and-forget (returns void; the SDK floats the promise
-			// and routes any rejection to its own error channel), so there is nothing to
-			// catch here — synchronous acceptance is the commit boundary (wake-pump.ts).
-			pi.sendMessage({ content: digest, customType: "teams-mail", display: true, details: undefined }, WAKE_DELIVERY);
+		takeDigest: () => (core && uiCtx ? core.takeMainMailDigest(deliveredIds()) : null),
+		hasMail: () => (core?.mainUnreadCount() ?? 0) > 0,
+		isIdle: () => uiCtx?.isIdle() === true,
+		isPersisted: (ids) => {
+			const persisted = deliveredIds();
+			return ids.every((id) => persisted.has(id));
+		},
+		inject: (digest, envelopeIds) => {
+			pi.sendMessage({ content: digest, customType: "teams-mail", display: true, details: { envelopeIds } }, WAKE_DELIVERY);
 		},
 	});
 
@@ -276,6 +281,7 @@ export default function (pi: ExtensionAPI): void {
 					setWidget: (key, content, opts) => ctx.ui.setWidget(key, content, opts),
 				});
 			}
+			pump.onSettled(); // resume pending mail; an incoming prompt cancels this deadline
 		} catch (error) {
 			// Setup failed AFTER the lease was claimed — tear everything down so the
 			// lease is released (otherwise it blocks resume in another process), and
@@ -292,6 +298,9 @@ export default function (pi: ExtensionAPI): void {
 		pump.onInput();
 	});
 	pi.on("before_agent_start", () => pump.onBeforeAgentStart());
+	pi.on("agent_start", () => pump.onBeforeAgentStart());
+	// message_end precedes append; context and agent_settled inspect persisted entries.
+	pi.on("context", () => pump.onPersistence());
 	pi.on("agent_settled", (_event, ctx) => {
 		uiCtx = ctx ?? uiCtx;
 		pump.onSettled(); // drains background work that finished during the turn

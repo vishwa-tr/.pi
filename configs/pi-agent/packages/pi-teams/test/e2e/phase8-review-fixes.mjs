@@ -310,14 +310,11 @@ await (async () => {
 	};
 	const sendTool = mainTools.createSendTool(() => stubCore);
 	await okA("team_send rejects a non-agent target before hitting the core", async () => {
-		const res = await sendTool.execute("id", { to: "main", text: "hi" }, undefined, undefined, {});
-		assert.equal(res.isError, true);
+		await assert.rejects(sendTool.execute("id", { to: "main", text: "hi" }, undefined, undefined, {}), /not a subagent address/);
 		assert.equal(sendCalled, false, "core.send not reached for an invalid target");
 	});
 	await okA("team_send surfaces a bounce as an error", async () => {
-		const res = await sendTool.execute("id", { to: "worker/main", text: "hi" }, undefined, undefined, {});
-		assert.equal(res.isError, true);
-		assert.ok(res.content[0].text.includes("bounced"));
+		await assert.rejects(sendTool.execute("id", { to: "worker/main", text: "hi" }, undefined, undefined, {}), /bounced/);
 	});
 })();
 

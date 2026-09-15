@@ -310,12 +310,8 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		// the same task so they cannot arrive later as stale wake digests.
 		let correlationId: string | null = handle?.assignment ?? null;
 		let terminalAnchors: string[] | undefined;
-		if (opts.final && handle) {
-			terminalAnchors = taskAnchors(handle.trigger);
-			const record = getAgent(this.registry, from);
-			if (record?.lifetime === "oneshot") handle.retireAfterTurn = true;
-		}
-		return this.deliverer.send({
+		if (opts.final && handle) terminalAnchors = taskAnchors(handle.trigger);
+		const outcome = this.deliverer.send({
 			from: fromAddress,
 			to: MAIN_ADDRESS,
 			type: "report",
@@ -326,6 +322,11 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			correlationId,
 			causedBy,
 		});
+		if (outcome.delivered && opts.final && handle) {
+			const record = getAgent(this.registry, from);
+			if (record?.lifetime === "oneshot") handle.retireAfterTurn = true;
+		}
+		return outcome;
 	}
 
 	// ----------------------------------------------------------------- status / peek

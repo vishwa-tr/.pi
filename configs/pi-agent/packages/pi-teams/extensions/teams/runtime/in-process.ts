@@ -325,11 +325,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		if (opts.type === "report" && opts.final && correlationId === null && handle?.assignment) {
 			correlationId = handle.assignment;
 		}
-		if (opts.type === "report" && opts.final && handle) {
-			const record = getAgent(this.registry, from);
-			if (record?.lifetime === "oneshot") handle.retireAfterTurn = true;
-		}
-		return this.deliverer.send({
+		const outcome = this.deliverer.send({
 			from: fromAddress,
 			to: opts.to,
 			type: opts.type,
@@ -339,6 +335,11 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			correlationId,
 			causedBy,
 		});
+		if (outcome.delivered && opts.type === "report" && opts.final && handle) {
+			const record = getAgent(this.registry, from);
+			if (record?.lifetime === "oneshot") handle.retireAfterTurn = true;
+		}
+		return outcome;
 	}
 
 	// ----------------------------------------------------------------- status / peek

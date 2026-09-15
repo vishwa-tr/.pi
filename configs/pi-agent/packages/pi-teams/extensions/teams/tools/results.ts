@@ -3,11 +3,11 @@
  * subagent tool files (they previously hand-rolled three near-identical copies).
  */
 
-export function jsonResult(value: unknown): { content: [{ type: "text"; text: string }]; details: undefined } {
-	return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], details: undefined };
+export function jsonResult(value: unknown, terminate = false): { content: [{ type: "text"; text: string }]; details: undefined; terminate?: true } {
+	return { content: [{ type: "text", text: JSON.stringify(value) }], details: undefined, ...(terminate ? { terminate: true as const } : {}) };
 }
 
-export function errorResult(error: unknown): { content: [{ type: "text"; text: string }]; details: undefined; isError: true } {
-	const message = error instanceof Error ? error.message : String(error);
-	return { content: [{ type: "text", text: message }], details: undefined, isError: true };
+export function errorResult(error: unknown): never {
+	// Pi only sets isError when execute throws; a returned isError field is ignored.
+	throw error instanceof Error ? error : new Error(String(error));
 }
