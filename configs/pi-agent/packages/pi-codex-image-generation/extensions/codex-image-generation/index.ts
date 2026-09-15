@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Container, Image, Text } from "@earendil-works/pi-tui";
 import { runCodexImageGeneration } from "./client.ts";
 import { resolveInputImagePaths, saveGeneratedImage, validateOutputRequest } from "./output.ts";
 
@@ -10,18 +11,21 @@ interface ImageGenerationDetails {
 	inputImageCount: number;
 	revisedPrompt?: string;
 	status?: string;
+	// Renderer-only payload, never included in model-visible content.
+	previewData?: string;
 }
 
 const imageGenerationTool = defineTool({
 	name: "image_generation",
 	label: "Image Generation",
-	description: "Generate a new image or edit up to four local source images through the installed Codex CLI's native image-generation capability. Requires `codex` 0.146.0 or newer and a ChatGPT Codex login. Saves one image inside the current working directory. The prompt and any input images are sent to OpenAI.",
+	description: "Generate a new image or edit up to four local source images through the installed Codex CLI's native image-generation capability. Requires `codex` 0.146.0 or newer and a ChatGPT Codex login. Saves one image inside the current working directory and returns text metadata, not image content. Explicitly read the saved file when visual inspection is needed. The prompt and any input images are sent to OpenAI.",
 	promptSnippet: "Generate or edit an image through Codex native image generation and save it locally",
 	promptGuidelines: [
 		"Use image_generation when the user asks to create, generate, or edit an image file.",
 		"Before image_generation sends a prompt or local input images to OpenAI, require an explicit user request for that specific generation or edit; do not infer permission from unrelated work.",
 		"Pass only the minimum necessary prompt and input images to image_generation; never include secrets, credentials, unrelated files, or unrelated conversation context.",
 		"Use image_generation.inputImages for source-image edits and image_generation.outputPath for the requested local result.",
+		"image_generation returns text metadata, not model-visible image content. Use read on the saved path only when visual inspection is needed; the interactive preview does not mean you have inspected the image.",
 	],
 	parameters: Type.Object({
 		prompt: Type.String({
@@ -69,17 +73,30 @@ const imageGenerationTool = defineTool({
 			inputImageCount: inputImages.length,
 			revisedPrompt: result.revisedPrompt,
 			status: result.status,
+			...(ctx.mode === "tui" ? { previewData: result.data } : {}),
 		};
 		return {
 			content: [
 				{
 					type: "text",
-					text: `${inputImages.length > 0 ? "Edited" : "Generated"} image: ${saved.displayPath}`,
+					text: `${inputImages.length > 0 ? "Edited" : "Generated"} image: ${saved.displayPath}\nMIME: ${result.mimeType}\nBytes: ${result.byteLength}\nStatus: ${result.status}`,
 				},
-				{ type: "image", data: result.data, mimeType: result.mimeType },
 			],
 			details,
 		};
+	},
+
+	renderResult(result, { isPartial }, theme, context) {
+		const container = new Container();
+		const text = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+		container.addChild(new Text(text, 0, 0));
+		const details = result.details as ImageGenerationDetails | undefined;
+		if (!isPartial && !context.isError && context.showImages && details?.previewData && details.mimeType) {
+			container.addChild(new Image(details.previewData, details.mimeType, {
+				fallbackColor: (value) => theme.fg("muted", value),
+			}, { maxWidthCells: 80, maxHeightCells: 24 }));
+		}
+		return container;
 	},
 });
 

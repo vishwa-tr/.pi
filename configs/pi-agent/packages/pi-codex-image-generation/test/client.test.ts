@@ -12,7 +12,7 @@ import {
 } from "../extensions/codex-image-generation/client.ts";
 
 const fixturePath = fileURLToPath(new URL("./fixtures/fake-codex-app-server.mjs", import.meta.url));
-const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2mNoAAAAASUVORK5CYII=", "base64");
+const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/5ncLrgAAAABJRU5ErkJggg==", "base64");
 
 function fakeOptions(mode = "success", extraEnv: Record<string, string> = {}): RunCodexImageGenerationOptions {
 	return {
