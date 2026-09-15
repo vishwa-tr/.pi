@@ -11,6 +11,15 @@ can report to the main agent but cannot spawn, inspect, or message peers.
 - `subagent_cancel` / `subagent_retire` — stop a turn or permanently archive an agent
 - `subagent_status` — inspect the owning-session `ownerScopeId`, roster, vitals, open tasks, and transcript tails
 
+Every one-shot spawn requires a non-empty `task`; it runs once and retires after
+its final report. An ad-hoc `prompt` defines the worker's role and does not count
+as its assignment. Taskless creation remains available for persistent workers
+that will receive work later through `subagent_send`.
+
+Explicit `subagent_await` targets must refer to a currently open assignment or a
+retired agent. Unknown address/anchor pairs fail immediately with guidance to
+use the anchor returned by `subagent_spawn` or `subagent_send`.
+
 ## Display labels
 
 `subagent_spawn` requires the LLM to provide a concise, task-specific `label`.
