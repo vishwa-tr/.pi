@@ -52,13 +52,14 @@ review comments, and documentation. Apply the following rules:
   does not imply permission to push.
 - Do not force-push, skip hooks, or use destructive Git commands unless I explicitly ask for that
   exact operation.
-- Do not add agent attribution, session trailers, or generated-by footers to commits, PRs, issues,
-  or review comments.
+- Do not add agent attribution, session trailers, generated-by footers, internal model details, or
+  tool runtime details to commits, PRs, issues, or review comments.
 
 ## Pi Configuration Repository
 
-- When looking for global skills, procedures, MCP definitions, or subagents, check the corresponding
-  directory under `~/.pi/` before other global or installed locations.
+- When looking for global skills, procedures, MCP definitions, or subagents, check this repository's
+  corresponding root directory before other global or installed locations. In supported Pi layouts,
+  this may be the portable `~/.pi` tree or the effective `~/.pi/agent` directory.
 
 ## Reusable Artifacts
 
