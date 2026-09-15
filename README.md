@@ -15,6 +15,8 @@ The repository can also be cloned directly to `~/.pi/agent`; in that layout the
 root files are Pi's effective agent config and the nested `agent/` shims are
 dormant.
 
+Keep the root `AGENTS.md` filename uppercase; Pi loads it as global guidance.
+
 It combines portable Pi configuration with reusable agent materials and the
 source of the local Pi packages enabled by `settings.json`.
 
@@ -46,10 +48,11 @@ directories, which the procedure loader ignores.
 
 This README is the source of truth for repository-specific layout and a high-level package
 behavior overview. `settings.json` is authoritative for activation, and
-`configs/pi-agent/MANIFEST.md` is the complete enabled-package inventory. The automatically loaded
-root `AGENTS.md` tells agents to read both when a task concerns this repository, so users do not
-need to request documentation loading explicitly. Package-specific work must also follow the
-relevant package README, project documentation, and every applicable nested `AGENTS.md`.
+`configs/pi-agent/MANIFEST.md` is the complete enabled-package inventory. Before changing this repository's layout or active resources, read this README and
+`configs/pi-agent/MANIFEST.md`. Then read the relevant package README, project documentation,
+and every applicable nested `AGENTS.md` for the area involved. Do this automatically; do not
+wait for the user to request documentation. These requirements apply only to work on this
+repository, not unrelated projects.
 
 The repository combines three roles:
 
