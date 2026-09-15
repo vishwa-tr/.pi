@@ -4,15 +4,13 @@ Cross-project defaults for agents working on this machine.
 
 ## Instruction Precedence
 
-Project-local guidance may override these defaults only for repository conventions such as style,
-commands, architecture, and target branches. Global privacy and outbound-content rules,
+Global privacy and outbound-content rules,
 preservation of user work, commit and push authorization, and destructive-operation restrictions
 remain authoritative unless the user directly overrides them in the current conversation.
 
-Before editing a repository, read its root `AGENTS.md` and project-local `.agents/README.md` when
-present, then every applicable nested `AGENTS.md` from the root through the target file's parent.
-Consult the global `readable-code` skill for non-trivial implementation or refactoring unless more
-specific project guidance takes precedence.
+Before editing a repository, read its root `AGENTS.md`, root `README.md`, and project-local
+`.agents/README.md` when present, then every applicable nested `AGENTS.md` from the root through
+the target file's parent.
 
 ## Progressive Discovery
 
@@ -20,46 +18,38 @@ For investigation and lookup tasks, minimize search scope and cost.
 
 - Start from the conversation context and strongest available clues. Inspect the most likely target
   directly before discovering alternatives.
-- Search progressively: exact file or symbol, then the nearest directory, then the relevant package,
-  and the entire repository only when narrower searches fail.
-- Prefer bounded searches and exclude dependencies, generated output, caches, version-control
-  metadata, and unrelated worktrees unless they are relevant.
-- Do not launch multiple speculative broad scans in parallel. Stop once there is enough evidence for
-  the next action.
-- If the scope cannot be narrowed efficiently, ask a focused question. Repository-wide discovery is
-  appropriate first only for explicit inventories, audits, or cross-cutting investigations.
+- Before concluding that a referenced path does not exist, check it directly; search tools may omit
+  hidden or Git-ignored paths.
 
 ## Public And Outbound Content
 
-Treat anything written outside the local working context as potentially public and long-lived.
-Before writing PR descriptions, commit messages, issue bodies, review comments, docs, or content
-sent to an external service:
+Keep private, sensitive, or personally identifying information out of content that may be shared,
+published, or sent to an external service. This includes commit messages, PR descriptions, issues,
+review comments, and documentation. Apply the following rules:
 
-- Do not name ignored, redacted, local-only, or environment files or describe what was excluded.
-- Do not include home paths, private network addresses, unrelated projects, secrets, tokens,
-  credentials, personal contact details, or account identifiers.
-- Keep local-only details in chat with me, not in public artifacts.
+- Do not reveal private filenames or paths, redacted details, or sensitive information through
+  descriptions of what was omitted or excluded.
+- Use portable, non-identifying paths when useful. Do not include absolute home paths, private
+  usernames or account identifiers, private network addresses or hostnames, unrelated project
+  details, secrets, tokens, credentials, personal contact details, or other sensitive information.
 - Do not put my personal email or contact details into commands, headers, code, config, logs,
   telemetry, User-Agent strings, or external requests. Use a neutral placeholder such as
   `noreply@example.com`, or omit the field.
 
 ## Git And GitHub
 
-- Derive the base and target branches from project instructions, the remote default, and established
-  repository practice. Ask only when those sources leave the choice ambiguous.
-- Inspect Git status before editing and preserve pre-existing user work. Never stash, discard,
-  restore, unstage, or commit it.
-- Use an isolated worktree when the user requests one, relevant paths already contain unrelated
-  changes, parallel or high-risk work benefits from isolation, or project instructions require it.
-  Otherwise, work in the current checkout. Follow project-local worktree placement rules. When none
-  exists and the user has not specified another destination, use the repository's `./.worktrees/`
-  directory. Before creating a worktree there, ensure `/.worktrees/` is covered by the repository's
-  `.gitignore` and verify it with `git check-ignore -q .worktrees/`. If verification fails, do not
-  create the worktree there until the ignore boundary is handled safely and verified again. Follow
-  the global `using-git-worktrees` skill whenever a worktree is appropriate.
+- Choose base and target branches from the user’s request, project instructions, and established
+  repository practice, using the remote default as a fallback. Ask when the choice remains ambiguous.
+- Inspect Git status before editing and preserve pre-existing user work. Do not stash, discard,
+  restore, unstage, or commit that work unless the user explicitly authorizes it.
+- Use an isolated worktree when requested by the user, required by project instructions, or needed
+  to protect unrelated changes or isolate parallel or high-risk work. Otherwise, use the current
+  checkout. Follow the global `using-git-worktrees` skill for setup, placement, and verification.
 - Use the `gh` CLI for GitHub operations.
-- Match the repository's recent commit subject style.
-- Commit or push only when I ask.
+- Follow project instructions for commit messages; otherwise, match the repository’s recent commit
+  subject style.
+- Commit only when explicitly requested. Push only when explicitly requested; permission to commit
+  does not imply permission to push.
 - When I ask to commit staged changes, you may amend the immediately preceding commit without
   separate confirmation when it was created during the current task, has not been pushed or shared,
   and the staged changes belong to the same logical change.
@@ -71,23 +61,9 @@ sent to an external service:
 
 ## Pi Configuration Repository
 
-When the current repository is this portable Pi configuration, read `README.md` and
-`configs/pi-agent/MANIFEST.md` before changing its layout or active resources. Then read the
-relevant package README, project documentation, and nearest nested `AGENTS.md` for the area involved.
-Do this automatically; do not wait for the user to request documentation. Do not load
-repository-specific documentation for unrelated project work.
-
-- Keep the root `AGENTS.md` filename uppercase; Pi loads it as global guidance.
-- Root `settings.json`, `keybindings.json`, `skills/`, and `subagents/` are active global resources.
-- `configs/pi-agent/packages/` is the source for enabled local Pi packages.
-- When the user asks about a skill, procedure, MCP definition, or subagent, check this repository's
-  `skills/`, `procedures/`, `mcp/`, and `subagents/` directories before other global or installed
-  locations.
-- Keep shared materials project- and host-agnostic. Keep machine-local credentials, sessions, logs,
-  caches, and runtime databases out of the tracked tree.
-- Root `subagents/` is the shared source of truth for Pi Subagents and Pi Teams definitions; do not
-  create a separate definition library for teams.
-- After changing Pi resources, run the repository validator and use `/reload` or restart Pi.
+- When looking for global skills, procedures, MCP definitions, or subagents, check this repository's
+  corresponding root directory before other global or installed locations. In supported Pi layouts,
+  this may be the portable `~/.pi` tree or the effective `~/.pi/agent` directory.
 
 ## Reusable Artifacts
 
@@ -125,6 +101,8 @@ definitions use `.pi/subagents/<type>.md`, and executable saved procedures use
 
 ## Working Style
 
+- Consult the global `readable-code` skill for non-trivial implementation or refactoring unless more
+  specific project guidance takes precedence.
 - If something I ask for is technically wrong or impossible, say so and propose a workable
   approach.
 - Use multiline syntax for the active shell: Bash heredocs in Bash and PowerShell here-strings in
