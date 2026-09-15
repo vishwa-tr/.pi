@@ -34,6 +34,9 @@ if ($TabName) {
 }
 
 if ($Action -eq "click") {
+    if ($X -lt 0 -or $Y -lt 0) {
+        throw "The click action requires explicit non-negative -X and -Y coordinates."
+    }
     Click-Point `
         -Process $firefox `
         -X $X `

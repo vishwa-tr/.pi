@@ -96,9 +96,19 @@ function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix, 
   }
 }
 
-function validateSettingsFile({ relativePath, baseDir, packagePrefix, expectedSkills, checkPackageFiles = true }) {
+function validateSettingsFile({ relativePath, baseDir, allowedKeys, optionalKeys = [], packagePrefix, expectedSkills, checkPackageFiles = true }) {
   const settings = readJson(join(root, relativePath));
   if (!settings) return undefined;
+  const keys = Object.keys(settings).sort();
+  const acceptedKeys = new Set([...allowedKeys, ...optionalKeys]);
+  const unknownKeys = keys.filter((key) => !acceptedKeys.has(key));
+  const missingKeys = allowedKeys.filter((key) => !Object.hasOwn(settings, key));
+  if (unknownKeys.length > 0) {
+    fail(`${relativePath} contains unsupported setting keys: ${unknownKeys.join(", ")}`);
+  }
+  if (missingKeys.length > 0) {
+    fail(`${relativePath} is missing required setting keys: ${missingKeys.join(", ")}`);
+  }
   for (const preference of ["defaultProvider", "defaultModel", "defaultThinkingLevel", "theme"]) {
     if (settings[preference] !== undefined && typeof settings[preference] !== "string") {
       fail(`${relativePath} ${preference} must be a string when present; found: ${JSON.stringify(settings[preference])}`);
@@ -114,6 +124,7 @@ function validateSettingsFile({ relativePath, baseDir, packagePrefix, expectedSk
 const rootSettings = validateSettingsFile({
   relativePath: "settings.json",
   baseDir: root,
+  allowedKeys: ["defaultModel", "defaultProvider", "defaultThinkingLevel", "packages", "theme"],
   packagePrefix: ROOT_PACKAGE_PREFIX,
 });
 // The agent/ shim is active when the repository is checked out one level above
@@ -125,6 +136,8 @@ const agentShimActive = existsSync(join(root, "agent", "configs", "pi-agent", "p
 const agentSettings = validateSettingsFile({
   relativePath: "agent/settings.json",
   baseDir: join(root, "agent"),
+  allowedKeys: ["defaultModel", "defaultProvider", "defaultThinkingLevel", "packages", "skills", "theme"],
+  optionalKeys: ["lastChangelogVersion"],
   packagePrefix: AGENT_PACKAGE_PREFIX,
   expectedSkills: ["./skills"],
   checkPackageFiles: agentShimActive,
