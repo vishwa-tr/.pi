@@ -16,6 +16,12 @@ root files are Pi's effective agent config and the nested `agent/` shims are
 dormant.
 
 Keep the root `AGENTS.md` filename uppercase; Pi loads it as global guidance.
+`AGENTS.md` at the repository root is the sole source of global instructions.
+`agent/AGENTS.md` is a regular Markdown pointer, not a symlink or duplicate: when
+Pi loads it, the agent must read `../AGENTS.md` relative to that pointer file.
+This avoids symlink privileges for instruction loading on Windows. In the
+agent-dir-only installation, Pi loads the root instructions directly and the
+nested pointer is dormant. Other resource shims still use symlinks.
 
 It combines portable Pi configuration with reusable agent materials and the
 source of the local Pi packages enabled by `settings.json`.

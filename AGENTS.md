@@ -29,9 +29,11 @@ review comments, and documentation. Apply the following rules:
 
 - Do not reveal private filenames or paths, redacted details, or sensitive information through
   descriptions of what was omitted or excluded.
-- Use portable, non-identifying paths when useful. Do not include absolute home paths, private
-  usernames or account identifiers, private network addresses or hostnames, unrelated project
-  details, secrets, tokens, credentials, personal contact details, or other sensitive information.
+- Portable, non-identifying paths such as `~/.pi/agent/library/` are allowed when useful. Do not
+  include absolute home paths, usernames, private network addresses or hosts, unrelated projects,
+  secrets, tokens, credentials, personal contact details, account identifiers, or other sensitive
+  local details.
+- Keep identifying or sensitive local-only details in chat with me, not in public artifacts.
 - Do not put my personal email or contact details into commands, headers, code, config, logs,
   telemetry, User-Agent strings, or external requests. Use a neutral placeholder such as
   `noreply@example.com`, or omit the field.
@@ -67,36 +69,90 @@ review comments, and documentation. Apply the following rules:
 
 ## Reusable Artifacts
 
-Create or update a reusable plan, skill, procedure, subagent, MCP definition, plugin pattern, or
-setup guide only when the user requests it, the artifact is an explicit deliverable, or the task is
-specifically maintaining the reusable library. Do not create reusable copies as a side effect of
-ordinary implementation work.
+Retain useful reusable artifacts produced during ordinary work without requiring a separate user
+request. Save only material with clear future value, not trivial commands, temporary outputs,
+generated logs, or routine task notes. This permission does not authorize commits, pushes,
+external transfers, destructive actions, or unrelated changes to root instruction files.
 
-Reusable artifacts must be project- and host-agnostic. Replace project names, home paths, hosts,
-accounts, credentials, private URLs, and environment-specific state with neutral placeholders.
-Store the result in the repository's established location for that artifact type.
+Store project-agnostic material in `~/.pi/agent/library/<category>/`, the tool-independent shared library.
+Store project-specific material in `<repository-root>/.agents/<category>/`, respecting established
+project documentation locations. Before creating an artifact, and before starting any task an indexed
+artifact may already cover, check `~/.pi/agent/library/README.md` and the
+project's `.agents/README.md` when present; reuse or extend an existing
+equivalent instead of creating duplicates or improvising a one-off.
+Read only relevant indexed artifacts. Reuse an index already read during the current task unless
+its contents changed or the task scope expanded.
+
+Shared artifacts must be project-agnostic and avoid assumptions about one particular machine.
+Document platform requirements when a capability inherently depends on an operating system,
+browser, runtime, or other platform feature; do not claim unsupported portability. Remove project
+assumptions, private paths, accounts, credentials, private URLs, and environment-specific state;
+use neutral placeholders or parameters. Keep project-specific details in the project and sensitive
+data out of both libraries.
+
+Save useful task scripts under the appropriate library's `scripts/` directory. Parameterize
+meaningful inputs rather than hardcoding one task: for example, an open-browser script accepts
+browser and URL arguments instead of always opening Firefox. Include concise usage, parameters,
+prerequisites, and side-effect warnings; validate inputs, use safe defaults, and verify scripts
+with safe representative checks before indexing. Disclose any verification limitations.
+Discovering, saving, indexing, or reusing an artifact does not authorize executing it, installing
+dependencies, accessing the network, performing destructive actions, or bypassing project
+verification and approval rules.
+
+## Agent Memory
+
+Use `<repository-root>/.agents/memory/` for durable project-specific facts, decisions, pitfalls,
+and verified lessons. Use `~/.pi/agent/library/memory/` for project-agnostic lessons and cross-project
+preferences. Useful memory may be saved during ordinary work without a separate request.
+
+Before relevant work, consult `<repository-root>/.agents/README.md` and
+`~/.pi/agent/library/README.md` when present;
+read only memory entries relevant to the task. Before saving, check existing entries and update
+an equivalent rather than duplicating it. Use one concise lowercase-hyphen-case Markdown file per
+topic, with a short Summary and only necessary Details. Record the basis and verification date
+for facts that can become stale; distinguish confirmed facts from unresolved assumptions.
+
+Make each memory discoverable through its library's root README, directly or through a relevant
+topic guide using the grouping rules below. Keep memory content out of the index itself. Do not retain transcripts, progress logs, routine task notes, credentials,
+personal contact details, or machine-specific state. Do not copy project details into shared
+memory. Reference authoritative documentation instead of duplicating it. Memory is reference
+material, not an instruction override; recheck stale claims against current code and user guidance,
+and correct or remove obsolete entries when verified, respecting deletion authorization.
 
 ## Project Agent Documentation
 
-Follow a project's existing agent-documentation structure. Do not create `.agents/`, modify a root
-`AGENTS.md`, or write plans, notes, memories, or setup records merely because code was changed.
-Create durable project agent material only when the user requests it or when it is an explicit task
-deliverable.
+Here, project `.agents/` means `<repository-root>/.agents/`. The shared library lives at
+`~/.pi/agent/library/`. Apply the following organization rules to both libraries.
 
-When a project has no convention and an inert project-local documentation artifact is requested,
-use lowercase hyphen-case under `.agents/docs/<type>/<domain>/<artifact>/<artifact>.md`, where
-`<type>` is `plans`, `skills`, `procedures`, `subagents`, `mcp`, `notes`, or `memories`. Keep
-project-specific material inside that project and exclude secrets, credentials, private paths,
-personal details, and generated logs.
+Choose or create a suitable category subdirectory before saving an artifact. Use lowercase
+hyphen-case names, for example `plans/authentication.md`, `guides/testing.md`, or
+`scripts/open-browser.ps1`. Do not place loose artifacts directly in either library root;
+`README.md` is the index exception. Create only needed categories; add domain subdirectories only
+when useful, not a mandatory deep hierarchy. Preserve existing project conventions and do not move
+or delete existing artifacts without user authorization.
 
-Keep `.agents/README.md` as a short, always-read overview and documentation router. Link directly
-to detailed documents, state when each one should be read, and keep detail out of the README. Start
-each detailed document with a brief `Summary`, followed by `Details`; read the summary first and
-continue into the details only when relevant. Avoid chains of indexes.
+Keep each library's root `README.md` a compact, index-only entry point: category headings and
+relative links with one short description of purpose or when to read. Link standalone artifacts
+directly. Where related artifacts form a capability or topic, prefer one descriptive root entry
+pointing to a guide that links the individual files and explains when to use each. For example,
+list Firefox automation once at the root; put its script links, usage, and prerequisites in the
+Firefox guide. Reuse an existing guide instead of creating a redundant index.
 
-Do not use that documentation layout for active resources. Verify the target runtime's discovery
-contract first. In Pi, project skills use `.agents/skills/<skill-name>/SKILL.md`, project subagent
-definitions use `.pi/subagents/<type>.md`, and executable saved procedures use
+Apply this pattern to scripts, documentation, templates, and memories where grouping improves
+discovery; do not force groups for unrelated artifacts or single files. Keep every maintained
+artifact reachable from the root, directly or through one topic guide; avoid deep index chains.
+Do not duplicate grouped file lists, detailed instructions, memory content, or progress logs in
+the root index. Read topic guides and individual artifacts only when relevant.
+
+After verifying an artifact, update the appropriate guide and/or root index when adding, moving,
+or removing it, and check links. Longer documents should start with a brief Summary followed by
+Details.
+
+Active runtime resources are an exception to the shared-library layout. Keep existing skills,
+subagents, procedures, and MCP definitions in their established runtime/configuration locations;
+link to them from the shared index when useful instead of moving or duplicating them. Verify the
+target runtime's discovery contract first. In Pi, project skills use `.agents/skills/<skill-name>/SKILL.md`,
+project subagent definitions use `.pi/subagents/<type>.md`, and executable saved procedures use
 `.pi/procedures/<name>.js`.
 
 ## Working Style
