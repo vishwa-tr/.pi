@@ -50,8 +50,12 @@ review comments, and documentation. Apply the following rules:
   subject style.
 - Commit only when explicitly requested. Push only when explicitly requested; permission to commit
   does not imply permission to push.
+- When I ask to commit staged changes, you may amend the immediately preceding commit without
+  separate confirmation when it was created during the current task, has not been pushed or shared,
+  and the staged changes belong to the same logical change.
 - Do not force-push, skip hooks, or use destructive Git commands unless I explicitly ask for that
   exact operation.
+- After a multi-line commit, verify the stored message with `git log -1 --format=%B`.
 - Do not add agent attribution, session trailers, generated-by footers, internal model details, or
   tool runtime details to commits, PRs, issues, or review comments.
 
