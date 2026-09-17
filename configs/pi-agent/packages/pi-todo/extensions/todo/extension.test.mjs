@@ -205,3 +205,28 @@ test("tool guidance requires observable completion and reserves destructive oper
 	assert.match(guidance, /different task or topic/i);
 	assert.match(guidance, /cleanup.*simple|exception.*simple/i);
 });
+
+test("an accepted todo_write result renders nothing, leaving the list to the widget", SDK_TEST_OPTIONS, async () => {
+	const { tool } = await loadTodoExtension();
+	const theme = {
+		fg: (_color, text) => text,
+		bold: (text) => text,
+		strikethrough: (text) => text,
+	};
+	const todos = [
+		{ content: "Fix store layer", status: "completed" },
+		{ content: "Fix mail", status: "in_progress", activeForm: "Fixing mail" },
+	];
+	const accepted = await tool.execute("1", { todos }, undefined, undefined, makeContext(() => []));
+
+	const rendered = tool.renderResult(accepted, { expanded: false, isPartial: false }, theme, { isError: false });
+	assert.deepEqual(rendered.render(80), [], "the accepted list must not be redrawn under the call line");
+
+	const callLine = tool.renderCall({ todos }, theme, { isError: false }).render(80).join("");
+	assert.match(callLine, /1\/2 done/);
+	assert.match(callLine, /Fixing mail/);
+
+	const rejected = { content: [{ type: "text", text: "A normal todo update must keep every existing item." }] };
+	const failure = tool.renderResult(rejected, { expanded: false, isPartial: false }, theme, { isError: true }).render(80);
+	assert.ok(failure.join("").includes("must keep every existing item"), "rejections still report why");
+});

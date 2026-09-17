@@ -11,6 +11,9 @@
  *     □ Fix sandbox/typedefs     <- in progress: accent, bold
  *     □ Fix mail
  *
+ * The widget is the only place the list is drawn: an accepted todo_write
+ * renders no result body, so the checklist never appears twice on screen.
+ *
  * The title is a list header, not a working indicator: no spinner, elapsed
  * time, token count, or dynamic label (pi's loader row owns those). It shows
  * whenever the list is non-empty — working or idle — so the checklist is
@@ -37,7 +40,6 @@ import {
 	extractLatestTodos,
 	renderCollapsedLine,
 	renderTitleLine,
-	renderTodoItem,
 	renderTodoLineEllipsis,
 	renderTodoWidgetLines,
 	summarizeTodos,
@@ -194,13 +196,16 @@ export default function todoList(pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, _options, theme) {
+		renderResult(result, _options, _theme, context) {
+			// The live widget already shows this list, so repeating it here puts the
+			// same checklist on screen twice and leaves a stale copy in scrollback for
+			// every call. renderCall keeps the counts and the active item, so an
+			// accepted update renders nothing (an empty Text renders zero lines).
+			// Rejected calls still need their message.
 			const details = result.details as { todos?: TodoItem[] } | undefined;
-			if (!details?.todos) {
-				const t = result.content[0];
-				return new Text(t?.type === "text" ? t.text : "", 0, 0);
-			}
-			return new Text(details.todos.map((item) => renderTodoItem(item, theme)).join("\n"), 0, 0);
+			if (details?.todos && !context.isError) return new Text("", 0, 0);
+			const t = result.content[0];
+			return new Text(t?.type === "text" ? t.text : "", 0, 0);
 		},
 	});
 

@@ -48,6 +48,11 @@ completed, accent in-progress, normal text pending).
 
   System-prompt guidance also keeps the completed final list visible with the final
   report instead of immediately clearing it.
+
+  The widget is the only surface that draws the list. An accepted call renders no
+  result body under the tool row — the call line already carries the done-count and
+  the active item — so the checklist is never on screen twice and scrollback does
+  not fill with stale copies. Rejected calls still render their message.
 - **Task/topic pivots** — before each model call, an ephemeral lower-trust context
   message exposes every current checklist identity so the model can distinguish a
   continuation from a clear move to different work, including after compaction. The
