@@ -3,7 +3,7 @@
 import test from "node:test";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
@@ -12,12 +12,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const EXTENSION = join(HERE, "index.ts");
 
 function findPiPackage() {
-	const home = process.env.HOME ?? "";
+	const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+	// npm installs globals to a different root per platform, and on Windows that
+	// root is under APPDATA. Probe both so these tests are not silently POSIX-only.
 	const candidates = [
 		process.env.PI_SDK_DIR,
 		join(home, ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
 		"/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
 		"/usr/lib/node_modules/@earendil-works/pi-coding-agent",
+		process.env.APPDATA ? join(process.env.APPDATA, "npm/node_modules/@earendil-works/pi-coding-agent") : undefined,
+		join(home, "AppData/Roaming/npm/node_modules/@earendil-works/pi-coding-agent"),
 	].filter(Boolean);
 	for (const candidate of candidates) {
 		if (existsSync(join(candidate, "dist", "cli.js"))) return candidate;
@@ -28,7 +32,7 @@ function findPiPackage() {
 const PI_PACKAGE = findPiPackage();
 const requireFromPi = PI_PACKAGE ? createRequire(join(PI_PACKAGE, "package.json")) : undefined;
 const loadExtensions = PI_PACKAGE
-	? (await import(join(PI_PACKAGE, "dist", "core", "extensions", "loader.js"))).loadExtensions
+	? (await import(pathToFileURL(join(PI_PACKAGE, "dist", "core", "extensions", "loader.js")).href)).loadExtensions
 	: undefined;
 const SDK_TEST_OPTIONS = loadExtensions
 	? {}
@@ -104,7 +108,7 @@ test("extension loads in the installed Pi runtime", (t) => {
 test("widget output honors the TUI component width", SDK_TEST_OPTIONS, async () => {
 	const { handlers } = await loadTodoExtension();
 	assert.ok(requireFromPi);
-	const { visibleWidth } = await import(requireFromPi.resolve("@earendil-works/pi-tui"));
+	const { visibleWidth } = await import(pathToFileURL(requireFromPi.resolve("@earendil-works/pi-tui")).href);
 	const longContent = "a very long 界 todo description ".repeat(8);
 	let widgetFactory;
 	const ctx = {
