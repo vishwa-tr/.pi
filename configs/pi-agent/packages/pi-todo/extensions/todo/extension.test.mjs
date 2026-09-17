@@ -230,3 +230,37 @@ test("an accepted todo_write result renders nothing, leaving the list to the wid
 	const failure = tool.renderResult(rejected, { expanded: false, isPartial: false }, theme, { isError: true }).render(80);
 	assert.ok(failure.join("").includes("must keep every existing item"), "rejections still report why");
 });
+
+test("a finished checklist is dropped when the next user turn begins", SDK_TEST_OPTIONS, async () => {
+	const { tool, handlers } = await loadTodoExtension();
+	const ctx = makeContext(() => []);
+	await tool.execute("1", { todos: [{ content: "a", status: "completed" }, { content: "b", status: "completed" }] }, undefined, undefined, ctx);
+
+	// Until the user speaks again the finished list stands, so it is still on
+	// screen beside the final report — and still protected from silent omission.
+	await assert.rejects(
+		tool.execute("2", { todos: [{ content: "c", status: "pending" }] }, undefined, undefined, ctx),
+		/must keep every existing item/i,
+	);
+
+	await emit(handlers, "agent_start", ctx);
+
+	// The new turn starts from nothing, so unrelated work needs no replace/clear.
+	const accepted = await tool.execute("3", { todos: [{ content: "c", status: "pending" }] }, undefined, undefined, ctx);
+	assert.deepEqual(accepted.details?.todos, [{ content: "c", status: "pending" }]);
+});
+
+test("an unfinished checklist survives the turn boundary for the model to judge", SDK_TEST_OPTIONS, async () => {
+	const { tool, handlers } = await loadTodoExtension();
+	const ctx = makeContext(() => []);
+	const list = [{ content: "a", status: "completed" }, { content: "b", status: "in_progress" }];
+	await tool.execute("1", { todos: list }, undefined, undefined, ctx);
+
+	await emit(handlers, "agent_start", ctx);
+
+	await assert.rejects(
+		tool.execute("2", { todos: [{ content: "c", status: "pending" }] }, undefined, undefined, ctx),
+		/must keep every existing item.*a/i,
+		"unfinished work is a pivot decision for the model, not a runtime drop",
+	);
+});
