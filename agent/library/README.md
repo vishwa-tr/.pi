@@ -6,7 +6,7 @@
 
 ## Scripts
 
-- [Apply replacements](scripts/apply-replacements.mjs) — Apply exact-string edits to a file atomically: every anchor must match exactly once or nothing is written. For careful multi-edit passes over a document or source file. Supports --dry-run and --backup; preserves CRLF.
+- [Apply replacements](scripts/apply-replacements.mjs) — Atomic, non-overlapping original-text edits for UTF-8 files; dry runs, exclusive backups, and uniform LF/CRLF preservation. See script help for filesystem and metadata limits.
 
 ## Guides
 

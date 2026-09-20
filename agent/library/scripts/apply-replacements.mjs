@@ -1,44 +1,38 @@
 #!/usr/bin/env node
 /**
- * apply-replacements.mjs — apply exact-string replacements to a file, atomically.
+ * Apply exact-string edits using Node 18+; no dependencies.
+ * Usage: node apply-replacements.mjs <target-file> <pairs-file> [--dry-run] [--backup]
  *
- * For careful edits to a document or source file where each anchor must be unambiguous.
- * Every OLD block must match exactly once; if any does not, NOTHING is written and the
- * failing pair is reported. This makes a partially-applied edit impossible.
+ * Pairs are UTF-8 text with these markers alone on their lines:
+ * <<<<OLD
+ * old text
+ * ====
+ * new text
+ * >>>>
+ * Repeat blocks; notes outside blocks are ignored. For deletion put a blank line
+ * between ==== and >>>>. Marker lines are reserved and cannot appear in text.
+ * Each nonempty OLD must occur exactly once in the ORIGINAL target. Edits must
+ * not overlap; inserted text is never an anchor for another edit.
  *
- * Usage:
- *   node apply-replacements.mjs <target-file> <pairs-file> [--dry-run] [--backup]
+ * Targets must be regular, single-link UTF-8 text files (optional BOM). Symlinks,
+ * NUL bytes, invalid UTF-8, and mixed LF/CRLF endings are rejected without writes.
+ * Uniform LF/CRLF and the BOM are preserved; pairs may use either ending.
+ * --dry-run validates without writing. --backup creates target-file.bak exclusively
+ * with original bytes; an existing path (including a symlink) aborts the operation.
  *
- * Parameters:
- *   <target-file>  File to edit, rewritten in place.
- *   <pairs-file>   Replacement definitions, format below.
- *   --dry-run      Report what would change; write nothing. Run this first.
- *   --backup       Write <target-file>.bak before modifying.
- *
- * Pairs file format — repeat the block for each replacement:
- *
- *   <<<<OLD
- *   text to find, verbatim, may span lines
- *   ====
- *   replacement text
- *   >>>>
- *
- * For an empty replacement (a deletion), leave a blank line between ==== and >>>>.
- * Markers must each sit alone at the start of a line. Text between blocks is ignored,
- * so the pairs file can carry notes.
- *
- * Side effects:
- *   - Rewrites <target-file> in place. Nothing else is touched. Use --backup or version control.
- *
- * Line endings: the target's dominant ending (LF or CRLF) is detected and restored, so a CRLF
- * file stays CRLF. Pairs files are read as LF regardless, so their own endings never matter.
- *
- * Exit codes: 0 applied (or dry run clean), 1 a pair failed or input was invalid.
- *
- * Prerequisites: Node 18+. No dependencies.
+ * Writes use a private sibling temporary directory and rename over the target.
+ * Read/write/execute permissions are preserved, but special mode bits, inode,
+ * timestamps, ownership, ACLs and extended attributes are not. A backup may
+ * remain (possibly incomplete on write failure) if the operation fails. Requires a
+ * filesystem with atomic same-directory rename; not a power-loss durability
+ * guarantee. Do not run with concurrent writers or in an untrusted directory:
+ * a pre-rename change check is best effort, not a filesystem compare-and-swap.
+ * Exit codes: 0 success, 1 invalid input or I/O failure.
+ * Tests: node --test scripts/apply-replacements.test.mjs (from repository root).
  */
 
 import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 
 const OPEN = "<<<<OLD";
@@ -46,128 +40,130 @@ const SEPARATOR = "====";
 const CLOSE = ">>>>";
 
 function fail(message) {
-    console.error(message);
-    process.exit(1);
+    throw new Error(message);
 }
 
-function printUsage() {
-    console.log("Usage: node apply-replacements.mjs <target-file> <pairs-file> [--dry-run] [--backup]");
-    console.log("Run with --help for the pairs file format.");
-}
-
-function parseArguments(argv) {
-    let positional = argv.filter((value) => !value.startsWith("--"));
-    let flags = new Set(argv.filter((value) => value.startsWith("--")));
-
-    for (let flag of flags) {
-        if (!["--dry-run", "--backup", "--help"].includes(flag)) {
-            fail(`Unknown flag: ${flag}`);
-        }
+function decode(bytes, label) {
+    let text;
+    try {
+        text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+        fail(`${label}: invalid UTF-8.`);
     }
-
-    return {
-        targetPath: positional[0],
-        pairsPath: positional[1],
-        dryRun: flags.has("--dry-run"),
-        backup: flags.has("--backup"),
-        help: flags.has("--help"),
-    };
-}
-
-function toLf(text) {
-    return text.replace(/\r\n/g, "\n");
-}
-
-function detectLineEnding(text) {
-    let crlfCount = (text.match(/\r\n/g) ?? []).length;
-    let lfCount = (text.match(/\n/g) ?? []).length - crlfCount;
-
-    return crlfCount > lfCount ? "\r\n" : "\n";
+    if (text.includes("\0")) fail(`${label}: NUL bytes are not supported.`);
+    return text;
 }
 
 function parsePairs(source) {
-    let blocks = source.split(`${OPEN}\n`).slice(1);
-    if (blocks.length === 0) {
-        fail(`No ${OPEN} blocks found in the pairs file.`);
-    }
-
-    return blocks.map((block, index) => {
-        let body = block.split(`\n${CLOSE}`)[0];
-        let match = body.match(new RegExp(`^([\\s\\S]*?)\\n${SEPARATOR}\\n([\\s\\S]*)$`));
-
-        if (!match) {
-            fail(
-                `Pair ${index + 1} is malformed: expected a line containing only ${SEPARATOR} ` +
-                    `between the old and new text.\n` +
-                    `For a deletion, leave a blank line between ${SEPARATOR} and ${CLOSE}.`,
-            );
+    let pairs = [];
+    let oldLines = [];
+    let newLines = [];
+    let state = "notes";
+    for (let line of source.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").split("\n")) {
+        if (line === OPEN) {
+            if (state !== "notes") fail("Nested OLD marker.");
+            oldLines = [];
+            newLines = [];
+            state = "old";
+        } else if (line === SEPARATOR) {
+            if (state !== "old") fail("Unexpected separator marker.");
+            state = "new";
+        } else if (line === CLOSE) {
+            if (state !== "new" || newLines.length === 0) fail("Malformed closing marker.");
+            let oldText = oldLines.join("\n");
+            if (!oldText) fail("OLD text must not be empty.");
+            pairs.push({ oldText, newText: newLines.join("\n") });
+            state = "notes";
+        } else if (state === "old") {
+            oldLines.push(line);
+        } else if (state === "new") {
+            newLines.push(line);
         }
-
-        return { number: index + 1, oldText: match[1], newText: match[2] };
-    });
+    }
+    if (state !== "notes") fail("Unterminated replacement block.");
+    if (!pairs.length) fail("No replacement blocks found.");
+    return pairs;
 }
 
-function describe(text) {
-    let firstLine = text.split("\n")[0];
-    return firstLine.length > 70 ? `${firstLine.slice(0, 70)}…` : firstLine;
+function applyPairs(document, pairs) {
+    let edits = pairs.map(({ oldText, newText }, index) => {
+        let start = document.indexOf(oldText);
+        if (start < 0 || document.indexOf(oldText, start + 1) !== -1) {
+            fail(`Pair ${index + 1}: OLD must match exactly once in the original target.`);
+        }
+        return { start, end: start + oldText.length, newText, number: index + 1 };
+    }).sort((left, right) => left.start - right.start);
+
+    let cursor = 0;
+    let chunks = [];
+    for (let edit of edits) {
+        if (edit.start < cursor) fail(`Pair ${edit.number}: overlapping edits.`);
+        chunks.push(document.slice(cursor, edit.start), edit.newText);
+        cursor = edit.end;
+    }
+    chunks.push(document.slice(cursor));
+    return chunks.join("");
+}
+
+function checkTarget(targetPath) {
+    let stat = fs.lstatSync(targetPath);
+    if (!stat.isFile() || stat.nlink !== 1) fail("Target must be a regular, single-link file, not a symlink.");
+    return stat;
+}
+
+function writeAtomic(targetPath, original, output, stat, backup) {
+    let directory = fs.mkdtempSync(path.join(path.dirname(targetPath), ".apply-replacements-"));
+    let temporary = path.join(directory, "output");
+    try {
+        fs.writeFileSync(temporary, output, { flag: "wx", mode: 0o600 });
+        fs.chmodSync(temporary, stat.mode & 0o777);
+        let current = checkTarget(targetPath);
+        if (current.dev !== stat.dev || current.ino !== stat.ino || current.mode !== stat.mode ||
+            !fs.readFileSync(targetPath).equals(original)) {
+            fail("Target changed during validation; refusing to overwrite it.");
+        }
+        if (backup) {
+            // Exclusive creation refuses existing files, hard links, and dangling symlinks.
+            fs.writeFileSync(`${targetPath}.bak`, original, { flag: "wx", mode: 0o600 });
+        }
+        fs.renameSync(temporary, targetPath);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 }
 
 function main() {
-    let { targetPath, pairsPath, dryRun, backup, help } = parseArguments(process.argv.slice(2));
-
-    if (help || !targetPath || !pairsPath) {
-        printUsage();
-        process.exit(help ? 0 : 1);
-    }
-
-    for (let path of [targetPath, pairsPath]) {
-        if (!fs.existsSync(path)) {
-            fail(`File not found: ${path}`);
-        }
-    }
-
-    let originalText = fs.readFileSync(targetPath, "utf8");
-    let lineEnding = detectLineEnding(originalText);
-    let document = toLf(originalText);
-    let pairs = parsePairs(toLf(fs.readFileSync(pairsPath, "utf8")));
-
-    let report = [];
-
-    for (let { number, oldText, newText } of pairs) {
-        if (oldText.length === 0) {
-            fail(`Pair ${number}: the old text is empty, which would match everywhere.`);
-        }
-
-        let matches = document.split(oldText).length - 1;
-
-        if (matches !== 1) {
-            let reason = matches === 0 ? "no match" : `${matches} matches, must be unique`;
-            fail(`Pair ${number} FAILED (${reason}). Nothing was written.\n  anchor: ${describe(oldText)}`);
-        }
-
-        document = document.replace(oldText, () => newText);
-        report.push(`  ${number}. ${describe(oldText)}  [${oldText.length} -> ${newText.length} chars]`);
-    }
-
-    console.log(`${dryRun ? "Would apply" : "Applied"} ${pairs.length} replacement(s) to ${targetPath}:`);
-    console.log(report.join("\n"));
-
-    if (dryRun) {
-        console.log("Dry run: nothing written.");
+    let args = process.argv.slice(2);
+    if (args.length === 1 && args[0] === "--help") {
+        let source = fs.readFileSync(new URL(import.meta.url), "utf8");
+        console.log(source.slice(source.indexOf("/**") + 3, source.indexOf("*/")).replace(/^ \* ?/gm, "").trim());
         return;
     }
-
-    if (backup) {
-        fs.writeFileSync(`${targetPath}.bak`, originalText);
-        console.log(`Backup written to ${targetPath}.bak`);
+    let positional = args.filter((arg) => !arg.startsWith("--"));
+    let flags = args.filter((arg) => arg.startsWith("--"));
+    if (positional.length !== 2 || flags.some((flag) => !["--dry-run", "--backup"].includes(flag))) {
+        fail("Usage: node apply-replacements.mjs <target-file> <pairs-file> [--dry-run] [--backup]");
     }
-
-    let output = lineEnding === "\n" ? document : document.replace(/\n/g, "\r\n");
-    fs.writeFileSync(targetPath, output);
-
-    if (lineEnding === "\r\n") {
-        console.log("Target uses CRLF; line endings preserved.");
+    let [targetPath, pairsPath] = positional.map((name) => path.resolve(name));
+    let stat = checkTarget(targetPath);
+    let original = fs.readFileSync(targetPath);
+    let text = decode(original, "Target");
+    let hasCrlf = text.includes("\r\n");
+    let normalized = text.replace(/\r\n/g, "\n");
+    if (hasCrlf && text.replace(/\r\n/g, "").includes("\n")) {
+        fail("Mixed LF/CRLF target endings are not supported.");
     }
+    let pairs = parsePairs(decode(fs.readFileSync(pairsPath), "Pairs"));
+    let document = applyPairs(normalized, pairs);
+    let output = Buffer.from(hasCrlf ? document.replace(/\n/g, "\r\n") : document, "utf8");
+    let dryRun = flags.includes("--dry-run");
+    if (!dryRun) writeAtomic(targetPath, original, output, stat, flags.includes("--backup"));
+    console.log(`${dryRun ? "Would apply" : "Applied"} ${pairs.length} replacement(s).`);
 }
 
-main();
+try {
+    main();
+} catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+}

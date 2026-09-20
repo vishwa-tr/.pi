@@ -74,14 +74,15 @@ request. Save only material with clear future value, not trivial commands, tempo
 generated logs, or routine task notes. This permission does not authorize commits, pushes,
 external transfers, destructive actions, or unrelated changes to root instruction files.
 
-**If you write the same script, query, or snippet a second time in one session, stop and save it.**
-Repetition is the signal, not your estimate of future value: scaffolding looks trivial each time you
-write it, and the value only becomes visible in how often you rewrite it. Rewriting scaffolding
-instead of saving it is the most common miss.
+**If you write the same non-trivial script, query, or snippet a second time in one session,
+stop and save or extend a reusable version.** Treat repetition as evidence of future value;
+routine commands, temporary outputs, and task notes remain excluded. Check the indexes below
+first and reuse an equivalent rather than creating a duplicate.
 
-Save the working version as soon as the trigger fires. Parameterizing, documenting, verifying, and
-indexing follow before the task ends: they gate indexing, not saving. An unpolished script in the
-library is worth more than a polished one that was never written down.
+Save a working version promptly, after removing sensitive data and choosing the correct scope.
+Parameterization, documentation, verification, and indexing must follow before the task ends;
+disclose any unfinished verification. This trigger does not override privacy, authorization,
+or project safety requirements.
 
 Store project-agnostic material in `~/.pi/agent/library/<category>/`, the tool-independent shared library.
 Store project-specific material in `<repository-root>/.agents/<category>/`, respecting established
