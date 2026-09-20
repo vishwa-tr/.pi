@@ -10,4 +10,4 @@
 
 ## Runtime skills
 
-- [Decision-by-decision planning](../skills/decision-by-decision-planning/SKILL.md) — Discuss one planning topic at a time, save each agreement immediately, and maintain one coherent evolving plan.
+- [Decision-by-decision planning](../../skills/decision-by-decision-planning/SKILL.md) — Discuss one planning topic at a time and maintain one evolving plan, saving agreements when the active mode permits.

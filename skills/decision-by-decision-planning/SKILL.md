@@ -1,6 +1,6 @@
 ---
 name: decision-by-decision-planning
-description: Build and maintain an implementation or design plan through a calm, topic-by-topic decision process. Use whenever the user wants to discuss a feature or refactor one decision at a time, says “next topic,” wants agreed choices immediately saved into an evolving plan, or asks to avoid an overwhelming all-at-once planning interview. This skill complements software-implementation-planning by controlling the collaborative decision cadence.
+description: Build and maintain an implementation or design plan through a calm, topic-by-topic decision process. Use whenever the user wants to discuss a feature or refactor one decision at a time, says “next topic” during an ongoing planning discussion, wants agreed choices immediately saved into an evolving plan, or asks to avoid an overwhelming all-at-once planning interview. This skill complements software-implementation-planning by controlling the collaborative decision cadence.
 ---
 
 # Decision-by-decision planning
@@ -8,6 +8,21 @@ description: Build and maintain an implementation or design plan through a calm,
 Turn an ambiguous feature, refactor, migration, or architecture discussion into a durable plan without overwhelming the user. Discuss one consequential topic at a time, obtain an explicit decision, immediately update the plan, then move to the next topic.
 
 Use the repository's normal planning skill or conventions for technical research and final plan quality. This skill governs the collaboration loop rather than replacing repository research.
+
+## Summary
+
+Maintain one evolving plan and distinguish proposals from agreements. Immediate file updates apply only when the current instructions and tools permit them.
+
+## Details
+
+### Scope and save boundaries
+
+This is a collaboration skill, not a `plan-template: true` template for Pi's `/plan` router. Invoke it through normal skill discovery or `/skill:decision-by-decision-planning`; do not pass it to `/plan --skill`.
+
+- In unrestricted mode, update the plan file after each agreement, respecting project instructions and preserving unrelated edits.
+- Host-managed Plan mode and the base `plan` skill take precedence over this skill's save cadence. Do not use ordinary edit/write tools there; save only the complete final plan through authorized `save_plan` when those boundaries permit it.
+- In Discuss, Quick, direct `/skill:plan`, or any other read-only context, keep the evolving decisions in chat and state that they are not saved. Do not bypass restrictions or change modes yourself to persist them.
+- If a write is blocked or fails, retain the agreed change in chat, report the failure, and do not say the file was updated.
 
 ## Core contract
 
@@ -18,7 +33,7 @@ Follow this loop:
 3. Explain only that topic, its important tradeoff, and one recommended choice.
 4. Let the user question, reshape, or reject the recommendation.
 5. Treat a choice as settled only after the user explicitly agrees or states the decision directly.
-6. Immediately write the settled decision into the durable plan.
+6. Immediately incorporate the settled decision into the evolving plan, saving it only as permitted by the scope and save boundaries above.
 7. Confirm briefly that the plan was updated.
 8. Present the next unresolved topic only when requested or when the conversation clearly calls for it.
 
@@ -34,7 +49,7 @@ Before presenting decisions:
 
 - Read applicable repository instructions and the relevant planning skill.
 - Trace enough of the current architecture to avoid proposing nonexistent interfaces or duplicating existing behavior.
-- Locate an existing plan if the user refers to one; otherwise choose the repository's established plan location.
+- Locate an existing plan if the user refers to one; otherwise choose the repository's established plan location. If no convention exists, use a suitable project-local planning category such as `.agents/plans/`, not the shared library. Check the project index first and keep a newly saved plan discoverable there when applicable.
 - Create a concise initial plan only after there is at least one settled decision worth preserving.
 - Record verified facts separately from proposed or agreed design choices.
 
@@ -57,7 +72,7 @@ Prefer dependency order:
 
 Adapt this order to the task. Pick the smallest topic that still represents a meaningful decision. Do not bundle five independent decisions into one response merely because they are related.
 
-When the user says “next,” first ensure the preceding agreement is saved, then choose the most foundational unresolved topic.
+When the user says “next,” first ensure the preceding agreement is recorded (and saved when permitted), then choose the most foundational unresolved topic.
 
 ## Discuss one topic well
 
@@ -115,7 +130,7 @@ Do not claim the plan was updated unless the file write succeeded.
 
 ## Maintain plan coherence
 
-Periodically reread the complete plan, especially after several edits. Check for:
+After edits, check affected sections and cross-references for coherence. Review the complete plan before implementation or when targeted checks cannot establish consistency. Check for:
 
 - Old statements contradicted by newer decisions.
 - A field or interface shown differently in multiple examples.
