@@ -4,6 +4,7 @@ import {
 	buildTodoCarryoverPrompt,
 	coerceTodos,
 	extractLatestTodos,
+	isCompletedChecklist,
 	MARK_DONE,
 	MARK_OPEN,
 	renderCollapsedLine,
@@ -141,7 +142,7 @@ test("buildTodoCarryoverPrompt: distinguishes continuations from task/topic pivo
 
 	const completed = buildTodoCarryoverPrompt([{ content: "Finished task", status: "completed" }]);
 	assert.ok(completed?.includes("fully completed"));
-	assert.ok(completed?.includes("does not need a reason"));
+	assert.ok(completed?.includes("dropped automatically"), "a finished list is the runtime's to clear, not the model's");
 });
 
 test("buildTodoCarryoverPrompt: preserves every exact identity and prioritizes unfinished work", () => {
@@ -284,4 +285,34 @@ test("extractLatestTodos: divergent branch inputs restore their own successful s
 	assert.deepEqual(extractLatestTodos([root, left], "todo_write"), [{ content: "left", status: "in_progress" }]);
 	assert.deepEqual(extractLatestTodos([root, right], "todo_write"), [{ content: "right", status: "completed" }]);
 	assert.deepEqual(extractLatestTodos([root], "todo_write"), [{ content: "root", status: "pending" }]);
+});
+
+test("extractLatestTodos: only user delivery retires completed snapshots", () => {
+	const finished = [{ content: "done", status: "completed" as const }];
+	const unfinished = [{ content: "next", status: "pending" as const }];
+	const result = (todos: typeof finished | typeof unfinished) => ({
+		type: "message", message: { role: "toolResult", toolName: "todo_write", details: { todos } },
+	});
+	const user = { type: "message", message: { role: "user" } };
+	const wake = { type: "custom_message", customType: "timer", content: "wake" };
+	assert.deepEqual(extractLatestTodos([result(finished), wake], "todo_write"), finished);
+	assert.deepEqual(extractLatestTodos([result(finished), user], "todo_write"), []);
+	assert.deepEqual(extractLatestTodos([result(unfinished), user], "todo_write"), unfinished);
+	assert.deepEqual(extractLatestTodos([result(finished), user, result(unfinished)], "todo_write"), unfinished);
+});
+
+test("isCompletedChecklist: only a non-empty list with nothing left to do", () => {
+	assert.equal(isCompletedChecklist([]), false, "an empty list is not a finished one");
+	assert.equal(isCompletedChecklist([{ content: "a", status: "completed" }]), true);
+	assert.equal(
+		isCompletedChecklist([
+			{ content: "a", status: "completed" },
+			{ content: "b", status: "pending" },
+		]),
+		false,
+	);
+	assert.equal(
+		isCompletedChecklist([{ content: "a", status: "in_progress" }]),
+		false,
+	);
 });
