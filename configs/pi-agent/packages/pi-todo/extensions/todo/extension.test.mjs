@@ -64,8 +64,8 @@ function makeContext(getBranch) {
 	};
 }
 
-async function emit(handlers, name, ctx) {
-	for (const handler of handlers.get(name) ?? []) await handler({ type: name }, ctx);
+async function emit(handlers, name, ctx, fields = {}) {
+	for (const handler of handlers.get(name) ?? []) await handler({ type: name, ...fields }, ctx);
 }
 
 test("extension loads in the installed Pi runtime", (t) => {
@@ -243,11 +243,37 @@ test("a finished checklist is dropped when the next user turn begins", SDK_TEST_
 		/must keep every existing item/i,
 	);
 
+	// Retries and custom timer wakes must leave the final checklist visible.
 	await emit(handlers, "agent_start", ctx);
+	await emit(handlers, "message_end", ctx, { message: { role: "custom" } });
+	await assert.rejects(
+		tool.execute("retry", { todos: [] }, undefined, undefined, ctx),
+		/must keep every existing item/i,
+	);
+	// A delivered follow-up can occur inside the existing low-level run.
+	await emit(handlers, "message_end", ctx, { message: { role: "user" } });
 
 	// The new turn starts from nothing, so unrelated work needs no replace/clear.
 	const accepted = await tool.execute("3", { todos: [{ content: "c", status: "pending" }] }, undefined, undefined, ctx);
 	assert.deepEqual(accepted.details?.todos, [{ content: "c", status: "pending" }]);
+});
+
+test("retired checklists stay retired on reload and tree navigation", SDK_TEST_OPTIONS, async () => {
+	const { tool, handlers } = await loadTodoExtension();
+	const completed = resultEntry([{ content: "old", status: "completed" }]);
+	let branch = [completed, { type: "message", message: { role: "user", content: "next task" } }];
+	const ctx = makeContext(() => branch);
+	for (const event of ["session_start", "session_tree"]) {
+		await emit(handlers, event, ctx);
+		const result = await tool.execute(event, { todos: [{ content: "new", status: "pending" }] }, undefined, undefined, ctx);
+		assert.equal(result.details.todos[0].content, "new");
+	}
+	branch = [completed];
+	await emit(handlers, "session_tree", ctx);
+	await assert.rejects(
+		tool.execute("old-branch", { todos: [] }, undefined, undefined, ctx),
+		/must keep every existing item/i,
+	);
 });
 
 test("an unfinished checklist survives the turn boundary for the model to judge", SDK_TEST_OPTIONS, async () => {
@@ -256,7 +282,7 @@ test("an unfinished checklist survives the turn boundary for the model to judge"
 	const list = [{ content: "a", status: "completed" }, { content: "b", status: "in_progress" }];
 	await tool.execute("1", { todos: list }, undefined, undefined, ctx);
 
-	await emit(handlers, "agent_start", ctx);
+	await emit(handlers, "message_end", ctx, { message: { role: "user" } });
 
 	await assert.rejects(
 		tool.execute("2", { todos: [{ content: "c", status: "pending" }] }, undefined, undefined, ctx),

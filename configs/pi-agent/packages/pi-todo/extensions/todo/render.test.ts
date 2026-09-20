@@ -287,6 +287,20 @@ test("extractLatestTodos: divergent branch inputs restore their own successful s
 	assert.deepEqual(extractLatestTodos([root], "todo_write"), [{ content: "root", status: "pending" }]);
 });
 
+test("extractLatestTodos: only user delivery retires completed snapshots", () => {
+	const finished = [{ content: "done", status: "completed" as const }];
+	const unfinished = [{ content: "next", status: "pending" as const }];
+	const result = (todos: typeof finished | typeof unfinished) => ({
+		type: "message", message: { role: "toolResult", toolName: "todo_write", details: { todos } },
+	});
+	const user = { type: "message", message: { role: "user" } };
+	const wake = { type: "custom_message", customType: "timer", content: "wake" };
+	assert.deepEqual(extractLatestTodos([result(finished), wake], "todo_write"), finished);
+	assert.deepEqual(extractLatestTodos([result(finished), user], "todo_write"), []);
+	assert.deepEqual(extractLatestTodos([result(unfinished), user], "todo_write"), unfinished);
+	assert.deepEqual(extractLatestTodos([result(finished), user, result(unfinished)], "todo_write"), unfinished);
+});
+
 test("isCompletedChecklist: only a non-empty list with nothing left to do", () => {
 	assert.equal(isCompletedChecklist([]), false, "an empty list is not a finished one");
 	assert.equal(isCompletedChecklist([{ content: "a", status: "completed" }]), true);

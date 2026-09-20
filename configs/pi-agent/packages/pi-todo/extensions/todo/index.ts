@@ -249,14 +249,11 @@ export default function todoList(pi: ExtensionAPI) {
 		};
 	});
 
-	// A checklist with every item completed is finished work, not a todo list. It
-	// stays on screen with the final report, then goes when the user speaks again:
-	// agent_start fires once per user submission (turn_start fires per model
-	// round-trip, which would cut the list off mid-task). Lists with unfinished
-	// work are untouched here — those stay a semantic decision for the model,
-	// since only it can tell a follow-up from a pivot.
-	pi.on("agent_start", (_event, ctx) => {
-		if (!isCompletedChecklist(todos)) return;
+	// Clear only when a user message is delivered, including queued follow-ups.
+	// agent_start also fires for retries and extension wakes, so it is not a
+	// user boundary. Replay applies the same rule to persisted user messages.
+	pi.on("message_end", (event, ctx) => {
+		if (event.message.role !== "user" || !isCompletedChecklist(todos)) return;
 		todos = [];
 		refreshWidget(ctx);
 	});

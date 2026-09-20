@@ -262,7 +262,8 @@ export function coerceTodos(value: unknown): TodoItem[] | null {
 /**
  * Pull the most recent successful todo_write result snapshot from an active
  * session branch. Attempted/failed calls are ignored, so rejected transitions
- * cannot become live state after reload or tree navigation.
+ * cannot become live state after reload or tree navigation. Delivered user
+ * messages retire fully completed snapshots, matching the live message hook.
  */
 export function extractLatestTodos(entries: Iterable<unknown>, toolName: string): TodoItem[] {
 	let latest: TodoItem[] = [];
@@ -272,6 +273,7 @@ export function extractLatestTodos(entries: Iterable<unknown>, toolName: string)
 			message?: { role?: string; toolName?: string; isError?: boolean; details?: { todos?: unknown } };
 		};
 		const message = e?.type === "message" ? e.message : undefined;
+		if (message?.role === "user" && isCompletedChecklist(latest)) latest = [];
 		if (message?.role !== "toolResult" || message.toolName !== toolName || message.isError === true) continue;
 		const todos = coerceTodos(message.details?.todos);
 		if (todos) latest = todos;
