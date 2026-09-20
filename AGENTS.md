@@ -27,17 +27,19 @@ Keep long investigations from repeatedly resending an unnecessarily large contex
 
 - Narrow searches and shell commands before running them. Use focused paths, patterns, line ranges,
   and output limits instead of broad commands that may return tens of thousands of characters.
-- Read only files and sections needed for the current decision. Do not reread unchanged files or a
-  complete generated document merely to verify a few facts; inspect targeted sections or use
-  deterministic checks instead.
+- Read only files and sections needed for the current decision, while completing required instruction,
+  skill, and documentation reads. Do not reread unchanged files or a complete generated document
+  merely to verify a few facts; inspect targeted sections or use deterministic checks instead.
 - Batch related research questions when practical and stop researching once the evidence is
   sufficient for the requested decision. Avoid many near-duplicate web searches or repository scans.
-- Treat tool results as lasting context. Summarize useful findings and avoid retaining raw bulk output
-  when a concise result, count, filename list, or saved local artifact will do.
-- During a long tool-heavy task, watch context growth and compact before continuing once the active
-  prompt is roughly 50k–70k tokens, or earlier when repeated calls are carrying large outputs. If
-  compaction is unavailable to the agent, tell the user that a compaction or fresh session would
-  materially reduce token use before doing another large research phase.
+- Tool results contribute to later prompts until the runtime removes or compacts them. Limit output
+  at the source; adding a summary does not itself remove earlier output. Preserve useful findings
+  and source references without saving routine raw logs as reusable artifacts.
+- During a long tool-heavy task, use runtime-reported context usage when available. Treat roughly
+  50k–70k tokens as a checkpoint, or act earlier for smaller context windows or large outputs.
+  Compact only through an available, authorized runtime mechanism; do not invent a tool or assume
+  a chat command executes it. If unavailable, suggest user-triggered compaction or a fresh session
+  when useful before another large research phase, without claiming unmeasured token savings.
 - After writing a large file, verify it with targeted searches, parsers, tests, hashes, or selected
   ranges. Read the whole file again only when full-document review is genuinely required.
 
