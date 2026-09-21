@@ -12,6 +12,7 @@ const WORKER_ACTIONS = new Set(["worker.create", "worker.ack", "task.create", "t
 const FIELDS = {
 	...WORKSPACE_FIELDS,
 	...SESSION_FIELDS,
+	"host.attest": ["evidence", "operationIds", "turnIds", "fingerprint"],
 	"host.approve": ["approval"], "host.continue": ["restart", "reconciled", "approval"],
 	"run.create": ["runId", "ownerSessionId", "workspaceRoot", "objective", "criteria", "scope", "limits"],
 	"run.resume": ["reconciled"], "run.restart": ["reconciled"], "run.pause": [], "run.stop": [],
@@ -145,6 +146,17 @@ export function reduceEvent(previous, event) {
 	if (systemOnly.includes(event.type)) requireCondition(event.actor === "system", "AUTHORITY", "Trusted runtime settlement required");
 
 	switch (event.type) {
+		case "host.attest": {
+			requireCondition(event.actor === "owner" && ["paused", "pausing", "stopping", "failing"].includes(state.status), "AUTHORITY", "Paused host settlement attestation required");
+			text(p.evidence, "settlement evidence");
+			requireCondition(p.evidence.length <= 4096 && typeof p.fingerprint === "string" && /^[a-f0-9]{64}$/.test(p.fingerprint), "INPUT", "Invalid settlement attestation");
+			for (const [ids, records] of [[p.operationIds, state.workspace?.operations ?? []], [p.turnIds, state.sessions?.turns ?? []]]) {
+				requireCondition(Array.isArray(ids) && JSON.stringify([...ids].sort()) === JSON.stringify(records.map(item => item.id).sort()), "STALE", "Attestation must identify all current unresolved execution");
+			}
+			state.settlementAttestations ??= [];
+			state.settlementAttestations.push({ ...structuredClone(p), atMs: event.atMs, cycle: state.cycle, generation: state.generation, authority: "user-established-settlement" });
+			break;
+		}
 		case "host.approve":
 			requireCondition(event.actor === "owner" && state.status === "paused", "AUTHORITY", "Paused launch approval required");
 			requireIdle(state);

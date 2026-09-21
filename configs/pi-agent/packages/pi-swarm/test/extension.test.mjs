@@ -1,0 +1,229 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { createSwarmExtension } from "../extensions/swarm/extension.mjs";
+import { SwarmController } from "../extensions/swarm/core.mjs";
+import { createMockRuntime } from "./sdk-env.mjs";
+import { repository } from "./helpers.mjs";
+
+function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
+async function until(predicate) {
+	for (let i = 0; i < 1000; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); }
+	assert.fail("Condition did not settle");
+}
+async function fixture(t, { script = () => ({ text: "Mock planning complete" }), runner, entries = [], root, mock, approvalTimeoutMs } = {}) {
+	root ??= repository(t);
+	mock ??= await createMockRuntime(script);
+	const events = new EventEmitter();
+	const handlers = new Map(); const commands = new Map(); const notices = []; const prompts = [];
+	const mode = { version: 1, instanceId: "instance1", revision: 1, contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "off", enforcedMode: "off", runMode: null, pendingChange: false };
+	events.on("pi-plan:query-mode", request => request.respond({ ...mode }));
+	events.on("swarm:confirm-request", request => request.claim(async () => ({ approved: true })));
+	const responses = { input: [], select: [], confirm: [] };
+	const dialog = kind => async (...args) => {
+		prompts.push({ kind, args });
+		const answer = responses[kind].shift();
+		if (typeof answer === "function") return answer(...args);
+		if (answer !== undefined) return answer;
+		if (kind === "select") return args[1].includes("Approve") ? "Approve" : args[1].includes("Preserve existing work") ? "Preserve existing work" : undefined;
+		if (kind === "confirm") return true;
+		if (args[0].startsWith("Acceptance")) return '["Observable result"]';
+		if (args[0].startsWith("Scope")) return '["src", "No deployment"]';
+		return "All processes independently checked and stopped in the mock fixture";
+	};
+	const ctx = { cwd: root, mode: "tui", hasUI: true,
+		sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries },
+		ui: { input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: (text, level) => notices.push({ text, level }) } };
+	const pi = { events, on: (name, handler) => handlers.set(name, handler), registerCommand: (name, command) => commands.set(name, command), appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
+	createSwarmExtension({ modelRuntime: mock.modelRuntime, mainModel: mock.model, runner, tickIntervalMs: 0, approvalTimeoutMs })(pi);
+	const command = args => commands.get("swarm").handler(args, ctx);
+	const event = (name, data = {}) => handlers.get(name)(data, ctx);
+	const status = async () => { await command("status"); return JSON.parse(notices.at(-1).text); };
+	return { root, mock, entries, notices, prompts, responses, ctx, command, event, status, events, mode };
+}
+
+test("factory is opt-in and rejects absent or live runtimes without registration", () => {
+	assert.throws(() => createSwarmExtension(), { code: "MODEL" });
+	assert.throws(() => createSwarmExtension({ mainModel: { provider: "live", api: "live" }, modelRuntime: {} }), { code: "MODEL" });
+});
+
+test("editable agreement and explicit preservation launch a real mock SDK planner; shutdown/reload stays paused", async t => {
+	const f = await fixture(t);
+	writeFileSync(join(f.root, "user.txt"), "preserve\n");
+	f.responses.input.push('["Observable result"]', '["src"]', '"Edited goal"');
+	f.responses.select.push("Edit agreement", "objective", "Approve", "Preserve existing work");
+	await f.command("start Original goal");
+	await until(() => f.mock.calls.length === 1);
+	assert.equal((await f.status()).objective, "Edited goal");
+	assert.equal(readFileSync(join(f.root, "user.txt"), "utf8"), "preserve\n");
+	assert.equal(f.entries.length, 1);
+	await f.event("session_shutdown", { reason: "reload" });
+	const reloaded = await fixture(t, { root: f.root, mock: f.mock, entries: f.entries });
+	await reloaded.event("session_start", { reason: "reload" });
+	assert.equal((await reloaded.status()).status, "paused");
+	assert.equal(f.mock.calls.length, 1);
+	await reloaded.command("resume");
+	await until(() => f.mock.calls.length === 2);
+	assert.equal((await reloaded.status()).cycle, 1);
+	await reloaded.command("stop");
+	assert.equal((await reloaded.status()).status, "stopped");
+	await reloaded.command("restart");
+	assert.equal((await reloaded.status()).cycle, 2);
+	await reloaded.event("session_shutdown");
+});
+
+for (const stage of ["approval", "preservation", "criteria", "scope"]) {
+	test(`cancel at ${stage} creates no storage or SDK calls`, async t => {
+		const f = await fixture(t);
+		if (stage === "approval") f.responses.select.push("Cancel");
+		if (stage === "preservation") f.responses.select.push("Approve", "Cancel");
+		if (stage === "criteria") f.responses.input.push(() => undefined);
+		if (stage === "scope") f.responses.input.push('["Result"]', () => undefined);
+		if (["approval", "preservation"].includes(stage)) await assert.rejects(f.command("start goal"), { code: "AUTHORITY" });
+		else await f.command("start goal");
+		assert.equal(existsSync(join(f.root, ".swarms")), false);
+		assert.equal(f.mock.calls.length, 0);
+		await f.event("session_shutdown");
+	});
+}
+
+for (const action of ["pause", "stop", "shutdown", "tree", "mode"]) {
+	test(`${action} cancels active approval and rejects a late human answer`, async t => {
+		const f = await fixture(t); const shown = deferred(); const answer = deferred();
+		f.responses.select.push((title, choices, options) => { shown.resolve(options.signal); return answer.promise; });
+		const launch = assert.rejects(f.command("start goal"));
+		const signal = await shown.promise;
+		if (action === "shutdown") await f.event("session_shutdown");
+		else if (action === "tree") await f.event("session_before_tree");
+		else if (action === "mode") { Object.assign(f.mode, { revision: 2, selectedMode: "plan" }); f.events.emit("pi-plan:mode-changed", { ...f.mode }); }
+		else await f.command(action);
+		assert.equal(signal.aborted, true);
+		answer.resolve("Approve"); await launch;
+		assert.equal(existsSync(join(f.root, ".swarms")), false);
+		assert.equal(f.mock.calls.length, 0);
+		await f.event("session_shutdown");
+	});
+}
+
+test("shutdown during a prelaunch field input cancels the dialog without creating a run", async t => {
+	const f = await fixture(t); const shown = deferred(); const answer = deferred();
+	f.responses.input.push((title, placeholder, options) => { shown.resolve(options.signal); return answer.promise; });
+	const launch = f.command("start goal"); const signal = await shown.promise;
+	await f.event("session_shutdown"); assert.equal(signal.aborted, true);
+	answer.resolve('["Result"]'); await launch;
+	assert.equal(existsSync(join(f.root, ".swarms")), false);
+});
+
+for (const mode of ["rpc", "json", "print"]) {
+	test(`${mode} cannot authorize execution`, async t => {
+		const f = await fixture(t); f.ctx.mode = mode;
+		await assert.rejects(f.command("start goal"), { code: "UI" });
+		assert.equal(f.prompts.length, 0); assert.equal(f.mock.calls.length, 0);
+		await f.event("session_shutdown");
+	});
+}
+
+test("fork does not inherit the owner link or take checkout control", async t => {
+	const f = await fixture(t); await f.command("start goal"); await f.command("pause"); await f.event("session_shutdown");
+	const fork = await fixture(t, { root: f.root, entries: f.entries, mock: f.mock });
+	fork.ctx.sessionManager.getSessionId = () => "fork1";
+	await fork.event("session_start", { reason: "fork" });
+	await fork.command("status"); assert.match(fork.notices.at(-1).text, /No Swarm/);
+	await assert.rejects(fork.command(`restore ${f.entries[0].data.runId}`));
+	await fork.event("session_shutdown");
+});
+
+test("streaming mock SDK work is actually aborted before reload releases controller ownership", async t => {
+	const f = await fixture(t, { script: () => ({ waitForAbort: true }) });
+	await f.command("start goal"); await until(() => f.mock.calls.length === 1);
+	await f.event("session_shutdown", { reason: "reload" });
+	assert.equal(f.mock.calls[0].options.signal.aborted, true);
+	const c = await SwarmController.open({ workspace: f.root, runId: f.entries[0].data.runId, ownerSessionId: "owner1" });
+	assert.equal(c.snapshot().status, "paused"); assert.equal(c.snapshot().sessions.turns.length, 0);
+	await c.close();
+});
+
+for (const boundary of ["open", "recruit"]) {
+	test(`shutdown waits for late ${boundary} acquisition and prevents planner dispatch`, async t => {
+		const f = await fixture(t); const entered = deferred(); const release = deferred();
+		const originalOpen = SwarmController.open;
+		const originalOwner = SwarmController.prototype.owner;
+		t.after(() => { SwarmController.open = originalOpen; SwarmController.prototype.owner = originalOwner; });
+		if (boundary === "open") SwarmController.open = async options => { const c = await originalOpen(options); entered.resolve(); await release.promise; return c; };
+		else SwarmController.prototype.owner = async function(type, ...args) { const value = await originalOwner.call(this, type, ...args); if (type === "worker.create") { entered.resolve(); await release.promise; } return value; };
+		const launch = assert.rejects(f.command("start goal"), { code: "CANCELLED" }); await entered.promise;
+		const shutdown = f.event("session_shutdown"); release.resolve(); await shutdown; await launch;
+		assert.equal(f.mock.calls.length, 0);
+		SwarmController.open = originalOpen; SwarmController.prototype.owner = originalOwner;
+		// Late acquisition must not retain a live lock, even when shutdown predated the owner link.
+		const { readdirSync } = await import("node:fs");
+		const runId = readdirSync(join(f.root, ".swarms")).find(name => /^[a-f0-9-]{36}$/.test(name));
+		const c = await SwarmController.open({ workspace: f.root, runId, ownerSessionId: "owner1" });
+		assert.equal(c.snapshot().status, "paused"); await c.close();
+	});
+}
+
+const shellScript = [
+	{ toolCalls: [{ name: "swarm_task", arguments: { action: "create", id: "task1", title: "Check", criteria: [0], dependencies: [] } }] },
+	{ toolCalls: [{ name: "swarm_task", arguments: { action: "claim", taskId: "task1", kind: "build" } }] },
+	{ toolCalls: [{ name: "bash", arguments: { command: "mock uncertain command" } }] },
+];
+
+for (const action of ["pause", "shutdown"]) {
+	test(`${action} cancels SDK tool safety confirmation before actual runner admission`, async t => {
+		let executions = 0;
+		const f = await fixture(t, { script: shellScript, runner: async () => { executions++; return { settled: true, exitCode: 0 }; } });
+		const shown = deferred(); const answer = deferred();
+		f.events.removeAllListeners("swarm:confirm-request");
+		f.events.on("swarm:confirm-request", envelope => envelope.claim(request => { shown.resolve(request.signal); return answer.promise; }));
+		await f.command("start goal"); const signal = await shown.promise;
+		if (action === "pause") await f.command("pause");
+		else await f.event("session_shutdown");
+		assert.equal(signal.aborted, true);
+		answer.resolve({ approved: true }); await Promise.resolve();
+		assert.equal(executions, 0);
+		if (action === "pause") await f.event("session_shutdown");
+	});
+}
+
+test("agreement editing is cancelled by shutdown with no late launch", async t => {
+	const f = await fixture(t); const shown = deferred(); const answer = deferred();
+	f.responses.select.push("Edit agreement", "objective");
+	f.responses.input.push('["Result"]', '["src"]', (_title, _placeholder, options) => { shown.resolve(options.signal); return answer.promise; });
+	const launch = assert.rejects(f.command("start goal")); const signal = await shown.promise;
+	await f.event("session_shutdown"); assert.equal(signal.aborted, true);
+	answer.resolve('"Late edit"'); await launch;
+	assert.equal(existsSync(join(f.root, ".swarms")), false);
+});
+
+test("timed-out native launch decision receives cancellation and cannot create storage", async t => {
+	const f = await fixture(t, { approvalTimeoutMs: 30 }); const shown = deferred(); const answer = deferred();
+	f.responses.select.push((_title, _choices, options) => { shown.resolve(options.signal); return answer.promise; });
+	const launch = assert.rejects(f.command("start goal"), { code: "CANCELLED" }); const signal = await shown.promise;
+	await launch; assert.equal(signal.aborted, true); answer.resolve("Approve");
+	assert.equal(existsSync(join(f.root, ".swarms")), false);
+	await f.event("session_shutdown");
+});
+
+test("live uncertain shell requires explicit evidence; attestation does not manufacture successful receipts", async t => {
+	const f = await fixture(t, { script: shellScript, runner: async () => ({ settled: false, exitCode: null }) });
+	await f.command("start goal");
+	await until(() => f.mock.calls.length === 3);
+	let state;
+	for (let i = 0; i < 100; i++) { state = await f.status(); if (state.unresolvedOperations[0]?.uncertain) break; await new Promise(resolve => setTimeout(resolve, 2)); }
+	assert.equal(state.status, "pausing"); assert.equal(state.unresolvedOperations.length, 1);
+	f.responses.input.push(" ");
+	await assert.rejects(f.command("reconcile"), { code: "AUTHORITY" });
+	assert.equal((await f.status()).unresolvedOperations.length, 1);
+	await f.command("reconcile");
+	await f.command("pause");
+	assert.equal((await f.status()).status, "paused");
+	await f.event("session_shutdown");
+	const c = await SwarmController.open({ workspace: f.root, runId: f.entries[0].data.runId, ownerSessionId: "owner1" });
+	assert.equal(c.snapshot().workspace.receipts[0].outcome, "unknown");
+	assert.equal(c.snapshot().settlementAttestations.length, 1);
+	assert.equal(f.mock.calls.length, 3);
+	await c.close();
+});

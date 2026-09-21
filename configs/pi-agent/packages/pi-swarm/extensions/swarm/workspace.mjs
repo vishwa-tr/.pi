@@ -46,7 +46,7 @@ export class WorkspaceRuntime {
 	}
 
 	snapshot() {
-		return { coordination: this.#scheduler.snapshot(), workspace: this.#controller.snapshot().workspace };
+		return { uncertain: [...this.#uncertain.keys()], coordination: this.#scheduler.snapshot(), workspace: this.#controller.snapshot().workspace };
 	}
 
 	#check(context, signal = context.signal) {

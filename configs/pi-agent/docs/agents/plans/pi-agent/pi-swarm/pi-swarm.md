@@ -27,7 +27,7 @@ Use a deterministic controller for scheduling, ownership, persistence, limits, a
 
 **Confirmed specialist reuse policy:** prefer an existing suitable specialist. Before recruiting another, check current work, queued work, task dependencies, likely file overlap, and whether enough independent work exists to benefit from parallel execution. Require a concrete justification for another specialist. Being busy alone is insufficient; do not use a repeated-busy-check count or arbitrary busy threshold. Another specialist is allowed for useful, independent parallel work within approved limits.
 
-Stages 1–4 (controller/persistence, workspace safeguards, offline SDK integration, and host approval/policy integration) are authorized and implemented; see sections 10–13. Phase 3 uses real SDK sessions with deterministic mock providers only. Live model execution, UI, and activation remain outside those approvals. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
+Stages 1–5 (controller/persistence, workspace safeguards, offline SDK integration, host approval/policy integration, and opt-in launch/recovery UI controls) are authorized and implemented; see sections 10–14. SDK execution remains restricted to deterministic mock providers. Phase 5 UI is tested through fake native UI contexts; authorized Phase 6 adds isolated automated CLI/PTY acceptance (section 15). Live model execution and activation remain unauthorized. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
 
 Record decisions in this document as discussion proceeds and update affected sections so superseded designs do not remain implementation requirements.
 
@@ -92,7 +92,7 @@ Record decisions in this document as discussion proceeds and update affected sec
 - Verify current SDK contracts for compaction, tool provenance, history retrieval, and safe interruption before implementation. Earlier source references are research anchors, not proof that the new design has been implemented or tested.
 - Finalize UI details, runtime-directory exclusion setup, and safe history cleanup. No automatic deletion policy has been approved.
 
-The behavior decisions are recorded. Stages 1–4 implement the foundation, workspace safeguards, offline SDK integration, and host approval/safety/mode protocols. Live-provider support, user-facing UI/recovery integration, and activation remain gated. Resolve remaining technical gaps without silently changing those decisions. Escalate any gap that requires a user-visible policy change.
+The behavior decisions are recorded. Stages 1–5 implement the foundation, workspace safeguards, offline SDK integration, host approval/safety/mode protocols, and opt-in mock launch/recovery controls. Live-provider support, full live dashboard/terminal acceptance, safe stale-owner recovery, and activation remain gated. Resolve remaining technical gaps without silently changing those decisions. Escalate any gap that requires a user-visible policy change.
 
 ### 1. Requirements and scope
 
@@ -804,3 +804,129 @@ Verification: **271 Swarm tests pass**, plus **66 pi-plan/pi-safety tests**. Cov
 The provider packages are modified, but Swarm remains unregistered. Reloading Pi applies provider changes only; it does not enable Swarm. Existing configuration divergence and untracked additions still prevent a clean global validator result; unrelated settings were preserved.
 
 Remaining gates: user-facing approval/dashboard/recovery controls, host exposure of orphan/uncertain-execution reconciliation, live-provider support, semantic scope and duplicate-recruitment judgments, non-progress detection, automatic compaction policy, and active-slot release during live tool waits. Silent provider disappearance is detected on the next admission query; published restriction/shutdown events revoke immediately. These limits must be addressed before unattended live activation.
+
+### 14. Phase 5 user-facing launch and recovery controls
+
+The user authorized editable launch agreements and dirty-work preservation decisions;
+status/pause/stop/resume/restart controls; explicit interrupted/uncertain-execution
+reconciliation; and shutdown/reload/approval-cancellation tests. Implementation remains
+mock-only and unregistered. No activation, dependency installation, live provider use,
+commit, push, or parent-checkout modification was performed.
+
+Implemented:
+
+- `createSwarmExtension` is an explicitly injected factory, with no default export or
+  activation entry. It rejects absent/live runtimes. Tests invoke the real factory with
+  fake Pi UI contexts and real persistent SDK sessions using the existing mock provider.
+- Native cancellable select/input/confirm dialogs present and edit the launch agreement,
+  model/thinking/tools/instructions/limits, and existing changes. Criteria and scope are
+  user-entered JSON arrays; individual agreement fields are editable as JSON. Dirty work
+  requires explicit preservation. Nothing stashes, resets, stages, commits, or rolls back.
+- The opt-in `/swarm` menu and commands expose start, status, pause, stop, restore,
+  resume, restart, and reconcile. A mock SDK planner begins approved decomposition;
+  continuation wakes retained specialists only after fresh human approval.
+- A session-owned run link supports paused restore after reload, without restoring
+  execution authority. Forks cannot inherit control. Tree/switch/fork preflights pause
+  work and cancel navigation if settlement is incomplete. Shutdown cancels decisions and
+  waits for controller acquisition, recruitment/session preparation, and SDK/tool settlement.
+- The host exposes reconciliation without exposing owner/system capabilities to models.
+  A human callback must supply a named user-established-settlement attestation and written
+  evidence, not a bare boolean. Exact unresolved IDs and workspace fingerprint are recorded
+  durably before any lease release. Revision/workspace drift and cancellation deny stale
+  decisions. Live uncertain operations must unwind normally after attestation; ordinary
+  active turns cannot be treated as orphans. Orphan outcomes remain unknown/interrupted.
+- Incomplete close retains ownership and allows host reconciliation/retry rather than
+  permanently aborting the host lifetime first. Concurrent closes share cleanup work.
+  No stale lock is stolen or cleared automatically.
+
+Verified offline:
+
+- **304 Swarm tests pass**: the prior 271 plus 33 new factory/recovery tests. New cases cover
+  edited launch agreement, preservation cancellation, all authorizing non-TUI modes denied,
+  approval cancellation/late answers, field-input cancellation, actual streaming SDK abort,
+  reload restoration, resume/restart cycle accounting, fork isolation, late controller and
+  recruitment acquisition, SDK tool safety-confirmation cancellation, native approval timeouts,
+  cancellable agreement editing, live uncertain shell evidence, orphan reconciliation, malformed
+  attestations, workspace/revision/cancellation races, and incomplete-close ownership.
+- **66 pi-plan/pi-safety tests pass**, using the installed SDK resolution preloaders from
+  both Swarm and Safety (the Safety-only resolver does not resolve Plan's additional peers).
+- The global validator still reports the pre-existing model/thinking default mismatch and
+  new untracked phase-5 files; no unrelated defaults were normalized. Changes remain uncommitted.
+- Package test command remains the one in section 10. No dependencies were installed and
+  no live provider or interactive Pi activation was used.
+
+Verified limitations and remaining gates:
+
+- The current menu/on-demand structured status is not the planned continuously refreshed
+  activity tree/dashboard or transcript viewer. Usage is explicitly not aggregated; cost
+  is unknown. Native rendering, narrow terminals, theme interaction, and actual human
+  dialogs require later interactive acceptance.
+- Native multiline editing has no cancellation-signal contract, so this phase uses native
+  cancellable field inputs instead. Invalid/ambiguous agreement values fail validation;
+  no live model clarification or semantic scope proof is claimed.
+- User attestation is an explicit trust boundary, not process-death detection. Escaped
+  daemons, external effects, corrupted storage, lost journal tails, power loss, and stale
+  controller locks remain outside verified recovery. A teardown after incomplete shutdown
+  can leave ownership fenced; a new instance cannot bypass that lock. A shutdown before
+  persisting the owner link requires explicit restore by run ID.
+- Restore and reconciliation still require the ready authoritative Off-mode provider.
+  Silent provider disappearance is detected on the next admission query; published mode
+  changes revoke immediately. No mode bypass or inferred settlement was introduced.
+- Live provider support, native tool presentation parity, scope revision, semantic
+  recruitment/non-progress judgments, automatic compaction policy, yielding during live
+  tool waits, and activation remain deferred. Preserve current user files and runtime evidence.
+
+### 15. Phase 6 isolated interactive acceptance
+
+The user authorized explicitly loading the mock-only factory in a disposable Pi terminal
+session, exercising native controls and lifecycle/recovery, and fixing any demonstrated
+issues. Global activation, live providers, installation, commits, and pushes remain excluded.
+Existing uncommitted phase-5 work was preserved.
+
+Implemented `test/terminal/run.py` and `test/terminal/fixture.ts` in the Swarm package.
+The Python standard-library PTY launches the installed Node-based CLI with an explicit
+extension path, a minimal environment, disposable HOME/config/project, disabled resource
+and context discovery, and offline startup. The fixture verifies `getAgentDir()` against
+`PI_CODING_AGENT_DIR`. No personal settings or credentials are copied. Cleanup waits for
+confirmed child exit and removes only its disposable fixture. Review hardened closed-PTY
+and exit/signal races with bounded TERM/KILL waits and guaranteed PTY closure; unconfirmed
+exit retains evidence. Four deterministic cleanup regressions pass. There is no installation fallback.
+
+Run from the repository root:
+
+```bash
+python3 configs/pi-agent/packages/pi-swarm/test/terminal/run.py
+```
+
+Verified against installed Pi 0.85.1 using actual terminal input/output:
+
+- Cancel initial input with Escape: no run storage or worker execution.
+- Resize to 60 columns / 24 rows; supply criteria/scope, edit the objective in the native
+  input, approve the agreement, and choose preservation of existing dirty work.
+- Start an actual streaming deterministic SDK worker, pause and observe abort; authorize
+  resume through agreement, preservation, and workspace-reconciliation confirmation.
+- Reload during streaming; observe abort and paused restoration without automatic model
+  dispatch. Resize to 100 columns / 40 rows, switch to built-in light, open/cancel the menu.
+- Explicitly resume and stop during streaming, observing abort and no spontaneous restart.
+- Explicit restart and a native shell-permission confirmation for a test runner returning
+  uncertainty without spawning a process. Enter settlement evidence and confirm attestation;
+  wait for real SDK/tool frames to unwind, then verify paused/stopped status.
+- Replay durable journal events through the reducer: assert the edited objective and approved
+  criteria/scope, resumes retaining cycle 1 and allowances, and restart producing cycle 2,
+  zero elapsed time/task consumption, archived prior usage, and subsequent new-cycle task
+  consumption. Also assert one attestation, one unknown receipt, one execution intent with
+  no replay, and no completed outcome. Original fixture content remains unchanged.
+
+Verification: **304 Swarm tests and 66 Plan/Safety tests pass**, plus the separate PTY
+scenario. No production defect required a fix; production phase-5 modules were not edited.
+The repository validator retains its existing model/thinking mismatch and additionally
+lists the intentionally untracked implementation/test files; unrelated defaults are untouched.
+
+Limitations: this is automated native-dialog keyboard acceptance, not human sign-off or
+pixel/viewport validation. Assertions inspect emitted ANSI/text and durable records; long
+summaries still use terminal scrollback. The fixture supplies a **test-only Off-mode publisher
+and shell-confirmation provider**, not production Plan/Safety terminal integration. Its
+uncertain operation is simulated; written attestation is not proof of real process death.
+Human readability/contrast, IME/mouse, other terminal emulators, full live dashboard/usage,
+live model quality, network operations, stale-owner takeover, and crash/power-loss recovery
+remain unverified/deferred. No claim of full product acceptance or activation is made.

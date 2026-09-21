@@ -1,12 +1,14 @@
-# Pi Swarm — foundation, workspace safeguards, and offline SDK integration
+# Pi Swarm — offline launch and recovery controls
 
 ## Status
 
 This is an **inactive implementation**, not an activated Pi extension. Phase 3 creates
 real Pi SDK sessions with deterministic mock providers only; live model execution is
 explicitly rejected. Phase 2's host-authorized workspace adapter performs guarded file
-mutations and shell execution in disposable test repositories. No main-session commands,
-UI, extension entry point, or package activation are installed.
+mutations and shell execution in disposable test repositories. Phase 5 adds an explicitly
+injected extension factory and native UI controls for offline testing. No default entry
+point, package registration, or activation is installed. Phase 6 adds a disposable CLI/PTY
+acceptance harness; it does not activate the package.
 
 Stage 1 implements:
 
@@ -43,10 +45,10 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The combined suite has 271 passing tests. It includes actual local shell execution,
+The combined suite has 304 passing tests. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
-and autonomous peer/tool interaction using scripted providers. These are not live-model,
-UI, or power-loss tests.
+and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
+UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
 
 ## Modules
 
@@ -67,7 +69,8 @@ UI, or power-loss tests.
 | `extensions/swarm/session-state.mjs` | Durable model/tool selection, session bindings, delivery records, and turn settlement. |
 | `extensions/swarm/sdk-session.mjs` | Non-discovering SDK factory, mock-only gate, private native JSONL validation and synchronization. |
 | `extensions/swarm/session-tools.mjs`, `specializations.mjs` | Uniform model-visible tool definitions and generated specialist/context prompts. |
-| `test/` | Foundation and offline real-SDK integration tests. |
+| `extensions/swarm/extension.mjs`, `ui.mjs` | Opt-in mock-runtime factory, cancellable native launch/recovery dialogs, commands and lifecycle hooks. |
+| `test/` | Foundation, host recovery, and offline real-SDK/factory integration tests. |
 
 ## Host API and trust boundary
 
@@ -80,7 +83,7 @@ The returned controller exposes:
 
 - `snapshot()`: a detached copy of current state.
 - `owner(type, payload, options?)`: **trusted host capability** representing already
-  obtained user authorization. The future UI must obtain that authorization first.
+  obtained user authorization. UI adapters must obtain that authorization first.
 - `system(type, payload, options?)`: **trusted runtime capability** for actual
   assignment settlement, recovery, and verification completion.
 - `worker(id).dispatch(type, payload, options?)`: a worker identity bound to the
@@ -97,8 +100,8 @@ fails. Read a new snapshot when current state, rather than the historical receip
 is needed.
 
 Do not expose owner/system methods, the controller constructor, or raw reducer events
-to model-visible tools. Human approval routing, semantic scope judgments, and Pi tool
-integration belong to a later adapter. A claimed acceptance-criterion reference or
+to model-visible tools. The host/UI adapters own human approval routing; semantic scope judgments remain
+unimplemented. A claimed acceptance-criterion reference or
 recruitment justification is bookkeeping, not proof that a model obeyed the scope.
 
 ## State and lifecycle contracts
@@ -172,7 +175,7 @@ Before resuming a paused controller, call
 `WorkspaceRuntime.attach(controller, { authorize, runner? })`. Attachment durably enables
 workspace evidence enforcement; old stage 1 mock approvals are not accepted as evidence.
 Only one workspace adapter may attach to a controller. `authorize` defaults to denial;
-the future host bridge must check user approval, safety policy, and execution mode. The
+the host bridge must check user approval, safety policy, and execution mode. The
 optional runner is a trusted test/host integration seam, never a model-visible argument.
 
 After claiming a task, `runtime.worker(workerId)` returns assignment-bound operations:
@@ -196,7 +199,7 @@ pause and explicitly resume before another final-check attempt.
 Execution intent is synchronized before side effects. Receipts record command, assignment,
 cycle, generation, guidance revision, actual exit code, timestamps, and before/after workspace
 fingerprints. Interrupted intent remains unresolved after recovery; it is never replayed.
-The adapter does not schedule periodic deadline ticks: the future host driver must do so to
+The adapter does not schedule periodic deadline ticks: the SDK host driver must do so to
 interrupt a long-running command at the deadline, rather than only noticing at settlement.
 
 ### Deliberately conservative boundaries
@@ -310,22 +313,138 @@ pure/factory regression suites pass 66 tests. Tests use fake UI contexts and dis
 state, not interactive human dialogs. Reloading Pi loads the provider changes but does
 not activate Swarm; its package remains absent from the enabled package list.
 
-Important remaining limits: approval callbacks still need user-facing UI integration;
-this host does not expose orphan-execution reconciliation or live uncertain-process
-attestation controls. Silent provider disappearance is detected on the next admission
-query, whereas published shutdown/restriction events revoke immediately. Do not activate
-live work until those recovery and lifecycle controls are complete.
+Silent provider disappearance is detected on the next admission query, whereas published
+shutdown/restriction events revoke immediately. Phase 5 below supplies opt-in UI and explicit
+host reconciliation; it does not enable live work.
+
+## Phase 5 opt-in launch and recovery controls
+
+`createSwarmExtension(options)` from `extensions/swarm/extension.mjs` returns a Pi extension
+factory only when supplied an explicit `modelRuntime` and `mainModel` using `swarm-mock`.
+It has no default export and is not registered in settings or a package manifest. The
+existing offline harness invokes this factory directly; do not activate it for live work.
+There is no model discovery, credential lookup, network refresh, or dependency-install fallback.
+Optional host inputs include thinking level, wrapped coding tools, instructions, and a trusted
+runner seam for disposable mock tests. Runner injection is never a command or model argument.
+
+When explicitly injected, `/swarm` opens a native control menu. Commands are:
+
+- `start <goal>`: enter acceptance criteria and scope/exclusions as JSON string arrays;
+  inspect the complete agreement; optionally edit each field using JSON input; then approve.
+  Dirty work requires a separate **Preserve existing work** choice. A real mock SDK planner
+  investigates the approved goal without a second planning approval. Invalid input fails
+  without automatic retry; fields are not semantically clarified by a live model.
+- `status`: inspect run/cycle, tasks, specialists, active/queued work, claims, limits,
+  unresolved execution, and errors. Usage is explicitly not aggregated and cost is unknown.
+- `pause` / `stop`: cancel pending launch/continuation approval and new dispatch, then wait
+  for actual settlement. Incomplete stopping retains ownership and is not reported as success.
+- `resume` / `restart`: fresh human agreement and workspace reconciliation; only restart
+  resets allowances. Settled retained workers can be explicitly woken by these commands.
+- `restore <run-id>`: attach an existing owner session's run without execution authority.
+- `reconcile`: inspect all unresolved operations/turns, describe independently established
+  settlement, and confirm that attestation. A boolean or missing-process assertion alone is
+  not the host attestation protocol. Effects remain unknown; commands are never replayed.
+
+`SwarmHost.reconcile()` requests `action: "reconcile"` with operation/turn identities and
+live uncertain IDs. The human callback must return `attestation: { kind:
+"user-established-settlement", evidence: "..." }` in addition to approval and existing-work
+preservation. The host records exact IDs, evidence, workspace fingerprint, cycle and generation
+before retiring uncertainty. This is a **user attestation**, not automated proof of process
+death. Live uncertain operations retain their leases until attested, and their SDK/tool frames
+must then actually unwind. Ordinary active SDK turns cannot be retired as orphan work.
+Recovered orphan intents become unknown receipts/interrupted turns, never successful evidence.
+Workspace/revision drift or cancellation requires a new decision.
+
+Native select/input/confirm dialogs receive cancellation signals, including during agreement
+editing. The native multiline editor is deliberately not used because its current API has no
+AbortSignal dismissal contract. No shortcut, footer replacement, or model-visible lifecycle
+capability is added. Authorizing controls require TUI; status and brakes do not require a dialog.
+
+The owner session stores a small run-ID link. Reload/restoration reattaches without resuming;
+forks and different owner sessions cannot inherit control. Tree navigation, session replacement,
+and shutdown revoke pending decisions and pause work; unsettled navigation is cancelled.
+Shutdown cleanup waits for controller acquisition, recruitment/session preparation, and real
+execution settlement. A failed host close keeps reconciliation access and ownership fencing.
+After an actual extension teardown with incomplete settlement, a new instance cannot steal
+that lock. Preserve evidence and establish settlement externally; stale-lock recovery is still
+unsupported. If shutdown precedes writing the owner link, explicit `restore <run-id>` is needed.
+
+Verification: 304 Swarm tests (271 prior plus 33 new) and 66 provider tests pass offline.
+Coverage includes editable/dirty approvals, cancellation and late answers, live streaming abort,
+shutdown/reload, late acquisition/recruitment, fork isolation, explicit live/orphan reconciliation,
+reconciliation races, and ownership retained after incomplete close. Native dialog rendering,
+real human decisions, narrow-terminal behavior, escaped processes, and power-loss recovery are
+not validated by fake UI tests. Mode-provider readiness/Off remains required for restore and
+reconciliation; missing providers fail closed rather than bypassing policy.
+
+## Phase 6 isolated terminal acceptance
+
+Run with installed Pi 0.85.1, Node 22+, Python 3, and Git on POSIX:
+
+```bash
+python3 configs/pi-agent/packages/pi-swarm/test/terminal/run.py
+```
+
+`PI_BIN` selects the installed Node-based Pi CLI; `PI_SDK_DIR` selects its SDK package
+when needed. There is no install fallback. The harness creates a disposable Git project,
+HOME, and `PI_CODING_AGENT_DIR`, checks that Pi resolves that agent directory, disables
+startup network operations and resource discovery, and explicitly loads only the test
+factory. It forwards no credentials or personal configuration. Temporary sessions,
+journals, and observations are removed only after confirmed child exit. Cleanup tolerates
+closed-PTY writes and exit/signal races, escalates TERM to KILL with bounded waits, and
+always closes the PTY; unconfirmed exit retains the fixture rather than deleting evidence.
+Four deterministic cleanup regressions run separately:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s configs/pi-agent/packages/pi-swarm/test/terminal -p 'test_*.py'
+```
+
+This is a **real interactive CLI on a Python PTY**, not a fake UI context. It sends
+keyboard input through native Pi dialogs and checks emitted terminal text and durable
+journal evidence. Verified scenarios:
+
+- Escape cancels initial criteria input without creating run storage.
+- At 60 columns / 24 rows, launch criteria/scope, edit the objective, approve the
+  agreement, and explicitly preserve dirty work. Replay asserts the persisted edited
+  objective and approved criteria/scope.
+- Pause an actually streaming mock worker; confirm resume without resetting the cycle.
+- `/reload` during streaming aborts work and restores paused without another model turn.
+- Resize to 100 columns / 40 rows, switch to built-in light, open/cancel the control menu.
+- Resume and stop while streaming; observe abort and no spontaneous worker restart.
+- Explicit restart; native shell-permission dialog for a simulated uncertain operation;
+  written settlement evidence and native attestation confirmation; eventual paused then
+  stopped status. The journal records one attestation and one unknown execution receipt,
+  with no effect replay or successful completion. Reducer replay checks that resumes retain
+  consumed allowances and restart produces cycle 2 with reset elapsed time/task allowance,
+  archived prior-cycle usage, and subsequent new-cycle task consumption. Original fixture
+  content is unchanged.
+
+The fixture uses deterministic mock SDK workers, a **test-only Off-mode publisher and
+shell-confirmation provider**, and a runner that deliberately returns uncertainty without
+spawning a process. It does not test production Plan/Safety rendering or prove real process
+settlement. The separate 66 provider regressions still pass. All 304 Swarm tests pass,
+plus this PTY acceptance scenario; no production defect required a fix in this phase.
+
+Limits: terminal assertions inspect the emitted ANSI/text stream, not a pixel screenshot
+or a full terminal-emulator viewport. Long structured summaries use terminal scrollback;
+readability/contrast, IME, mouse, other terminal emulators, and human judgment remain
+unverified. This is automated keyboard acceptance, not a human sign-off. No live provider,
+network-backed operation, crash/power-loss recovery, or stale-lock takeover is exercised.
+The continuously refreshed dashboard and usage aggregation remain deferred.
 
 ## Deferred before activation
 
 - Live model/provider support and validation; phase 3 rejects it intentionally.
-- Human confirmation UI and dashboard wiring for the implemented host approval protocol.
+- Human visual TUI acceptance, production policy-provider terminal integration, and a compact
+  live activity tree/richer dashboard. The current native menu and on-demand structured status
+  are not a continuously refreshed dashboard.
 - Full native coding-tool presentation parity and additional coding tools.
-- Human/model evaluation of check adequacy, narrower verification relevance, and user-facing
-  reconciliation controls. A mocked successful workflow is not proof of useful real model work.
+- Human/model evaluation of check adequacy and narrower verification relevance. A mocked
+  successful workflow is not proof of useful real model work or independently proven settlement.
 - Semantic scope/specialization checks, duplicate-recruitment judgments, and detection of
   repetitive non-progressing discussion. Capacity/revision checks do not replace those judgments.
 - Automatic compaction policy and session-slot yielding during live tool waits.
-- Restart UI, scope revision, history cleanup, safe stale-owner recovery, and package activation.
+- Scope revision, history/transcript UI, usage aggregation, safe stale-owner recovery, and
+  package activation. There is no automatic cleanup, commit, push, or rollback.
 
 Keep this package inactive until those adapters and their lifecycle tests are complete.

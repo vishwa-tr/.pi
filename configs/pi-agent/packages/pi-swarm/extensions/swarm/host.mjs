@@ -41,10 +41,13 @@ export class SwarmHost {
 	#safetyTimeout;
 	#tickInterval;
 	#errors = [];
+	#closing;
+	#runner;
 
-	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000 }) {
+	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner }) {
 		check(typeof requestApproval === "function", "INPUT", "Human approval callback required");
 		for (const timeout of [approvalTimeoutMs, safetyTimeoutMs]) check(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 600000, "INPUT", "Invalid approval timeout");
+		this.#runner = runner;
 		this.#events = events;
 		this.#sessionId = sessionId;
 		this.#ask = requestApproval;
@@ -62,7 +65,7 @@ export class SwarmHost {
 	}
 
 	snapshot() {
-		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, pendingApproval: Boolean(this.#pending), errors: [...this.#errors] };
+		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, pendingApproval: Boolean(this.#pending), errors: [...this.#errors] };
 	}
 
 	#invalidate() {
@@ -74,7 +77,7 @@ export class SwarmHost {
 	}
 
 	#assertAdmission() {
-		check(!this.#lifetime.signal.aborted && this.#permit && !this.#permit.signal.aborted, "HOST_DENIED", "Explicit current host approval is required");
+		check(!this.#closing && !this.#lifetime.signal.aborted && this.#permit && !this.#permit.signal.aborted, "HOST_DENIED", "Explicit current host approval is required");
 		this.#mode.assert(this.#permit.grant.token);
 	}
 
@@ -105,7 +108,7 @@ export class SwarmHost {
 	}
 
 	#runOperation(fn) {
-		check(!this.#operation && !this.#lifetime.signal.aborted, "BUSY", "Host operation already pending or closed");
+		check(!this.#closing && !this.#operation && !this.#lifetime.signal.aborted, "BUSY", "Host operation already pending or closed");
 		const operation = { cancel: new AbortController(), epoch: this.#epoch };
 		this.#operation = operation;
 		operation.promise = Promise.resolve().then(() => fn(operation)).finally(() => {
@@ -114,7 +117,7 @@ export class SwarmHost {
 		return operation.promise;
 	}
 
-	async #approval(action, inspection, specification) {
+	async #approval(action, inspection, specification, recovery) {
 		check(!this.#pending && !this.#lifetime.signal.aborted, "BUSY", "Approval already pending or host closed");
 		const grant = this.#mode.capture();
 		const pending = new AbortController();
@@ -130,7 +133,7 @@ export class SwarmHost {
 				if (signal.aborted) abort();
 				timer = setTimeout(() => pending.abort(), this.#approvalTimeout);
 			});
-			const request = Object.freeze({ action, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), requiresExistingWorkDecision: inspection.changes.length > 0, requiresReconciliation: action !== "launch", signal });
+			const request = Object.freeze({ action, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), requiresExistingWorkDecision: inspection.changes.length > 0, requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
 			const answer = structuredClone(await Promise.race([Promise.resolve().then(() => {
 				check(!signal.aborted, "CANCELLED", "Approval cancelled before presentation");
 				return this.#ask(request);
@@ -139,10 +142,11 @@ export class SwarmHost {
 			this.#mode.assert(grant.token);
 			check(answer?.approved === true, "AUTHORITY", "User did not approve this action");
 			check(!inspection.changes.length || answer.existingChanges === "preserve", "DIRTY", "Explicit preservation of existing changes is required");
-			check(action === "launch" || answer.reconciled === true, "UNSETTLED", "Explicit workspace reconciliation is required");
+			check(action === "launch" || action === "reconcile" || answer.reconciled === true, "UNSETTLED", "Explicit workspace reconciliation is required");
 			const approved = answer.specification ?? specification;
 			if (action !== "launch") check(specificationFingerprint(approved) === specificationFingerprint(specification), "SCOPE", "Continuation cannot silently change the approved scope");
-			return { grant, specification: approved, approval: { id: randomUUID(), action, workspaceFingerprint: inspection.fingerprint, specificationFingerprint: specificationFingerprint(approved), existingChanges: inspection.changes.length ? "preserve" : "clean" } };
+			if (action === "reconcile") check(answer.attestation?.kind === "user-established-settlement" && typeof answer.attestation.evidence === "string" && answer.attestation.evidence.trim().length > 0 && answer.attestation.evidence.length <= 4096, "UNSETTLED", "Describe independently established process/session settlement; a boolean is not evidence");
+			return { grant, specification: approved, attestation: answer.attestation, approval: { id: randomUUID(), action, workspaceFingerprint: inspection.fingerprint, specificationFingerprint: specificationFingerprint(approved), existingChanges: inspection.changes.length ? "preserve" : "clean" } };
 		} finally {
 			clearTimeout(timer);
 			signal.removeEventListener("abort", abort);
@@ -157,7 +161,7 @@ export class SwarmHost {
 
 	async #wire() {
 		const admission = { assert: () => this.#assertAdmission(), signal: () => this.#permit?.signal ?? this.#denied };
-		this.#workspace = await WorkspaceRuntime.attach(this.#controller, { admission, authorize: async request => {
+		this.#workspace = await WorkspaceRuntime.attach(this.#controller, { admission, runner: this.#runner, authorize: async request => {
 			this.#assertAdmission();
 			const permit = this.#permit;
 			const signal = AbortSignal.any([request.signal, permit.signal]);
@@ -268,8 +272,37 @@ export class SwarmHost {
 			return await Promise.race([settle, new Promise(resolve => { timer = setTimeout(() => resolve({ settled: false }), timeoutMs); })]);
 		} finally { clearTimeout(timer); }
 	}
+	/** Human attestation retires uncertainty, never certifies successful execution. */
+	reconcile() { return this.#runOperation(async operation => {
+		const state = this.#controller?.snapshot();
+		check(state && this.#workspace && this.#driver && ["paused", "pausing", "stopping", "failing"].includes(state.status), "STATE", "Pause before reconciliation");
+		const live = this.#workspace.snapshot().uncertain;
+		check(this.#driver.snapshot().active.every(workerId => state.workspace.operations.some(item => item.workerId === workerId && live.includes(item.id))), "UNSETTLED", "Live SDK turns must settle normally unless waiting on an identified uncertain operation");
+		const recovery = { operations: state.workspace.operations, turns: state.sessions.turns, liveUncertainIds: live };
+		check(recovery.operations.length || recovery.turns.length, "STATE", "No interrupted execution to reconcile");
+		const inspection = inspectCheckout(state.workspaceRoot);
+		const accepted = await this.#approval("reconcile", inspection, this.#specification(), recovery);
+		this.#assertOperation(operation);
+		this.#unchanged(inspection, accepted.grant);
+		check(this.#controller.snapshot().revision === state.revision, "STALE", "Execution changed during reconciliation; inspect again");
+		// Record exactly what the user attested before releasing any live lease.
+		await this.#controller.owner("host.attest", { evidence: accepted.attestation.evidence, operationIds: recovery.operations.map(item => item.id), turnIds: recovery.turns.map(item => item.id), fingerprint: inspection.fingerprint }, { expectedRevision: state.revision });
+		this.#assertOperation(operation);
+		for (const id of live) this.#workspace.confirmSettled(id, { settled: true });
+		// Live SDK/tool frames must unwind themselves. Never retire them as orphans.
+		if (this.#driver.snapshot().active.length || live.length) return { settled: false, awaitingLiveSettlement: true };
+		await this.#driver.reconcile({ settled: true });
+		const current = this.#controller.snapshot();
+		return { settled: ["paused", "stopped", "completed", "failed"].includes(current.status) && !current.workspace.operations.length && !current.sessions.turns.length };
+	}); }
+
 	wake(workerId, reason) { this.#assertAdmission(); return this.#driver.wake(workerId, reason); }
-	recruit(specification) { this.#assertAdmission(); return this.#driver.recruit(specification); }
+	recruit(specification) { return this.#runOperation(async operation => {
+		this.#assertAdmission();
+		const result = await this.#driver.recruit(specification);
+		this.#assertOperation(operation);
+		return result;
+	}); }
 	compact(workerId) { this.#assertAdmission(); return this.#driver.compact(workerId); }
 	finalCheck(command) { this.#assertAdmission(); return this.#workspace.finalCheck(command); }
 	redirect(text) { this.#pending?.abort(); return this.#driver.redirect(text); }
@@ -277,13 +310,16 @@ export class SwarmHost {
 		await this.#driver?.idle();
 		if (this.#modePause) await this.#modePause;
 	}
-	async close() {
-		this.#lifetime.abort();
-		const result = await this.pause();
-		check(result.settled, "UNSETTLED", "Host cannot close before actual execution settlement");
-		await this.#driver?.close();
-		await this.#controller?.close();
-		this.#lifetime.abort();
-		this.#mode.dispose();
+	close() {
+		if (this.#closing) return this.#closing;
+		this.#closing = (async () => {
+			const result = await this.pause();
+			check(result.settled, "UNSETTLED", "Host cannot close before actual execution settlement");
+			await this.#driver?.close();
+			await this.#controller?.close();
+			this.#lifetime.abort();
+			this.#mode.dispose();
+		})().finally(() => { this.#closing = undefined; });
+		return this.#closing;
 	}
 }
