@@ -1,8 +1,8 @@
 {
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6-astra",
+  "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "low",
-  "theme": "void-agent-one-dark",
+  "theme": "void-agent-gruvbox",
   "packages": [
     "./configs/pi-agent/packages/pi-teams",
     "./configs/pi-agent/packages/pi-subagents",
@@ -39,5 +39,6 @@
   ],
   "skills": [
     "./skills"
-  ]
+  ],
+  "lastChangelogVersion": "0.85.1"
 }
