@@ -7,6 +7,7 @@ import { requireCondition as check, SwarmError } from "./errors.mjs";
 import { validId } from "./store/files.mjs";
 import { WorkspaceRuntime } from "./workspace.mjs";
 import { SwarmSessions } from "./sessions.mjs";
+import { readSessionHistory } from "./sdk-session.mjs";
 import { ModeGate, requestSafety } from "./host-gates.mjs";
 import { inspectCheckout, specificationFingerprint } from "./host-approval.mjs";
 
@@ -43,11 +44,14 @@ export class SwarmHost {
 	#errors = [];
 	#closing;
 	#runner;
+	#beforePrompt;
+	#pendingSafety = 0;
 
-	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner }) {
+	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => {} }) {
 		check(typeof requestApproval === "function", "INPUT", "Human approval callback required");
 		for (const timeout of [approvalTimeoutMs, safetyTimeoutMs]) check(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 600000, "INPUT", "Invalid approval timeout");
 		this.#runner = runner;
+		this.#beforePrompt = beforePrompt;
 		this.#events = events;
 		this.#sessionId = sessionId;
 		this.#ask = requestApproval;
@@ -65,7 +69,16 @@ export class SwarmHost {
 	}
 
 	snapshot() {
-		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, pendingApproval: Boolean(this.#pending), errors: [...this.#errors] };
+		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, pendingApproval: Boolean(this.#pending) || this.#pendingSafety > 0, errors: [...this.#errors] };
+	}
+
+	/** Detached inspection only; no session construction, dispatch, or owner capabilities. */
+	history(workerId) {
+		const run = this.#controller?.snapshot();
+		check(run?.workers.some(worker => worker.id === workerId), "NOT_FOUND", "Worker does not exist");
+		const binding = run.sessions?.workers.find(worker => worker.workerId === workerId);
+		if (!binding) return [];
+		return readSessionHistory(join(run.workspaceRoot, ".swarms", run.runId, "sessions", binding.sessionFile), run.workspaceRoot, binding.sessionId);
 	}
 
 	#invalidate() {
@@ -169,7 +182,13 @@ export class SwarmHost {
 			const value = { agent: request.workerId ?? "swarm final verification", tool: shell ? "bash" : request.kind };
 			if (shell) value.command = request.command;
 			else value.path = resolve(this.#location.workspace, request.paths[0]);
-			const result = await requestSafety({ events: this.#events, request: value, signal, timeoutMs: this.#safetyTimeout });
+			let result;
+			this.#pendingSafety++;
+			try {
+				await this.#beforePrompt();
+				this.#assertAdmission();
+				result = await requestSafety({ events: this.#events, request: value, signal, timeoutMs: this.#safetyTimeout });
+			} finally { this.#pendingSafety--; }
 			this.#assertAdmission();
 			check(this.#permit === permit && !signal.aborted, "HOST_DENIED", "Approval belongs to an expired host admission");
 			return result.approved === true;

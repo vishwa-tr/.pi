@@ -27,6 +27,25 @@ async function fixture(t, options = {}) {
 	return { root, ...bus, mock, host, launch };
 }
 
+test("read-only host history does not create sessions or dispatch and validates persisted identity", async t => {
+	const f = await fixture(t, { script: () => ({ text: "History evidence" }) });
+	await f.launch();
+	await f.host.recruit({ id: "worker", specialization: "Review", brief: "Inspect", reason: "Independent inspection" });
+	const before = f.host.snapshot();
+	const entries = f.host.history("worker");
+	assert.deepEqual(f.host.snapshot(), before);
+	assert.equal(f.mock.calls.length, 0);
+	assert.ok(Array.isArray(entries));
+	assert.throws(() => f.host.history("missing"), { code: "NOT_FOUND" });
+	const binding = before.run.sessions.workers[0];
+	const path = join(f.root, ".swarms", "run1", "sessions", binding.sessionFile);
+	const original = readFileSync(path, "utf8");
+	writeFileSync(path, original.replace(binding.sessionId, "wrong-identity"));
+	assert.throws(() => f.host.history("worker"));
+	writeFileSync(path, original);
+	await f.host.close();
+});
+
 test("launch waits for explicit human approval before creating storage or sessions", async t => {
 	const decision = deferred(); const presented = deferred();
 	const f = await fixture(t, { approval: request => { presented.resolve(request); return decision.promise; } });

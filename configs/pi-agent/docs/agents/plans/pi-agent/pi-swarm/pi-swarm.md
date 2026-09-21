@@ -27,7 +27,7 @@ Use a deterministic controller for scheduling, ownership, persistence, limits, a
 
 **Confirmed specialist reuse policy:** prefer an existing suitable specialist. Before recruiting another, check current work, queued work, task dependencies, likely file overlap, and whether enough independent work exists to benefit from parallel execution. Require a concrete justification for another specialist. Being busy alone is insufficient; do not use a repeated-busy-check count or arbitrary busy threshold. Another specialist is allowed for useful, independent parallel work within approved limits.
 
-Stages 1–5 (controller/persistence, workspace safeguards, offline SDK integration, host approval/policy integration, and opt-in launch/recovery UI controls) are authorized and implemented; see sections 10–14. SDK execution remains restricted to deterministic mock providers. Phase 5 UI is tested through fake native UI contexts; authorized Phase 6 adds isolated automated CLI/PTY acceptance (section 15). Live model execution and activation remain unauthorized. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
+Stages 1–5 (controller/persistence, workspace safeguards, offline SDK integration, host approval/policy integration, and opt-in launch/recovery UI controls) are authorized and implemented; see sections 10–14. SDK execution remains restricted to deterministic mock providers. Phase 5 UI is tested through fake native UI contexts; authorized Phase 6 adds isolated automated CLI/PTY acceptance (section 15). Authorized Phase 7 adds a mock-only live dashboard and read-only history navigation (section 16). Live model execution and activation remain unauthorized. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
 
 Record decisions in this document as discussion proceeds and update affected sections so superseded designs do not remain implementation requirements.
 
@@ -930,3 +930,64 @@ uncertain operation is simulated; written attestation is not proof of real proce
 Human readability/contrast, IME/mouse, other terminal emulators, full live dashboard/usage,
 live model quality, network operations, stale-owner takeover, and crash/power-loss recovery
 remain unverified/deferred. No claim of full product acceptance or activation is made.
+
+### 16. Phase 7 mock-only live dashboard
+
+The user authorized a continuously refreshed native dashboard and offline verification, not
+live providers, global activation, installation, commits, or pushes. Implemented a minimal
+useful first version in `extensions/swarm/dashboard.mjs`; richer visualization remains gated.
+
+Implemented:
+
+- `/swarm` and `/swarm dashboard` now open a theme-aware native custom component with
+  500 ms snapshot refresh. Overview shows objective/status, cycle/revision, recorded active
+  time, actual capacity observations, approved limits, scope/criteria, and prior-cycle records.
+- Worker focus/brief and task ownership with active SDK turn/queued/idle states; task/review,
+  claims/blockers/unresolved execution, and peer-message pages. Selecting a worker opens
+  persisted native history, including compactions. Scrolling reaches all entries, not a
+  fixed conversation tail. No model-response/message cap or new execution policy was added.
+- Prominent pause/stop keys and status-appropriate resume/restart plus reconciliation.
+  Actions return to the existing owner-session command/host gates after dashboard disposal;
+  human approval remains mandatory for continuation and reconciliation.
+- Read-only snapshot/history capabilities only. Host history validates the bound private
+  native session and returns detached entries without constructing a worker session or
+  dispatching anything. Opening/closing inspection grants no authority and does not pause.
+- Idempotent timer/abort-listener cleanup on close, action, failure, tree/switch/fork, shutdown,
+  and reload. Swarm safety requests explicitly await dashboard dismissal before presenting
+  approval; opening inspection during pending approval fails closed. This is necessary because
+  Pi UI prompt events are asynchronous/best-effort and nested prompts are coalesced.
+- Untrusted terminal controls/bidi overrides are visibly escaped; rendered lines are bounded
+  through public Pi TUI width/wrap utilities. No private cross-package imports, footer/editor
+  replacement, new global shortcut, settings edit, or activation entry was introduced.
+
+Verified against installed Pi 0.85.1:
+
+- **325 Swarm tests pass**: prior 304 plus 21 deterministic component/fake-UI/host tests.
+  Added coverage includes timer refresh and disposal, all views at 1–100 columns with long
+  Unicode/control strings, full-history navigation past 100 entries, safe read errors,
+  native identity corruption, owner-session denial, lifecycle closure, and dialog exclusion.
+- **66 Plan/Safety tests** and **4 terminal cleanup regressions** pass unchanged.
+- Extended **real CLI PTY acceptance passes**: repeated durable-time repaint without input;
+  worker/history navigation and pause at 60 columns; light-theme dashboard resume via native
+  approval; stop while streaming. Existing cancellation, reload, restart/cycle accounting,
+  dirty-work preservation, and uncertain-operation attestation scenarios still pass.
+- Repository validator reports the pre-existing model/thinking mismatch plus the two new
+  intentionally untracked source/test files. Unrelated settings remain untouched.
+
+Scope/limitations:
+
+- Usage is explicitly **not aggregated**, cost **unknown**, and persisted history can lag
+  in-flight output. No synthetic token/cost total, context-fill claim, or billing guarantee
+  is presented. Detailed tool/stream telemetry and reliable cumulative usage remain deferred.
+- This is a paged inspection console, not the full activity-tree/rich conversation design:
+  no persistent widget, chat bubbles, search, live partial transcript, or guidance editing.
+  Task/review/claim/mail/history details use structured text. Host ticks drive recorded time.
+- Selected history is fully validated/read in memory on worker/revision changes; very large
+  history performance is unverified. Pagination limits the viewport, not retained evidence
+  or model discussion. No history deletion/cleanup policy was introduced.
+- PTY checks emitted text, not pixel/viewport fidelity or human readability/contrast. Production
+  Plan/Safety terminal rendering, IME/mouse, other terminals, and arbitrary third-party custom
+  UI concurrency are not validated. Swarm-owned approval exclusion is explicitly tested.
+- Prior live-provider, semantic scope/progress, workspace/process settlement, stale-lock,
+  crash/power-loss, and activation gates remain unchanged. This phase is not full product
+  acceptance; project changes and runtime evidence remain preserved.

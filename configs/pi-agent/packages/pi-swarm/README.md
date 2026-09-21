@@ -1,4 +1,4 @@
-# Pi Swarm — offline launch and recovery controls
+# Pi Swarm — offline live dashboard and recovery controls
 
 ## Status
 
@@ -8,7 +8,8 @@ explicitly rejected. Phase 2's host-authorized workspace adapter performs guarde
 mutations and shell execution in disposable test repositories. Phase 5 adds an explicitly
 injected extension factory and native UI controls for offline testing. No default entry
 point, package registration, or activation is installed. Phase 6 adds a disposable CLI/PTY
-acceptance harness; it does not activate the package.
+acceptance harness; it does not activate the package. Phase 7 adds a continuously refreshed
+native inspection dashboard to that same explicitly injected mock-only factory.
 
 Stage 1 implements:
 
@@ -45,7 +46,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The combined suite has 304 passing tests. It includes actual local shell execution,
+The combined suite has 325 passing tests. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -70,6 +71,7 @@ UI contexts. These are not live-model, interactive-terminal, or power-loss tests
 | `extensions/swarm/sdk-session.mjs` | Non-discovering SDK factory, mock-only gate, private native JSONL validation and synchronization. |
 | `extensions/swarm/session-tools.mjs`, `specializations.mjs` | Uniform model-visible tool definitions and generated specialist/context prompts. |
 | `extensions/swarm/extension.mjs`, `ui.mjs` | Opt-in mock-runtime factory, cancellable native launch/recovery dialogs, commands and lifecycle hooks. |
+| `extensions/swarm/dashboard.mjs` | Refreshing, paged, read-only native dashboard; actions return to the existing host controls. |
 | `test/` | Foundation, host recovery, and offline real-SDK/factory integration tests. |
 
 ## Host API and trust boundary
@@ -327,7 +329,8 @@ There is no model discovery, credential lookup, network refresh, or dependency-i
 Optional host inputs include thinking level, wrapped coding tools, instructions, and a trusted
 runner seam for disposable mock tests. Runner injection is never a command or model argument.
 
-When explicitly injected, `/swarm` opens a native control menu. Commands are:
+When explicitly injected, `/swarm` now opens the phase-7 dashboard described below.
+The phase-5 commands remain available:
 
 - `start <goal>`: enter acceptance criteria and scope/exclusions as JSON string arrays;
   inspect the complete agreement; optionally edit each field using JSON input; then approve.
@@ -430,21 +433,69 @@ or a full terminal-emulator viewport. Long structured summaries use terminal scr
 readability/contrast, IME, mouse, other terminal emulators, and human judgment remain
 unverified. This is automated keyboard acceptance, not a human sign-off. No live provider,
 network-backed operation, crash/power-loss recovery, or stale-lock takeover is exercised.
-The continuously refreshed dashboard and usage aggregation remain deferred.
+Phase 7 below adds dashboard acceptance; usage aggregation remains deferred.
+
+## Phase 7 mock-only live dashboard
+
+`/swarm` or `/swarm dashboard` opens a native `ctx.ui.custom` inspection view. It refreshes
+host snapshots every 500 ms while open; it does not create a host, grant approval, wake a
+worker, or change model conversation limits. The existing `/swarm status` remains available.
+
+- `1` Overview: objective, status, cycle/revision, recorded active time, current capacity,
+  approved limits, criteria/scope, prior cycles, and errors. Time follows durable host ticks,
+  not a fabricated continuously running timer.
+- `2` Workers: stable focus/brief, current task IDs, active SDK turn, queued, or idle status.
+  Left/right selects a specialist; Enter opens its persisted native history.
+- `3` Tasks/review, `4` Claims/blockers/unresolved execution, `5` peer messages, `6` history.
+  Structured detail is intentionally plain rather than a rich chat/tool renderer.
+- Arrows/PageUp/PageDown scroll; Home/End reach either end. History includes all persisted
+  native entries, including compaction records; viewport pagination does not discard history.
+- `p` **Pause**, `s` **Stop**, `r` resume when paused, `R` restart when eligible, and `c`
+  reconcile. Escape closes inspection without pausing work. Continuation/reconciliation
+  closes the dashboard before the existing human approval flow; it never bypasses policy.
+
+The component receives only snapshot/history functions, not host execution capabilities.
+`SwarmHost.history(workerId)` validates the bound native file/identity and returns detached
+records without constructing SDK sessions. Persisted history may lag in-flight output.
+Usage is **not aggregated** and cost is explicitly **unknown**; mock zero pricing is not
+represented as a real billing estimate. Current active/queued counts are driver observations,
+not token/cost estimates. No tool-by-tool streaming telemetry or context-fill metric is claimed.
+
+Refresh timers and abort listeners are disposed on close, action, UI failure, navigation,
+shutdown, and reload. Opening while a Swarm approval is pending is refused. A worker safety
+request explicitly dismisses and awaits the dashboard before invoking its provider; Pi's
+best-effort/coalesced UI prompt events alone are not used as a dialog serialization guarantee.
+All command actions verify the same owner session; controls retain host mode/approval gates.
+
+Verification: **325 Swarm tests** (304 prior + 21 dashboard/history regressions), **66 provider
+regressions**, **4 PTY cleanup tests**, and the extended real CLI PTY scenario pass offline.
+Tests cover deterministic refresh/disposal, navigation past 100 history entries, width bounds
+at 1–100 columns, Unicode/control escaping, read failures, foreign-session denial, lifecycle
+closure, and safety/continuation dialog exclusion. The PTY observes repeated host-tick repaint
+without input, 60-column worker/history navigation and pause, light-theme resume, and stop.
+No live provider, activation, dependency install, commit, or push is part of this phase.
+
+Limitations: this is a minimal useful first dashboard, not the full proposed activity tree.
+There is no persistent above-editor widget, rich conversation bubbles/tool rendering,
+search, live partial transcript, usage aggregation, or dashboard guidance editing. Detail is
+line-paged structured text. Complete histories are validated/read in memory when the selected
+worker or run revision changes; very large histories are not performance-validated. Terminal
+assertions inspect emitted text, not a full viewport emulator or human visual acceptance.
+Swarm-owned approval exclusion is verified; arbitrary third-party custom-UI concurrency is
+not a general modal arbitration contract. Existing recovery/settlement limitations still apply.
 
 ## Deferred before activation
 
 - Live model/provider support and validation; phase 3 rejects it intentionally.
-- Human visual TUI acceptance, production policy-provider terminal integration, and a compact
-  live activity tree/richer dashboard. The current native menu and on-demand structured status
-  are not a continuously refreshed dashboard.
+- Human visual TUI acceptance, production policy-provider terminal integration, a compact
+  persistent activity tree, and richer dashboard/conversation rendering.
 - Full native coding-tool presentation parity and additional coding tools.
 - Human/model evaluation of check adequacy and narrower verification relevance. A mocked
   successful workflow is not proof of useful real model work or independently proven settlement.
 - Semantic scope/specialization checks, duplicate-recruitment judgments, and detection of
   repetitive non-progressing discussion. Capacity/revision checks do not replace those judgments.
 - Automatic compaction policy and session-slot yielding during live tool waits.
-- Scope revision, history/transcript UI, usage aggregation, safe stale-owner recovery, and
+- Scope revision, rich/streaming transcript UI, usage aggregation, safe stale-owner recovery, and
   package activation. There is no automatic cleanup, commit, push, or rollback.
 
 Keep this package inactive until those adapters and their lifecycle tests are complete.

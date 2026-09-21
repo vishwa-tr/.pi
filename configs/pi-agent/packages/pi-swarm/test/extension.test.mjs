@@ -1,12 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { matchesKey } from "@earendil-works/pi-tui";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createSwarmExtension } from "../extensions/swarm/extension.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { createMockRuntime } from "./sdk-env.mjs";
 import { repository } from "./helpers.mjs";
+
+function dashboardUI(f) {
+	let view;
+	f.ctx.ui.custom = factory => new Promise(resolve => {
+		f.event("ui_prompt_start", { kind: "custom" });
+		const bindings = { matches: (data, action) => matchesKey(data, action === "tui.select.cancel" ? "escape" : action === "tui.select.confirm" ? "enter" : "up") };
+		view = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_, text) => text }, bindings, resolve);
+	});
+	return () => view;
+}
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 async function until(predicate) {
@@ -226,4 +237,70 @@ test("live uncertain shell requires explicit evidence; attestation does not manu
 	assert.equal(c.snapshot().settlementAttestations.length, 1);
 	assert.equal(f.mock.calls.length, 3);
 	await c.close();
+});
+
+for (const action of ["close", "pause", "stop", "tree", "shutdown", "prompt"]) {
+ test(`dashboard ${action} disposes inspection without spontaneous dispatch`, async t => {
+  const f = await fixture(t, { script: () => ({ waitForAbort: true }) });
+  const view = dashboardUI(f);
+  await f.command("start goal"); await until(() => f.mock.calls.length === 1);
+  const opened = f.command("dashboard");
+  assert.match(view().render(60).join("\n"), /SWARM live/);
+  if (action === "close") view().handleInput("\x1b");
+  else if (action === "pause") view().handleInput("p");
+  else if (action === "stop") view().handleInput("s");
+  else if (action === "tree") await f.event("session_before_tree");
+  else if (action === "shutdown") await f.event("session_shutdown", { reason: "reload" });
+  else await f.event("ui_prompt_start", { kind: "confirm" });
+  await opened;
+  assert.equal(view().closed, true);
+  assert.equal(f.mock.calls.length, 1);
+  if (action === "pause") assert.equal((await f.status()).status, "paused");
+  if (action === "stop") assert.equal((await f.status()).status, "stopped");
+  await f.event("session_shutdown");
+ });
+}
+
+test("dashboard continuation closes before human approval and cannot overlap controls", async t => {
+ const f = await fixture(t); const view = dashboardUI(f);
+ await f.command("start goal"); await f.command("pause");
+ f.responses.select.push(() => { assert.equal(view().closed, true); return "Cancel"; });
+ const opened = f.command("");
+ await assert.rejects(f.command("resume"), { code: "BUSY" });
+ view().handleInput("r");
+ await assert.rejects(opened, { code: "AUTHORITY" });
+ assert.equal((await f.status()).status, "paused");
+ await f.event("session_shutdown");
+});
+
+test("worker safety approval dismisses dashboard first and blocks reopening until settled", async t => {
+	const ready = deferred(); const answer = deferred(); let shown = false;
+	const f = await fixture(t, { script: async ({ index }) => {
+		if (index === 0) { await ready.promise; return { toolCalls: [{ name: "swarm_task", arguments: { action: "create", id: "task1", title: "Check", criteria: [0], dependencies: [] } }] }; }
+		if (index === 1) return { toolCalls: [{ name: "swarm_task", arguments: { action: "claim", taskId: "task1", kind: "build" } }] };
+		if (index === 2) return { toolCalls: [{ name: "bash", arguments: { command: "true" } }] };
+		return { text: "Done" };
+	} });
+	const view = dashboardUI(f);
+	f.events.removeAllListeners("swarm:confirm-request");
+	f.events.on("swarm:confirm-request", request => request.claim(async () => {
+		assert.equal(view().closed, true); shown = true; return answer.promise;
+	}));
+	await f.command("start goal");
+	const opened = f.command("dashboard"); ready.resolve();
+	await until(() => shown); await opened;
+	await assert.rejects(f.command("dashboard"), { code: "BUSY" });
+	answer.resolve({ approved: false });
+	await f.command("pause"); await f.event("session_shutdown");
+});
+
+test("dashboard with no run is read-only; foreign session cannot use brakes or inspect host", async t => {
+ const f = await fixture(t); const view = dashboardUI(f);
+ const opened = f.command(""); view().handleInput("\x1b"); await opened;
+ assert.equal(existsSync(join(f.root, ".swarms")), false);
+ assert.equal(f.mock.calls.length, 0);
+ await f.command("start goal");
+ f.ctx.sessionManager.getSessionId = () => "other";
+ for (const action of ["dashboard", "pause", "stop", "status"]) await assert.rejects(f.command(action), { code: "OWNERSHIP" });
+ await f.event("session_shutdown");
 });

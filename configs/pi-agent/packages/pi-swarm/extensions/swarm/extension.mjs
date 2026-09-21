@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { SwarmHost } from "./host.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { requestUserApproval, statusText } from "./ui.mjs";
+import { showDashboard } from "./dashboard.mjs";
 
 const LINK = "swarm-run-v1";
 
@@ -14,6 +15,8 @@ export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = 
 		let context;
 		let command;
 		let retired = false;
+		let viewing = false;
+		let dashboard;
 		const cancel = () => command?.abort();
 		const notify = (ctx, text, level = "info") => { if (ctx.hasUI) ctx.ui.notify(text, level); };
 		const ensureHost = ctx => {
@@ -23,7 +26,8 @@ export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = 
 			if (!host) {
 				owner = sessionId;
 				host = new SwarmHost({ events: pi.events, sessionId, modelRuntime, mainModel, thinkingLevel, codingTools, instructions, runner, tickIntervalMs, approvalTimeoutMs,
-					requestApproval: request => requestUserApproval(context, request) });
+					requestApproval: request => requestUserApproval(context, request),
+					beforePrompt: async () => { if (viewing) { cancel(); await dashboard; } } });
 			}
 			context = ctx;
 			return host;
@@ -41,10 +45,14 @@ export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = 
 			return result;
 		};
 
+		// Yield the inspection view before a worker's native safety dialog is presented.
+		pi.on("ui_prompt_start", event => { if (viewing && event.kind !== "custom") cancel(); });
+
 		pi.registerCommand("swarm", {
-			description: "Opt-in mock Swarm launch, status, pause, stop, resume, restart, and reconciliation",
+			description: "Mock Swarm live dashboard, launch, status, pause, stop, resume, restart, and reconciliation",
 			handler: async (args, ctx) => {
 				const [action = "", ...rest] = args.trim().split(/\s+/);
+				check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot control the Swarm host");
 				if (action === "pause" || action === "stop") { await brake(ctx, action === "stop"); return; }
 				if (action === "status") { notify(ctx, statusText(host?.snapshot())); return; }
 				check(!retired && !command, "BUSY", "Swarm control is busy or this extension instance is retired");
@@ -53,7 +61,14 @@ export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = 
 				command = pending;
 				try {
 					let selected = action;
-					if (!selected) selected = await ctx.ui.select(statusText(host?.snapshot()), ["Cancel", "pause", "stop", "resume", "restart", "reconcile", "status"], { signal: pending.signal });
+					if (!selected || selected === "dashboard") {
+						const source = Object.freeze({ snapshot: () => host?.snapshot(), history: workerId => host.history(workerId) });
+						check(!host?.snapshot().pendingApproval, "BUSY", "A Swarm approval dialog is already active");
+						try {
+							dashboard = showDashboard(ctx, source, pending.signal, () => { viewing = true; });
+							selected = await dashboard;
+						} finally { viewing = false; dashboard = undefined; }
+					}
 					if (!selected || selected === "Cancel" || pending.signal.aborted) return;
 					if (selected === "status") { notify(ctx, statusText(host?.snapshot())); return; }
 					if (["pause", "stop"].includes(selected)) { await brake(ctx, selected === "stop"); return; }
@@ -86,6 +101,7 @@ export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = 
 					throw error;
 				} finally {
 					remember(ctx);
+					viewing = false;
 					if (command === pending) command = undefined;
 				}
 			},

@@ -12,7 +12,7 @@ if (!process.execArgv.includes("--experimental-import-meta-resolve")) {
 }
 const parent = pathToFileURL(manifest).href;
 const roots = {};
-for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "@earendil-works/pi-agent-core", "typebox"]) {
+for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "@earendil-works/pi-agent-core", "@earendil-works/pi-tui", "typebox"]) {
 	roots[name] = import.meta.resolve(name, parent);
 }
 const source = `

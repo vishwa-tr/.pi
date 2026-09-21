@@ -106,7 +106,14 @@ function validateSession(path, cwd) {
 		}
 		ids.add(entry.id);
 	}
-	return header;
+	return { header, entries };
+}
+
+/** Read validated native history without constructing a session or exposing a manager. */
+export function readSessionHistory(path, cwd, sessionId) {
+	const { header, entries } = validateSession(path, cwd);
+	invariant(header.id === sessionId, "Session history identity changed");
+	return entries;
 }
 
 // This is deliberately not DefaultResourceLoader: even a reload cannot discover local resources.
@@ -130,7 +137,7 @@ function isolatedLoader(systemPrompt) {
 function openManager(cwd, sessionDir, sessionFile) {
 	if (sessionFile !== undefined) {
 		invariant(dirname(sessionFile) === sessionDir, "Session file must be inside its private directory");
-		const header = validateSession(sessionFile, cwd);
+		const { header } = validateSession(sessionFile, cwd);
 		const manager = SessionManager.open(sessionFile, sessionDir);
 		invariant(manager.getSessionId() === header.id, "SDK changed session identity");
 		return manager;
@@ -198,7 +205,7 @@ export async function createSdkSession({ cwd, sessionDir, sessionFile, modelRunt
 			canonicalPath(sessionDir);
 			privateDirectory(sessionDir);
 			invariant(manager.getSessionId() === id && manager.getSessionFile() === path, "Session identity changed");
-			invariant(validateSession(path, cwd).id === id, "Session file identity changed");
+			invariant(validateSession(path, cwd).header.id === id, "Session file identity changed");
 			const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 			try { checkedFile(fd); fsyncSync(fd); } finally { closeSync(fd); }
 			syncDirectory(sessionDir);

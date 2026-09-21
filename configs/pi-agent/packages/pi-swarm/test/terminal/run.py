@@ -183,7 +183,15 @@ def main():
             terminal.choose(1)
             terminal.expect('"status": "running"')
             wait_event("worker-start")
-            terminal.line("/swarm pause")
+            terminal.line("/swarm dashboard")
+            terminal.expect("SWARM live / mock only | running")
+            terminal.expect("Recorded active time:")
+            terminal.expect("Recorded active time:")  # host ticks repaint without keyboard input
+            terminal.send("2")
+            terminal.expect("active SDK turn")
+            terminal.send("\r")
+            terminal.expect("Native persisted history")
+            terminal.send("p")
             wait_event("worker-abort")
             time.sleep(0.3)
             terminal.line("/swarm status")
@@ -207,10 +215,8 @@ def main():
             terminal.line("/fixture-light")
             terminal.expect("Fixture light theme selected")
             terminal.line("/swarm")
-            terminal.expect("escape/ctrl+c cancel")
-            terminal.choose(0)
-            time.sleep(0.2)
-            terminal.line("/swarm resume")
+            terminal.expect("SWARM live / mock only | paused")
+            terminal.send("r")
             terminal.expect("RESUME (mock only)")
             terminal.choose(1)
             terminal.expect("Preserve and proceed?")
@@ -218,7 +224,9 @@ def main():
             terminal.expect("Workspace reconciliation")
             terminal.choose(0)
             wait_event("worker-start", 3)
-            terminal.line("/swarm stop")
+            terminal.line("/swarm dashboard")
+            terminal.expect("SWARM live / mock only | running")
+            terminal.send("s")
             wait_event("worker-abort", 3)
             time.sleep(0.3)
             terminal.line("/swarm status")
@@ -270,7 +278,7 @@ def main():
             finishes = [event for event in journal if event["type"] == "workspace.finish"]
             assert len(finishes) == 1 and finishes[0]["payload"]["outcome"] == "unknown"
             assert not any(event["type"] == "run.complete" for event in journal), "Stopped is not completed"
-            print("PASS: native cancellation, 60-column launch/edit/preservation, streaming pause/resume/reload, stop/restart, uncertain-operation attestation")
+            print("PASS: native cancellation, 60-column launch/edit/preservation, live dashboard refresh/history/pause/resume/stop, streaming reload, restart, uncertain-operation attestation")
         finally:
             terminal.close()
 
