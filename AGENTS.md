@@ -187,6 +187,32 @@ target runtime's discovery contract first. In Pi, project skills use `.agents/sk
 project subagent definitions use `.pi/subagents/<type>.md`, and executable saved procedures use
 `.pi/procedures/<name>.js`.
 
+## JavaScript and React Import Ordering
+
+Order JavaScript/React imports by shape, not alphabetically and not by module type:
+
+1. Wrapped multi-line import blocks go at the very top. Sort the members inside each block alphabetically.
+2. Single-line imports follow, ordered roughly from the shortest line to the longest, so the header reads as a ramp.
+3. The `React` import is usually the longest line, so it ends up at the bottom.
+
+Example:
+
+```js
+import {
+    NOTIFY_ALERT_ACHIEVEMENT,
+    NOTIFY_ALERT_FEEDBACK,
+    NOTIFY_CHANNEL,
+} from "@imanus/shared";
+import { useNetwork } from "./network";
+import { AppState } from "react-native";
+import { STATUS_READY, useApp } from "./app";
+import { pushService } from "../services/index";
+import * as Notifications from "expo-notifications";
+import React, { createContext, useContext, useEffect, useState } from "react";
+```
+
+Apply this only to the imports of files you are already changing. Do not reorder imports in unrelated files.
+
 ## Working Style
 
 - Consult the global `readable-code` skill for non-trivial implementation or refactoring unless more
