@@ -27,7 +27,7 @@ Use a deterministic controller for scheduling, ownership, persistence, limits, a
 
 **Confirmed specialist reuse policy:** prefer an existing suitable specialist. Before recruiting another, check current work, queued work, task dependencies, likely file overlap, and whether enough independent work exists to benefit from parallel execution. Require a concrete justification for another specialist. Being busy alone is insufficient; do not use a repeated-busy-check count or arbitrary busy threshold. Another specialist is allowed for useful, independent parallel work within approved limits.
 
-Stages 1–5 (controller/persistence, workspace safeguards, offline SDK integration, host approval/policy integration, and opt-in launch/recovery UI controls) are authorized and implemented; see sections 10–14. SDK execution remains restricted to deterministic mock providers. Phase 5 UI is tested through fake native UI contexts; authorized Phase 6 adds isolated automated CLI/PTY acceptance (section 15). Authorized Phase 7 adds a mock-only live dashboard and read-only history navigation (section 16). Live model execution and activation remain unauthorized. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
+Stages 1–5 (controller/persistence, workspace safeguards, offline SDK integration, host approval/policy integration, and opt-in launch/recovery UI controls) are authorized and implemented; see sections 10–14. SDK execution remains restricted to deterministic mock providers. Phase 5 UI is tested through fake native UI contexts; authorized Phase 6 adds isolated automated CLI/PTY acceptance (section 15). Authorized Phase 7 adds a mock-only live dashboard and read-only history navigation (section 16). Authorized Phase 8 adds real CLI acceptance with production Plan/Safety providers (section 17). Live model execution and activation remain unauthorized. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
 
 Record decisions in this document as discussion proceeds and update affected sections so superseded designs do not remain implementation requirements.
 
@@ -991,3 +991,77 @@ Scope/limitations:
 - Prior live-provider, semantic scope/progress, workspace/process settlement, stale-lock,
   crash/power-loss, and activation gates remain unchanged. This phase is not full product
   acceptance; project changes and runtime evidence remain preserved.
+
+### 17. Phase 8 production Plan/Safety terminal integration
+
+The user authorized production policy-provider acceptance together with deterministic mock
+Swarm SDK sessions, real terminal dialogs, mode transitions, cancellation, reload, and shutdown.
+Live providers, global activation, dependency installation, settings normalization, commits,
+pushes, and parent-checkout changes remain excluded. Work began from clean `727559b` on
+`feat/pi-swarm`.
+
+Added `test/terminal/production.py`, `production-fixture.ts`, and `assert-production.mjs`.
+The test-only composition explicitly calls the actual pi-plan and pi-safety factories beside
+Swarm's injected mock-only factory. No synthetic mode publisher or safety provider is used
+in this scenario, and production Swarm gains no cross-package private imports. The earlier
+Phase 6/7 PTY scenario remains intact. Both reuse its existing bounded TERM/KILL and confirmed
+child-exit cleanup guard; no dependency-install fallback is introduced.
+
+Run from the repository root:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/terminal/production.py
+```
+
+Verified with installed Pi 0.85.1, Node, Python's standard-library PTY, and disposable Git:
+
+- Production safety serialization of three public-channel requests: cancel the queued second
+  request without opening UI, cancel the active first dialog, then deny the third. Repeat
+  after native reload to verify exactly one provider claim. These are test-only requesters;
+  Swarm's exclusive shell leases deliberately do not generate parallel shell confirmations.
+- Select Discuss using production Shift+Tab during launch approval. The native dialog cancels
+  without run storage or worker dispatch. Return Off, approve a fresh launch, and explicitly
+  preserve the fixture's pre-existing dirty work.
+- Actual main CLI mock turns exercise Off→Quick and Quick→Off before settlement. Observations
+  show selected/enforced differences and pending transitions. Swarm pauses on restriction,
+  denies resume when Off is selected but Quick is still enforced, and never auto-resumes on
+  returning Off. Plan denies both resume and restart; its return Off also grants no authority.
+- Explicitly resumed real SDK workers create/claim tasks and request benign `node -e` shell
+  commands. A held mock response lets the dashboard open first, then verifies dismissal before
+  production Safety's custom dialog. Approve one command, deny another, and select Discuss
+  during a third confirmation to revoke it without execution.
+- Native `/reload` during streaming aborts work, replaces the production mode instance, and
+  restores paused without model dispatch. Native CLI SIGTERM shutdown during worker safety
+  confirmation dismisses UI and settles SDK frames/assignments before the child exits.
+- Replay every durable event through the reducer: five explicit resumes keep cycle 1 and
+  consumed allowances; one shell intent/receipt succeeds with actual exit 0 and unchanged
+  checkout fingerprint; denied/cancelled commands have no execution records. Native worker
+  history records actual approved stdout plus three failed/cancelled tool results. Final
+  state is paused, not completed, with no unresolved operation, turn, or assignment.
+- Observe native dialog methods without substituting their behavior: open/close records are
+  balanced, production Safety opens exactly the expected eight dialogs, and no observed
+  dialogs overlap. The cancelled queue position never appears in terminal output.
+- Minimal environment, ephemeral HOME/agent/project, no copied credentials, unchanged dirty
+  fixture content, empty auth state, and audit argument omission are asserted. The native CLI
+  adds only changelog-version bookkeeping to the disposable settings; host settings are untouched.
+
+Verification: **325 Swarm tests**, **66 provider tests**, **4 cleanup regressions**, and
+**both real CLI PTY scenarios** pass. No production defect was exposed and no production
+implementation fix was needed. The baseline repository validator reported only its existing
+model/thinking default mismatch. Final validation also lists the three intentionally untracked
+Phase 8 test files; changes remain uncommitted and unrelated defaults remain unchanged.
+
+Limitations and remaining gates:
+
+- This is automated native keyboard/ANSI plus durable-record acceptance, not human visual
+  sign-off, pixel/viewport validation, or general third-party modal arbitration. The scripted
+  main provider intentionally delays abort completion briefly to expose pending enforcement.
+- Public-channel queue probes do not execute commands; actual worker execution is separately
+  evidenced by the shell receipt and native history. Dangerous/destructive/network categories
+  and their delayed or multi-step dialogs were not terminal-exercised. No live keys/models,
+  network commands, or arbitrary side effects are needed for these checks.
+- Shutdown settlement does not prove termination of escaped daemons or external processes.
+  Crash/power-loss recovery, stale-owner takeover, other terminals, IME/mouse, human contrast
+  judgment, semantic scope/progress, usage aggregation, and activation remain deferred.
+- Test fixtures are removed only after confirmed CLI exit, as before. No persistent personal
+  configuration or global activation is needed to rerun this acceptance.

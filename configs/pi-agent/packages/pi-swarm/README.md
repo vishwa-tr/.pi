@@ -9,7 +9,8 @@ mutations and shell execution in disposable test repositories. Phase 5 adds an e
 injected extension factory and native UI controls for offline testing. No default entry
 point, package registration, or activation is installed. Phase 6 adds a disposable CLI/PTY
 acceptance harness; it does not activate the package. Phase 7 adds a continuously refreshed
-native inspection dashboard to that same explicitly injected mock-only factory.
+native inspection dashboard to that same explicitly injected mock-only factory. Phase 8
+adds separate real CLI acceptance with the actual production Plan/Safety factories.
 
 Stage 1 implements:
 
@@ -484,10 +485,65 @@ assertions inspect emitted text, not a full viewport emulator or human visual ac
 Swarm-owned approval exclusion is verified; arbitrary third-party custom-UI concurrency is
 not a general modal arbitration contract. Existing recovery/settlement limitations still apply.
 
+## Phase 8 production policy-provider terminal acceptance
+
+With the same installed-tool prerequisites as Phase 6, run:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/terminal/production.py
+```
+
+This separate scenario explicitly composes the **production pi-plan and pi-safety
+factories** with Swarm's mock-only factory. It does not replace either policy provider,
+activate global packages, install dependencies, copy credentials, or contact live models.
+The earlier `run.py` scenario remains unchanged, including its synthetic policy fixtures
+and simulated uncertainty. Both scenarios reuse its bounded TERM/KILL cleanup guard.
+
+Verified with Pi 0.85.1:
+
+- Production safety custom dialogs serialize three public-protocol requests. Cancel a
+  queued request before it opens, cancel the active dialog, then deny the remaining one.
+  Repeat after native reload to check that provider claims do not accumulate. These are
+  test-only **requesters**, not replacement providers or concurrent worker shell leases.
+- Shift+Tab selects Discuss during a native launch agreement: approval is revoked and no
+  run storage is created. Explicitly return Off, approve launch, and preserve dirty work.
+- Real main CLI mock turns retain their old enforced mode during Off→Quick and Quick→Off
+  transitions. Swarm pauses on restriction and rejects resume while Off is selected but
+  Quick remains enforced. Returning Off never resumes workers. Plan also denies resume
+  and restart; returning Off again grants no execution authority.
+- Explicit resume drives real SDK task creation/claim and a benign `node -e` shell call.
+  Opening the dashboard before that call verifies it closes before production Safety UI.
+  Approve one command, deny another, and select Discuss during a third confirmation.
+- Native `/reload` during worker streaming aborts and restores paused without dispatch.
+  Production mode instance identity changes. Native CLI SIGTERM shutdown during a worker
+  confirmation cancels the dialog and settles SDK turns/assignments to paused.
+- Reducer replay asserts five approved same-cycle resumes, retained allowances, exactly
+  one actual successful shell receipt (exit 0, unchanged checkout fingerprint), no denied
+  or cancelled effects, no completion claim, and no unresolved operations/turns. Native
+  worker history contains actual approved stdout and three failed/cancelled tool results.
+  Native dialog-call observation asserts no overlap and balanced open/close lifetimes.
+- Disposable HOME/agent/project isolation is checked; original dirty content survives.
+  Only native changelog bookkeeping changes the fixture settings, auth stays empty, and
+  production audit records omit command arguments. No personal settings are modified.
+
+Verification remains **325 Swarm tests, 66 provider tests, 4 cleanup regressions**, plus
+**both real CLI PTY scenarios**. No production fix was required. The repository validator
+reports its pre-existing model/thinking default mismatch plus the three intentionally
+untracked Phase 8 test files; defaults are not normalized and changes remain uncommitted.
+
+Limits: automated keyboard/ANSI and durable-record acceptance, **not human visual sign-off**
+or a viewport/pixel test. The main mock intentionally delays abort completion briefly to
+observe selected/enforced states. Queue probes never execute their commands; worker shell
+execution is separately proven by receipts and native history. No dangerous, destructive,
+network, or live-provider commands are exercised; delayed destructive/network confirmation
+categories are not terminal-validated here. Shutdown settlement is not proof about escaped
+processes, arbitrary external effects, crashes, or power loss. General third-party modal
+arbitration, other terminals, IME/mouse, and all remaining activation gates stay deferred.
+
 ## Deferred before activation
 
 - Live model/provider support and validation; phase 3 rejects it intentionally.
-- Human visual TUI acceptance, production policy-provider terminal integration, a compact
+- Human visual TUI acceptance, broader policy/category/terminal acceptance, a compact
   persistent activity tree, and richer dashboard/conversation rendering.
 - Full native coding-tool presentation parity and additional coding tools.
 - Human/model evaluation of check adequacy and narrower verification relevance. A mocked
