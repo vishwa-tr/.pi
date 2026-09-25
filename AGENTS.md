@@ -215,9 +215,11 @@ Apply this only to the imports of files you are already changing. Do not reorder
 
 ## Working Style
 
-- Organize modules in top-down call-flow order when local conventions allow: put exported or public
-  entry points before private helpers, order helpers roughly as callers encounter them, and keep
-  low-level leaf utilities later in the file.
+- Organize modules in top-down call-flow order when local conventions allow: after imports and
+  module setup, put exported or public entry points before private helpers, order helpers roughly
+  as callers encounter them, and keep low-level leaf utilities later in the file. Preserve required
+  declaration order, initialization dependencies, and side-effect order. Apply this preference when
+  writing new code or modifying existing code; do not reorder unrelated code unless explicitly requested.
 - Consult the global `readable-code` skill for non-trivial implementation or refactoring unless more
   specific project guidance takes precedence.
 - If something I ask for is technically wrong or impossible, say so and propose a workable
