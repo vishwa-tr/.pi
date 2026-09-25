@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync, spawnSync } from "node:child_process";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync } from "node:fs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
@@ -11,7 +11,6 @@ const notes = [];
 
 const EXPECTED_PACKAGE_COUNT = 32;
 const EXPECTED_SKILL_COUNT = 33;
-const ROOT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
 const AGENT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
 
 function fail(message) {
@@ -43,7 +42,7 @@ function sameJson(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix, checkPackageFiles = true) {
+function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix) {
   if (!Array.isArray(settings.packages)) {
     fail(`${settingsRelPath} packages must be an array`);
     return;
@@ -66,7 +65,6 @@ function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix, 
     if (packagePath.includes("_archive") || packagePath.toLowerCase().includes("/archive/")) {
       fail(`${settingsRelPath} active package points into an archive: ${packagePath}`);
     }
-    if (!checkPackageFiles) continue;
     const absolutePackage = resolve(baseDir, packagePath);
     let stat;
     try {
@@ -96,7 +94,7 @@ function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix, 
   }
 }
 
-function validateSettingsFile({ relativePath, baseDir, allowedKeys, optionalKeys = [], packagePrefix, expectedSkills, checkPackageFiles = true }) {
+function validateSettingsFile({ relativePath, baseDir, allowedKeys, optionalKeys = [], packagePrefix, expectedSkills }) {
   const settings = readJson(join(root, relativePath));
   if (!settings) return undefined;
   const keys = Object.keys(settings).sort();
@@ -117,22 +115,10 @@ function validateSettingsFile({ relativePath, baseDir, allowedKeys, optionalKeys
   if (expectedSkills !== undefined && !sameJson(settings.skills, expectedSkills)) {
     fail(`${relativePath} skills must be ${JSON.stringify(expectedSkills)}; found: ${JSON.stringify(settings.skills)}`);
   }
-  validatePackageList(settings, relativePath, baseDir, packagePrefix, checkPackageFiles);
+  validatePackageList(settings, relativePath, baseDir, packagePrefix);
   return settings;
 }
 
-const rootSettings = validateSettingsFile({
-  relativePath: "settings.json",
-  baseDir: root,
-  allowedKeys: ["defaultModel", "defaultProvider", "defaultThinkingLevel", "packages", "theme"],
-  packagePrefix: ROOT_PACKAGE_PREFIX,
-});
-// The agent/ shim is active when the repository is checked out one level above
-// Pi's effective agent dir (repo at ~/.pi, live config at ~/.pi/agent). When the
-// repository is checked out directly as ~/.pi/agent, these nested shims are
-// dormant; validate their JSON shape but not the intentionally out-of-layout
-// symlink targets.
-const agentShimActive = existsSync(join(root, "agent", "configs", "pi-agent", "packages"));
 const agentSettings = validateSettingsFile({
   relativePath: "agent/settings.json",
   baseDir: join(root, "agent"),
@@ -140,11 +126,7 @@ const agentSettings = validateSettingsFile({
   optionalKeys: ["lastChangelogVersion"],
   packagePrefix: AGENT_PACKAGE_PREFIX,
   expectedSkills: ["./skills"],
-  checkPackageFiles: agentShimActive,
 });
-if (rootSettings && agentSettings && !sameJson(rootSettings.packages, agentSettings.packages)) {
-  fail("agent/settings.json packages must mirror root settings.json packages");
-}
 
 function validateKeybindings(relativePath) {
   const keybindings = readJson(join(root, relativePath));
@@ -603,7 +585,6 @@ for (const ignoredPath of [
   if (result.status !== 0) fail(`expected ignored path is not covered: ${ignoredPath}`);
 }
 
-notes.push(`${rootSettings?.packages?.length ?? 0} root package paths`);
 notes.push(`${agentSettings?.packages?.length ?? 0} agent-dir package paths`);
 notes.push(`${skillFiles.length} global skills`);
 notes.push(`${expectedDefinitions.length} shared subagent/team definitions`);
