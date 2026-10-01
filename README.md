@@ -6,32 +6,30 @@ This repository is designed to be cloned as the portable Pi configuration tree:
 ~/.pi
 ```
 
-Pi's effective global agent directory is still `~/.pi/agent`; the tracked
-`agent/` shims expose the repository's settings, keybindings, context, skills,
-package sources, shared subagent definitions, and procedure library from that
-location. Runtime state and credentials under `agent/` remain ignored.
+Pi's effective global agent directory is `~/.pi/agent`. The tracked
+`agent/settings.json` is the sole settings file; package and skill paths resolve
+relative to `agent/`. Its resource shims expose the repository's package sources,
+skills, shared subagent definitions, and procedure library from that location.
+Runtime state and credentials under `agent/` remain ignored.
 
-The repository can also be cloned directly to `~/.pi/agent`; in that layout the
-root files are Pi's effective agent config and the nested `agent/` shims are
-dormant.
+Clone the whole tree to `~/.pi`. Cloning directly to `~/.pi/agent` no longer
+provides settings at Pi's effective agent root.
 
 Keep the root `AGENTS.md` filename uppercase; Pi loads it as global guidance.
 `AGENTS.md` at the repository root is the sole source of global instructions.
 `agent/AGENTS.md` is a regular Markdown pointer, not a symlink or duplicate: when
 Pi loads it, the agent must read `../AGENTS.md` relative to that pointer file.
-This avoids symlink privileges for instruction loading on Windows. In the
-agent-dir-only installation, Pi loads the root instructions directly and the
-nested pointer is dormant. Other resource shims still use symlinks.
+This avoids symlink privileges for instruction loading on Windows. Other
+resource shims still use symlinks.
 
 It combines portable Pi configuration with reusable agent materials and the
-source of the local Pi packages enabled by `settings.json`.
+source of the local Pi packages enabled by `agent/settings.json`.
 
 ## Layout
 
 ```text
 <repository-root>/
 ├── AGENTS.md                 # Global agent instructions and documentation router
-├── settings.json             # Portable settings; relative package paths
 ├── keybindings.json          # Global keybindings
 ├── skills/                   # Auto-discovered global Pi skills
 ├── subagents/                # Definitions shared by Pi Subagents and Pi Teams
@@ -39,7 +37,9 @@ source of the local Pi packages enabled by `settings.json`.
 ├── configs/pi-agent/docs/     # Package-specific plans and notes
 ├── plans/                    # Reusable plans and procedures
 ├── procedures/                # Reusable Markdown procedures
-├── agent/                    # Compatibility shims when repo is cloned as ~/.pi
+├── agent/                    # Effective global agent configuration
+│   ├── settings.json         # Sole settings file; agent-relative paths
+│   └── ...                   # Instructions, keybindings, and resource shims
 ├── codex/                    # Codex configuration sources
 ├── mcp/                      # Reusable MCP definitions and notes
 └── scripts/                  # Configuration validation
@@ -53,7 +53,7 @@ directories, which the procedure loader ignores.
 ## Repository guidance
 
 This README is the source of truth for repository-specific layout and a high-level package
-behavior overview. `settings.json` is authoritative for activation, and
+behavior overview. `agent/settings.json` is authoritative for activation, and
 `configs/pi-agent/MANIFEST.md` is the complete enabled-package inventory. Before changing this repository's layout or active resources, read this README and
 `configs/pi-agent/MANIFEST.md`. Then read the relevant package README, project documentation,
 and every applicable nested `AGENTS.md` for the area involved. Do this automatically; do not
@@ -62,10 +62,10 @@ repository, not unrelated projects.
 
 The repository combines three roles:
 
-- `settings.json`, `keybindings.json`, `skills/`, and `subagents/` provide the
+- `agent/settings.json`, `keybindings.json`, `skills/`, and `subagents/` provide the
   active portable Pi configuration.
 - `configs/pi-agent/packages/` contains the local Pi packages enabled by relative
-  paths from root `settings.json`.
+  paths from `agent/settings.json` through the `agent/configs` shim.
 - `codex/`, `configs/`, `mcp/`, `plans/`, `procedures/`, `skills/`, and
   `subagents/` hold reusable, project-agnostic materials.
 
@@ -90,7 +90,7 @@ library. Local Codex plugin sources belong under
 ### PiAgent behavior
 
 `configs/pi-agent/packages/` is the source of truth for active package-backed Pi
-extensions. Root `settings.json` enables them with portable relative paths, and
+extensions. `agent/settings.json` enables them with portable relative paths, and
 root `skills/` is the canonical global skill library.
 
 - **Modes:** `pi-plan` provides unrestricted Off plus restricted Discuss, Plan,
@@ -138,7 +138,7 @@ root `skills/` is the canonical global skill library.
   precise per-file undo where a safe baseline exists. Bash-made changes are out
   of scope.
 - **Theme and keys:** `configs/pi-agent/packages/void-agent/themes/` contains the
-  tracked theme family. Root `settings.json` selects the active theme, and root
+  tracked theme family. `agent/settings.json` selects the active theme, and root
   `keybindings.json` assigns thinking/model cycling while reserving `Shift+Tab`
   for `pi-plan`.
 
@@ -151,22 +151,13 @@ keybinding, or theme.
 Back up an existing Pi directory before replacing it. Do not copy its settings
 file over this repository's portable settings.
 
-Preferred whole-tree install:
+Whole-tree install:
 
 ```bash
 mv ~/.pi ~/.pi.backup
 git clone <repository-url> ~/.pi
 chmod 700 ~/.pi ~/.pi/agent
 node ~/.pi/scripts/validate-global-config.mjs
-```
-
-Agent-dir-only install:
-
-```bash
-mv ~/.pi/agent ~/.pi/agent.backup
-git clone <repository-url> ~/.pi/agent
-chmod 700 ~/.pi/agent
-node ~/.pi/agent/scripts/validate-global-config.mjs
 ```
 
 Authenticate with `/login`. When migrating an existing installation, restore
@@ -180,10 +171,10 @@ tools named in their package READMEs.
 ## Existing-machine cutover
 
 1. Stop Pi processes.
-2. Make a private backup of the complete existing `~/.pi/agent` directory.
+2. Make a private backup of the complete existing `~/.pi` directory.
 3. Preserve required machine-local state privately.
-4. Clone this repository to an empty `~/.pi/agent`.
-5. Restore only the private state needed on the destination; keep the portable
+4. Clone this repository to an empty `~/.pi`.
+5. Restore only the private state needed under `~/.pi/agent`; keep the portable
    tracked configuration from the clone.
 6. Validate, start Pi, and keep the backup until resource discovery and normal
    operation are confirmed.
@@ -196,7 +187,7 @@ Machine-local and sensitive state stays outside the tracked tree. Never weaken
 the ignore boundary merely to preserve a mutable local file; use a sanitized
 example when portable configuration is genuinely needed.
 
-Pi can update `settings.json` through interactive configuration. Review every
+Pi can update `agent/settings.json` through interactive configuration. Review every
 settings diff before committing and keep the tracked file portable.
 
 ## Validation
@@ -209,7 +200,8 @@ git diff --check
 git status --short
 ```
 
-The validator checks portable package paths, package manifests, JSON files,
+The validator reads `agent/settings.json` and checks its portable package paths
+and package manifests through `agent/configs`. It also checks JSON files,
 resource directories, the canonical shared definition inventory, absence of the
 legacy definition directory, linked-file safety, and the tracked-versus-local
 boundary.
