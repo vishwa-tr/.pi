@@ -196,6 +196,7 @@ Run:
 
 ```bash
 node scripts/validate-global-config.mjs
+node --test scripts/validate-global-config.test.mjs
 git diff --check
 git status --short
 ```
