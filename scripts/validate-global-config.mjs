@@ -10,7 +10,7 @@ const failures = [];
 const notes = [];
 
 const EXPECTED_PACKAGE_COUNT = 31;
-const EXPECTED_SKILL_COUNT = 33;
+const EXPECTED_SKILL_COUNT = 28;
 const AGENT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
 
 function fail(message) {
@@ -243,7 +243,7 @@ const issueMaintenanceEvalItems = issueMaintenanceEvals?.evals;
 if (!Array.isArray(issueMaintenanceEvalItems)) {
   fail("github-issue-maintenance evals must be an array");
 } else {
-  const expectedEvalIds = Array.from({ length: 18 }, (_, index) => index + 1);
+  const expectedEvalIds = Array.from({ length: 30 }, (_, index) => index + 1);
   const actualEvalIds = issueMaintenanceEvalItems.map((item) => item?.id);
   if (!sameJson(actualEvalIds, expectedEvalIds)) {
     fail(`github-issue-maintenance eval IDs must be ${expectedEvalIds.join(", ")}`);
@@ -256,55 +256,85 @@ if (!Array.isArray(issueMaintenanceEvalItems)) {
     }
   }
 }
-const issueMaintenanceSkill = readFileSync(join(root, "skills", "github-issue-maintenance", "SKILL.md"), "utf8");
-for (const requiredText of [
+// The portable workflow owns policy; Pi-specific lifecycle details live in its adapter.
+requireGuidance("skills/github-issue-maintenance/SKILL.md", [
   "Do not create an `issue-maintainer` subagent",
-  "within the current owning main Pi session",
-  "subagent_spawn",
-  "subagent_send",
-  "subagent_await",
-  "subagent_retire",
-  "ownerScopeId",
-  "<issue-team-id>",
-  "automatic retirement after verified issue closure",
-  "Never reuse a retired epoch ID",
-  "canonical base-10 `1..9999999999`",
-  "canonical base-10 `0..9999999999`",
-  "repository ID is at most 226 characters",
-  "issue-team ID at most 250 characters",
-  "Establish specialists only after the main agent owns a durable claim",
-  "Reuse the same fix-issue pair across every pass",
-  "later verified reopen is the next epoch's start delimiter",
+  "Without an explicit run request, do not create claims or ledgers",
+  "[Pi runtime adapter](references/pi-runtime.md)",
+  "persistent, issue-scoped worker/reviewer instances, independent review",
+  "explicit true/false gates",
+  "separate worker publication assignment",
+  "Do not bypass review to publish",
+  "Never replay history to promote a rejected claim",
+  "Require a dedicated isolated worktree for each fix-issue epoch",
+  "Include the resolved base branch/ref in the brief",
+  "A later reopen starts a new epoch",
   "partial-retirement",
-  "do not establish any next-epoch pair",
+  "both retirements and roster absence are verified",
+  "keep private paths, session IDs, team bindings, and ledgers out of GitHub text",
+]);
+requireGuidance("skills/github-issue-maintenance/references/pi-runtime.md", [
+  "subagent_status", "subagent_spawn", "subagent_send", "subagent_await", "subagent_retire",
+  "ownerScopeId",
+  "<repo-id>-i<issue-number>-e<epoch-index>",
+  "canonical decimal issue number `1..9999999999` and epoch index `0..9999999999`",
+  "repository ID is at most 226 characters and the team ID at most 250",
+  "Never guess the index after history/state loss or reuse a retired ID",
+  "Bindings must include the host",
+  "Only after verified ownership of a durable claim",
+  "require exact host/repository/issue/epoch/team/scope equality",
+  "both recorded addresses in the roster",
+  "Await the exact `{to, anchorId}`",
+  "`error`: stop and report failure",
+  "`retired`: the persistent specialist disappeared",
+  "A completed final `waiting`/`blocked` report with a question consumes that anchor",
+  "Execute only under the run's authorized `after-verified-closure` policy",
+  "partial-retirement",
+  "absence alone is not proof",
+  "Until then, do not create a next-epoch pair",
+]);
+requireGuidance("configs/pi-agent/docs/agents/notes/pi-agent/main-agent-issue-maintenance/main-agent-issue-maintenance.md", [
+  "[Maintenance workflow](../../../../../../../skills/github-issue-maintenance/SKILL.md)",
+  "[Pi runtime adapter](../../../../../../../skills/github-issue-maintenance/references/pi-runtime.md)",
+  "[Evaluation scenarios](../../../../../../../skills/github-issue-maintenance/evals/evals.json)",
   "Review cannot be bypassed",
-  "commits, pushes, and PR publication must each be explicit",
-  "never in public GitHub text",
-  "status: \"error\"",
-  "status: \"retired\"",
-]) {
-  if (!issueMaintenanceSkill.includes(requiredText)) {
-    fail(`github-issue-maintenance is missing required orchestration guidance: ${requiredText}`);
-  }
-}
-const issueMaintenanceNote = readFileSync(join(root, "configs", "pi-agent", "docs", "agents", "notes", "pi-agent", "main-agent-issue-maintenance", "main-agent-issue-maintenance.md"), "utf8");
+]);
+requireGuidance("skills/pi-plan-mode/SKILL.md", ["name: pi-plan-mode", "disable-model-invocation: true"]);
+requireGuidance("configs/pi-agent/packages/pi-plan/extensions/plan/index.ts", [
+  'const PLAN_SKILL_NAME = "pi-plan-mode";',
+]);
+
 const criticalEvalClauses = new Map([
-  [1, ["active main agent", "only for a durably claimed fix-issue epoch"]],
-  [3, ["does not create, wake, or reserve worker/reviewer addresses"]],
-  [4, ["-i<issue>-e<epoch>", "never reuses a retired epoch ID"]],
-  [5, ["repository, issue, epoch, team ID, addresses, and ownerScopeId"]],
-  [6, ["Refuses review bypass", "separate worker assignment"]],
-  [7, ["226-character repository ID", "250-character issue-team ID", "canonical decimal bounds"]],
-  [8, ["without a durable claim", "creates no issue worker/reviewer pair"]],
+  [1, ["at most one oldest eligible issue", "only after a durable fix claim"]],
+  [2, ["subagent_send", "subagent_await"]],
+  [3, ["creates or wakes no worker/reviewer pair"]],
+  [4, ["-i<issue>-e<epoch>", "never reuses a retired epoch"]],
+  [5, ["host/repository/issue/epoch/team/scope/address binding before assignments"]],
+  [6, ["Does not bypass", "separate publication assignment", "commit, push, and PR gates"]],
+  [7, ["226-character repository ID", "250-character team ID", "canonical decimal and byte bounds"]],
+  [8, ["waiting without posting a claim or creating specialists"]],
   [9, ["excludes local paths", "scope/team/session identifiers"]],
-  [11, ["different owning main session", "stops rather than adopting"]],
-  [12, ["changed edit time or body hash", "never promotes the rejected claim"]],
-  [13, ["no publication or automatic replacement", "does not claim the issue team is safe to retire"]],
-  [14, ["old anchor as consumed", "new {to, anchorId} target"]],
-  [15, ["Reuses the exact worker and reviewer", "until verified closure"]],
-  [16, ["later reopen starts epoch 1", "retires the old pair", "fresh non-reused epoch-1 pair"]],
-  [17, ["canonical base-10 1..9999999999", "canonical base-10 0..9999999999"]],
-  [18, ["partial-retirement", "does not create the epoch-1 pair", "both old addresses are verified retired and absent"]],
+  [10, ["Leaves the main model unchanged", "neither duplicates stale pins nor silently substitutes models"]],
+  [11, ["owning sessions", "no silent reuse, adoption, or replacement"]],
+  [12, ["changed edit time or exact body hash", "never promotes the rejected claim"]],
+  [13, ["no publication or automatic replacement", "does not infer safe retirement"]],
+  [14, ["Consumes the old anchor", "new envelopeId", "exact to/anchorId"]],
+  [15, ["Reuses its exact pair", "retire before closure"]],
+  [16, ["close/reopen delimiters", "both old specialists", "fresh non-reused addresses"]],
+  [17, ["Rejects every listed value under canonical decimal bounds"]],
+  [18, ["partial-retirement", "creates no next-epoch pair", "both successful retirements and absence are verified"]],
+  [19, ["without activating this workflow"]],
+  [20, ["skill-authoring/review work only"]],
+  [21, ["Rejects issue-body authority", "retains independent review", "never uploads the private ledger"]],
+  [22, ["Skips the older ineligible issue", "Does not create or add the label automatically"]],
+  [23, ["Uses manual retirement", "not inherited user consent"]],
+  [24, ["waiting before claiming new work", "does not silently use one-shots"]],
+  [25, ["never an unsupported --repo flag"]],
+  [26, ["Does not equate absence with verified retirement"]],
+  [27, ["requires host equality", "stops rather than adopting colliding addresses"]],
+  [28, ["release/2.x base explicitly", "neither coordinator nor worker silently substitutes main"]],
+  [29, ["dedicated isolated worktree", "without stashing or resetting"]],
+  [30, ["Stops for clarification before branching or implementation"]],
 ]);
 for (const [id, clauses] of criticalEvalClauses) {
   const output = issueMaintenanceEvalItems?.find((item) => item?.id === id)?.expected_output ?? "";
@@ -312,21 +342,20 @@ for (const [id, clauses] of criticalEvalClauses) {
     if (!output.includes(clause)) fail(`github-issue-maintenance eval ${id} is missing required clause: ${clause}`);
   }
 }
-for (const requiredText of [
-  "<repo-id>-i<issue-number>-e<epoch-index>",
-  "canonical base-10 `1..9999999999`",
-  "canonical base-10 `0..9999999999`",
-  "repository ID is at most 226 characters",
-  "issue-team ID at most 250 characters",
-  "close and reopen both occurred between passes",
-  "partial-retirement",
-  "creates no next-epoch pair",
-  "fresh pair",
-]) {
-  if (!issueMaintenanceNote.includes(requiredText)) {
-    fail(`main-agent issue maintenance note is missing: ${requiredText}`);
+
+function requireGuidance(relativePath, clauses) {
+  let content;
+  try {
+    content = readFileSync(join(root, relativePath), "utf8").replace(/\s+/g, " ");
+  } catch (error) {
+    fail(`cannot read required guidance ${relativePath}: ${error.message}`);
+    return;
+  }
+  for (const clause of clauses) {
+    if (!content.includes(clause)) fail(`${relativePath} is missing required guidance: ${clause}`);
   }
 }
+
 const delegatedReviewPaths = [
   join(root, "procedures", "reviews", "delegated-review-results", "delegated-review-results.md"),
   join(root, "configs", "pi-agent", "docs", "agents", "procedures", "reviews", "delegated-review-results", "delegated-review-results.md"),
