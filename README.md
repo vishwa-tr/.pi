@@ -224,6 +224,7 @@ Run:
 ```bash
 node scripts/validate-global-config.mjs
 node --test scripts/validate-global-config.test.mjs
+python3 scripts/shotcut.test.py -v
 git diff --check
 git status --short
 ```

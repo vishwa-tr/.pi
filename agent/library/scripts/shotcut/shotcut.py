@@ -16,17 +16,22 @@ build   Writes a project that melt renders and Shotcut opens and edits as usual.
 render  Renders a project headless with melt. --preview renders at half size, fast and lossy.
 frames  Writes a contact sheet of --count evenly spaced frames, or with --at one full-size PNG
         per timestamp, named <output-stem>-<seconds>s.png.
-All commands overwrite their outputs. Exit codes: 0 success, 1 invalid input or tool failure.
+Successful outputs replace existing files; failed outputs leave them intact.
+Exit codes: 0 success, 1 invalid input or tool failure, 2 command-line syntax errors.
 """
 
 import argparse
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
+from fractions import Fraction
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".svg"}
 
@@ -61,7 +66,7 @@ def main():
     try:
         tools = find_tools(args.shotcut_dir)
         args.run(args, tools)
-    except (SpecError, ToolError) as error:
+    except (SpecError, ToolError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
@@ -105,9 +110,11 @@ def run_build(args, tools):
     spec = load_spec(spec_path)
     builder = ProjectBuilder(spec, os.path.dirname(spec_path), os.path.dirname(project_path), tools)
     project = builder.build()
+    reject_input_output(project_path, [spec_path, *builder.media_paths])
 
     ET.indent(project)
-    ET.ElementTree(project).write(project_path, encoding="utf-8", xml_declaration=True)
+    with verified_output(project_path) as temporary:
+        ET.ElementTree(project).write(temporary, encoding="utf-8", xml_declaration=True)
 
     print(f"wrote {project_path} ({builder.timeline_seconds():.2f}s)")
 
@@ -119,27 +126,36 @@ def run_render(args, tools):
     if not os.path.isfile(project_path):
         raise SpecError(f"project not found: {project_path}")
 
+    try:
+        project = ET.parse(project_path).getroot()
+    except ET.ParseError as error:
+        raise SpecError(f"cannot parse project {project_path}: {error}")
+    media_root = os.path.join(os.path.dirname(project_path), project.get("root", ""))
+    inputs = [project_path]
+    for prop in project.iter("property"):
+        if prop.get("name") in {"resource", "background"} and prop.text:
+            path = prop.text.removeprefix("qimage:")
+            inputs.append(os.path.join(media_root, path))
+    reject_input_output(output_path, inputs)
+
     encoding = dict(PREVIEW_ENCODING if args.preview else FINAL_ENCODING)
     encoding["real_time"] = str(-min(os.cpu_count() or 1, 8))
 
     if args.preview:
         profile = read_profile(project_path)
 
-        encoding["width"] = str(int(profile["width"]) // 2)
-        encoding["height"] = str(int(profile["height"]) // 2)
+        # yuv420p requires even dimensions, including after half-size rounding.
+        encoding["width"] = str(max(2, int(profile["width"]) // 4 * 2))
+        encoding["height"] = str(max(2, int(profile["height"]) // 4 * 2))
         encoding["frame_rate_num"] = profile["frame_rate_num"]
         encoding["frame_rate_den"] = profile["frame_rate_den"]
         encoding["progressive"] = profile.get("progressive", "1")
 
     consumer_args = [f"{key}={value}" for key, value in encoding.items()]
-    command = [tools.melt, "-progress2", project_path, "-consumer", f"avformat:{output_path}"]
-
-    run_tool(command + consumer_args, capture=False)
-
-    if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
-        raise ToolError(f"melt finished but wrote no output: {output_path}")
-
-    duration = probe_duration(tools, output_path)
+    with verified_output(output_path) as temporary:
+        command = [tools.melt, "-progress2", project_path, "-consumer", f"avformat:{temporary}"]
+        run_tool(command + consumer_args, capture=False)
+        duration = probe_duration(tools, temporary)
     print(f"wrote {output_path} ({duration:.2f}s)")
 
 
@@ -152,6 +168,14 @@ def read_profile(project_path):
     if profile is None:
         raise SpecError(f"project has no <profile>: {project_path}")
 
+    for key in ("width", "height", "frame_rate_num", "frame_rate_den"):
+        try:
+            value = int(profile.get(key, ""))
+        except ValueError:
+            raise SpecError(f"project profile needs a positive integer {key}")
+        if value <= 0:
+            raise SpecError(f"project profile needs a positive integer {key}")
+
     return profile.attrib
 
 
@@ -162,7 +186,7 @@ def run_frames(args, tools):
     if not os.path.isfile(video_path):
         raise SpecError(f"video not found: {video_path}")
 
-    if args.at:
+    if args.at is not None:
         write_stills(tools, video_path, output_path, args.at)
     else:
         write_contact_sheet(tools, video_path, output_path, args.count)
@@ -170,30 +194,44 @@ def run_frames(args, tools):
 
 def write_stills(tools, video_path, output_path, timestamps):
     stem, extension = os.path.splitext(output_path)
+    duration = probe_duration(tools, video_path)
+    outputs = []
 
     for timestamp in timestamps.split(","):
-        seconds = float(timestamp)
-        still_path = f"{stem}-{seconds:g}s{extension or '.png'}"
-        command = [tools.ffmpeg, "-v", "error", "-y", "-ss", str(seconds), "-i", video_path,
-                   "-frames:v", "1", still_path]
+        try:
+            seconds = float(timestamp)
+        except ValueError:
+            raise SpecError("--at needs comma-separated nonnegative timestamps")
+        if not math.isfinite(seconds) or not 0 <= seconds < duration:
+            raise SpecError(f"--at timestamps must be within the video (0 <= time < {duration:g})")
+        still_path = f"{stem}-{seconds:.15g}s{extension or '.png'}"
+        reject_input_output(still_path, [video_path])
+        outputs.append((seconds, still_path))
+    if len({path for _, path in outputs}) != len(outputs):
+        raise SpecError("--at timestamps produce duplicate output names")
 
-        run_tool(command)
+    for seconds, still_path in outputs:
+        with verified_output(still_path) as temporary:
+            command = [tools.ffmpeg, "-v", "error", "-y", "-ss", str(seconds), "-i", video_path,
+                       "-frames:v", "1", temporary]
+            run_tool(command)
         print(f"wrote {still_path}")
 
 
 def write_contact_sheet(tools, video_path, output_path, count):
     if count < 1:
         raise SpecError("--count must be at least 1")
+    reject_input_output(output_path, [video_path])
 
     duration = probe_duration(tools, video_path)
     columns = min(count, 4)
     rows = math.ceil(count / columns)
 
-    sheet_filter = f"fps={count}/{duration:.3f},scale=480:-2,tile={columns}x{rows}:padding=4"
-    command = [tools.ffmpeg, "-v", "error", "-y", "-i", video_path, "-vf", sheet_filter,
-               "-frames:v", "1", output_path]
-
-    run_tool(command)
+    sheet_filter = f"fps={count}/{duration:.12g},scale=480:-2,tile={columns}x{rows}:padding=4"
+    with verified_output(output_path) as temporary:
+        command = [tools.ffmpeg, "-v", "error", "-y", "-i", video_path, "-vf", sheet_filter,
+                   "-frames:v", "1", temporary]
+        run_tool(command)
     print(f"wrote {output_path} ({count} frames over {duration:.2f}s, read left to right)")
 
 
@@ -208,20 +246,7 @@ def load_spec(spec_path):
     except (OSError, json.JSONDecodeError) as error:
         raise SpecError(f"cannot read spec {spec_path}: {error}")
 
-    check_keys(spec, SPEC_KEYS, "spec")
-
-    if not spec.get("scenes"):
-        raise SpecError("spec needs at least one entry in 'scenes'")
-
-    for index, scene in enumerate(spec["scenes"]):
-        check_keys(scene, SCENE_KEYS, f"scenes[{index}]")
-
-    for index, title in enumerate(spec.get("titles", [])):
-        check_keys(title, TITLE_KEYS, f"titles[{index}]")
-
-    for index, audio in enumerate(spec.get("audio", [])):
-        check_keys(audio, AUDIO_KEYS, f"audio[{index}]")
-
+    validate_spec(spec)
     return spec
 
 
@@ -229,23 +254,152 @@ def check_keys(item, allowed, label):
     if not isinstance(item, dict):
         raise SpecError(f"{label} must be an object")
 
-    unknown = sorted(set(item) - allowed)
+    unknown = sorted(set(item) - set(allowed))
 
     if unknown:
         raise SpecError(f"{label}: unknown key(s) {', '.join(unknown)}")
 
 
+def validate_spec(spec):
+    check_keys(spec, SPEC_KEYS, "spec")
+    video = spec.get("video", {})
+    check_keys(video, VIDEO_DEFAULTS, "video")
+    dimensions = {**VIDEO_DEFAULTS, **video}
+    for key in ("width", "height"):
+        value = dimensions[key]
+        if type(value) is not int or value < 2 or value % 2:
+            raise SpecError(f"video.{key} must be a positive even integer")
+    parse_fps(dimensions["fps"])
+    if "scene_audio" in spec and type(spec["scene_audio"]) is not bool:
+        raise SpecError("scene_audio must be true or false")
+    if "backdrop" in spec:
+        string(spec["backdrop"], "backdrop")
+
+    for collection, keys in (("scenes", SCENE_KEYS), ("titles", TITLE_KEYS), ("audio", AUDIO_KEYS)):
+        items = spec.get(collection, [])
+        if not isinstance(items, list):
+            raise SpecError(f"{collection} must be an array")
+        if collection == "scenes" and not items:
+            raise SpecError("spec needs at least one entry in 'scenes'")
+        for index, item in enumerate(items):
+            label = f"{collection}[{index}]"
+            check_keys(item, keys, label)
+            for key in ("source", "image", "text", "name", "font"):
+                if key in item:
+                    string(item[key], f"{label}.{key}")
+            for key in ("color", "outline_color", "background"):
+                if key in item and (not isinstance(item[key], str) or
+                                  not re.fullmatch(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", item[key])):
+                    raise SpecError(f"{label}.{key} must be #rrggbb or #aarrggbb")
+            for key in ("in", "start", "transition", "fade", "fade_in", "fade_out",
+                        "slide_distance", "slide_time", "outline", "padding"):
+                if key in item:
+                    number(item[key], f"{label}.{key}", minimum=0)
+            for key in ("duration", "size"):
+                if key in item:
+                    number(item[key], f"{label}.{key}", positive=True)
+            if "gain_db" in item:
+                number(item["gain_db"], f"{label}.gain_db")
+            for key, length in (("zoom", 2), ("focus", 2), ("crop", 4), ("frame", 4), ("box", 4)):
+                if key in item:
+                    vector(item[key], length, f"{label}.{key}")
+            if "zoom" in item:
+                for scale in item["zoom"]:
+                    number(scale, f"{label}.zoom scale", positive=True)
+            for key in ("crop", "frame", "box"):
+                if key in item:
+                    for size in item[key][2:]:
+                        number(size, f"{label}.{key} size", positive=True)
+            if "crop" in item:
+                x, y, width, height = item["crop"]
+                if x < 0 or y < 0 or x + width > dimensions["width"] or y + height > dimensions["height"]:
+                    raise SpecError(f"{label}.crop must fit inside the project frame")
+            for key, choices in (("halign", ("left", "center", "right")),
+                                 ("valign", ("top", "middle", "bottom")),
+                                 ("slide_from", ("left", "right", "top", "bottom"))):
+                if key in item and item[key] not in choices:
+                    raise SpecError(f"{label}.{key} must be one of {', '.join(choices)}")
+            if "layer" in item and type(item["layer"]) is not int:
+                raise SpecError(f"{label}.layer must be an integer")
+            if "italic" in item and type(item["italic"]) is not bool:
+                raise SpecError(f"{label}.italic must be true or false")
+            if "weight" in item and (type(item["weight"]) is not int or not 100 <= item["weight"] <= 900):
+                raise SpecError(f"{label}.weight must be an integer from 100 to 900")
+            if collection == "scenes" and ("color" in item) == ("source" in item):
+                raise SpecError(f"{label} needs exactly one of color or source")
+            if collection == "titles" and ("text" in item) == ("image" in item):
+                raise SpecError(f"{label} needs exactly one of text or image")
+
+
+def parse_fps(value):
+    try:
+        if isinstance(value, bool):
+            raise ValueError()
+        rate = Fraction(str(value))
+        if rate <= 0 or not math.isfinite(float(rate)):
+            raise ValueError()
+        return rate
+    except (ValueError, ZeroDivisionError, OverflowError):
+        raise SpecError("video.fps must be positive, e.g. 30, 29.97 or '30000/1001'")
+
+
+def number(value, label, minimum=None, positive=False):
+    try:
+        valid = type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        valid = False
+    if not valid or (minimum is not None and value < minimum) or (positive and value <= 0):
+        constraint = "positive" if positive else f">= {minimum}" if minimum is not None else "numeric"
+        raise SpecError(f"{label} must be finite and {constraint}")
+    return value
+
+
+def string(value, label):
+    if not isinstance(value, str) or not value.strip() or "\0" in value:
+        raise SpecError(f"{label} must be a nonempty string without NUL characters")
+
+
+def vector(value, length, label):
+    if not isinstance(value, list) or len(value) != length:
+        raise SpecError(f"{label} must contain {length} numbers")
+    for coordinate in value:
+        number(coordinate, label)
+
+
+def reject_input_output(output_path, input_paths):
+    destination = os.path.normcase(os.path.realpath(output_path))
+    for path in input_paths:
+        same_path = destination == os.path.normcase(os.path.realpath(path))
+        same_file = os.path.exists(output_path) and os.path.exists(path) and os.path.samefile(output_path, path)
+        if same_path or same_file:
+            raise SpecError("output must not overwrite an input file")
+
+
+@contextmanager
+def verified_output(output_path):
+    # A separate destination prevents failed tools and empty seeks from accepting stale output.
+    with tempfile.TemporaryDirectory(prefix=".shotcut-", dir=os.path.dirname(os.path.abspath(output_path))) as directory:
+        temporary = os.path.join(directory, os.path.basename(output_path))
+        yield temporary
+        if not os.path.isfile(temporary) or os.path.getsize(temporary) == 0:
+            raise ToolError(f"command completed without producing output: {output_path}")
+        os.replace(temporary, output_path)
+
+
 class ProjectBuilder:
     def __init__(self, spec, spec_dir, project_dir, tools):
+        validate_spec(spec)
         self.spec = spec
         self.spec_dir = spec_dir
         self.project_dir = project_dir
         self.tools = tools
+        self.media_paths = set()
 
         video = {**VIDEO_DEFAULTS, **spec.get("video", {})}
         self.width = int(video["width"])
         self.height = int(video["height"])
-        self.fps = int(video["fps"])
+        self.frame_rate = parse_fps(video["fps"])
+        self.fps = float(self.frame_rate)
 
         self.root = None
         self.next_id = 0
@@ -280,8 +434,10 @@ class ProjectBuilder:
 
         ET.SubElement(tractor, "track", scene_attributes)
 
-        for track in title_tracks + audio_tracks:
+        for track in title_tracks:
             ET.SubElement(tractor, "track", {"producer": track})
+        for track in audio_tracks:
+            ET.SubElement(tractor, "track", {"producer": track, "hide": "video"})
 
         video_track_count = 1 + len(title_tracks)
         track_count = video_track_count + len(audio_tracks)
@@ -303,7 +459,8 @@ class ProjectBuilder:
             "sample_aspect_num": "1", "sample_aspect_den": "1",
             "display_aspect_num": str(self.width // divisor),
             "display_aspect_den": str(self.height // divisor),
-            "frame_rate_num": str(self.fps), "frame_rate_den": "1", "colorspace": "709",
+            "frame_rate_num": str(self.frame_rate.numerator),
+            "frame_rate_den": str(self.frame_rate.denominator), "colorspace": "709",
         })
 
     # Scenes ------------------------------------------------------------------------------------
@@ -410,7 +567,7 @@ class ProjectBuilder:
             raise SpecError(f"{label}: 'zoom' must be [from, to], e.g. [1.0, 1.15]")
 
         if not (isinstance(focus, list) and len(focus) == 2):
-            raise SpecError(f"{label}: 'focus' must be [x, y] in source pixels")
+            raise SpecError(f"{label}: 'focus' must be [x, y] in project pixels")
 
         start_rect = self.zoom_rect(zoom[0], focus)
         end_rect = self.zoom_rect(zoom[1], focus)
@@ -690,6 +847,7 @@ class ProjectBuilder:
                 entries.append(("entry", producer, clip["in"], clip["in"] + clip["length"] - 1))
 
                 cursor = clip["start"] + clip["length"]
+                self.timeline_frames = max(self.timeline_frames, cursor)
 
             properties = {"shotcut:audio": "1", "shotcut:name": f"A{track_number}"}
             tracks.append(self.add_playlist(properties, entries))
@@ -809,7 +967,7 @@ class ProjectBuilder:
         return self.root.find(f"*[@id='{element_id}']")
 
     def frames(self, seconds):
-        return round(float(seconds) * self.fps)
+        return round(number(seconds, "time", minimum=0) * self.fps)
 
     def zoom_rect(self, scale, focus):
         scale = float(scale)
@@ -830,6 +988,7 @@ class ProjectBuilder:
         if not os.path.isfile(path):
             raise SpecError(f"{label}: media not found: {path}")
 
+        self.media_paths.add(path)
         return path
 
     def project_relative(self, path):
@@ -920,13 +1079,19 @@ def probe_duration(tools, path):
     output = run_tool(command).strip()
 
     try:
-        return float(output)
+        duration = float(output)
     except ValueError:
         raise ToolError(f"ffprobe could not read a duration from {path}")
+    if not math.isfinite(duration) or duration <= 0:
+        raise ToolError(f"ffprobe returned no positive finite duration for {path}")
+    return duration
 
 
 def run_tool(command, capture=True):
-    result = subprocess.run(command, capture_output=capture, text=True)
+    try:
+        result = subprocess.run(command, capture_output=capture, text=True)
+    except OSError as error:
+        raise ToolError(f"cannot run {os.path.basename(command[0])}: {error}")
 
     if result.returncode != 0:
         detail = (result.stderr or "").strip()[-2000:] if capture else ""
