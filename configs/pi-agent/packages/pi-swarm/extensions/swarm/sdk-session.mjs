@@ -1,11 +1,13 @@
-import { closeSync, constants, fsyncSync, lstatSync, openSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
 import {
 	createAgentSession, createExtensionRuntime, SessionManager, SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
 	checkedFile, invariant, privateDirectory, readPrivate, syncDirectory, writeAll,
 } from "./store/files.mjs";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { assertProviderSelection } from "./provider-capability.mjs";
+import { bindConstrainedRuntime, isConstrainedRuntime } from "./constrained-provider.mjs";
+import { closeSync, constants, fsyncSync, lstatSync, openSync, realpathSync } from "node:fs";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const ENTRY_TYPES = new Set([
@@ -155,15 +157,18 @@ function openManager(cwd, sessionDir, sessionFile) {
 	return SessionManager.open(path, sessionDir);
 }
 
-/** Offline phase only. The trusted caller supplies every model-visible tool and the complete prompt. */
-export async function createSdkSession({ cwd, sessionDir, sessionFile, modelRuntime, selection, systemPrompt, customTools }) {
+/** Isolated SDK factory: legacy mocks or a branded, per-request-fenced constrained adapter only. */
+export async function createSdkSession({ cwd, sessionDir, sessionFile, modelRuntime, selection, systemPrompt, customTools, providerCapability, requestAdmission }) {
 	// Gate before directories, sessions, authentication lookup, or fallback selection.
-	invariant(selection?.provider === "swarm-mock", "This phase only supports the swarm-mock provider");
+	const constrained = isConstrainedRuntime(modelRuntime, providerCapability);
+	if (providerCapability) assertProviderSelection(providerCapability, selection, modelRuntime);
+	invariant(constrained || selection?.provider === "swarm-mock", "This phase only supports the swarm-mock provider");
 	invariant(typeof selection.modelId === "string" && THINKING_LEVELS.has(selection.thinkingLevel), "Explicit model and thinking selection required");
 	invariant(modelRuntime && typeof modelRuntime.getModel === "function", "Model runtime required");
 	const model = modelRuntime.getModel(selection.provider, selection.modelId);
-	invariant(model?.provider === "swarm-mock" && model.api === "swarm-mock" && model.id === selection.modelId,
+	invariant(constrained || (model?.provider === "swarm-mock" && model.api === "swarm-mock" && model.id === selection.modelId),
 		"Selected swarm-mock model/API unavailable; fallback is disabled");
+	if (constrained) modelRuntime = bindConstrainedRuntime(modelRuntime, providerCapability, requestAdmission);
 	invariant(typeof systemPrompt === "string" && systemPrompt.trim().length > 0, "Explicit system prompt required");
 	invariant(Array.isArray(customTools), "Explicit custom tools required");
 	const names = customTools.map((tool) => {
@@ -191,8 +196,8 @@ export async function createSdkSession({ cwd, sessionDir, sessionFile, modelRunt
 		tools: names, customTools,
 	});
 	try {
-		invariant(!modelFallbackMessage && session.model?.id === model.id && session.model?.api === "swarm-mock" &&
-			session.model?.provider === "swarm-mock" && session.thinkingLevel === selection.thinkingLevel,
+		invariant(!modelFallbackMessage && session.model?.id === model.id && session.model?.api === model.api &&
+			session.model?.provider === model.provider && session.thinkingLevel === selection.thinkingLevel,
 		"SDK changed the approved model/thinking selection");
 		const tools = session.getAllTools();
 		invariant(tools.length === names.length && tools.every((tool) => names.includes(tool.name) && tool.sourceInfo?.source === "sdk"),

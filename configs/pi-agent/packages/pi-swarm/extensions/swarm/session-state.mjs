@@ -16,10 +16,13 @@ function identifier(value) {
 		&& !["owner", "system"].includes(value), "INPUT", "Invalid session identifier");
 }
 
-function selection(value) {
+function selection(value, state) {
 	check(value !== null && typeof value === "object" && !Array.isArray(value), "INPUT", "Invalid session selection");
 	check(Object.keys(value).sort().join() === "modelId,provider,thinkingLevel", "INPUT", "Unexpected or missing selection fields");
-	check(value.provider === "swarm-mock", "INPUT", "Only the swarm mock provider is supported in this phase");
+	const provider = state.hostApprovals?.at(-1)?.provider;
+	check(value.provider === "swarm-mock" || (provider?.transport === "https-chat-completions" &&
+		value.provider === provider.provider && value.modelId === provider.modelId && value.thinkingLevel === "off"),
+	"INPUT", "Non-mock selection requires a matching constrained provider agreement");
 	check(typeof value.modelId === "string" && value.modelId.trim().length > 0 && value.modelId.length <= 32768, "INPUT", "Invalid model identifier");
 	check(THINKING_LEVELS.has(value.thinkingLevel), "INPUT", "Invalid thinking level");
 }
@@ -58,7 +61,7 @@ export function pendingMail(state, workerId) {
 function configure(state, payload) {
 	check(state.status === "paused" && !state.sessions, "STATE", "Configure sessions on a paused run once");
 	check(!state.tasks.some(task => task.assignment) && !state.workspace?.operations.length, "UNSETTLED", "Settle work before configuring sessions");
-	selection(payload.selection);
+	selection(payload.selection, state);
 	check(typeof payload.instructions === "string" && payload.instructions.length <= 32768, "INPUT", "Invalid session instructions");
 	check(Array.isArray(payload.codingTools) && new Set(payload.codingTools).size === payload.codingTools.length && payload.codingTools.every(name => ["read", "edit", "write", "bash"].includes(name)), "INPUT", "Unsupported or duplicate coding tools");
 	state.sessions = { selection: structuredClone(payload.selection), instructions: payload.instructions, codingTools: [...payload.codingTools], workers: [], turns: [], history: [] };

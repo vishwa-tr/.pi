@@ -10,7 +10,7 @@ export async function requestUserApproval(ctx, request) {
 	let specification = structuredClone(request.specification);
 	while (!signal.aborted) {
 		const choices = request.action === "launch" ? ["Cancel", "Edit agreement", "Approve"] : ["Cancel", "Approve"];
-		const summary = `${request.action.toUpperCase()} (mock only)\n${json(specification)}\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`;
+		const summary = `${request.action.toUpperCase()} (mock only)\n${json(specification)}${request.provider ? `\nProvider agreement (in-memory only; no network):\n${json(request.provider)}` : ""}\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`;
 		const choice = await ctx.ui.select(summary, choices, options);
 		if (signal.aborted || !choice || choice === "Cancel") return { approved: false };
 		if (choice === "Edit agreement") {

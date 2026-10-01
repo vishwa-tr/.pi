@@ -1,12 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
 import { basename, join, resolve } from "node:path";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { requireCondition as check } from "./errors.mjs";
+import { createHash, randomUUID } from "node:crypto";
 import { privateDirectory } from "./store/files.mjs";
 import { createSdkSession } from "./sdk-session.mjs";
 import { makeSessionTools } from "./session-tools.mjs";
-import { buildSpecialistPrompt, buildTurnPrompt } from "./specializations.mjs";
+import { requireCondition as check } from "./errors.mjs";
 import { pendingMail, sessionWorker } from "./session-state.mjs";
+import { assertProviderSelection } from "./provider-capability.mjs";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { buildSpecialistPrompt, buildTurnPrompt } from "./specializations.mjs";
 
 const attached = new WeakSet();
 const terminal = new Set(["paused", "stopped", "completed", "failed"]);
@@ -14,21 +15,21 @@ const draining = new Set(["pausing", "stopping", "failing"]);
 
 /** Host-only offline SDK integration. There is deliberately no extension entry point. */
 export class SwarmSessions {
-	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission } = {}) {
+	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission, providerCapability } = {}) {
 		controller.assertOwned();
 		check(!attached.has(controller), "OWNERSHIP", "Controller already has an SDK driver");
 		const state = controller.snapshot();
 		check(state.workspace && workspace && (terminal.has(state.status) || draining.has(state.status)), "STATE", "Attach to a paused, workspace-enabled controller");
 		const selected = override?.model ?? mainModel;
 		const selection = state.sessions?.selection ?? { provider: selected?.provider, modelId: selected?.id, thinkingLevel: override?.thinkingLevel ?? thinkingLevel };
-		const model = modelRuntime?.getModel(selection.provider, selection.modelId);
-		check(selection.provider === "swarm-mock" && model?.api === "swarm-mock", "MODEL", "Live model execution is disabled in phase 3");
+		const model = providerCapability ? assertProviderSelection(providerCapability, selection, modelRuntime) : modelRuntime?.getModel(selection.provider, selection.modelId);
+		check(providerCapability || (selection.provider === "swarm-mock" && model?.api === "swarm-mock"), "MODEL", "Live model execution is disabled in phase 3");
 		check(Number.isSafeInteger(tickIntervalMs) && tickIntervalMs >= 0, "INPUT", "Invalid tick interval");
 		makeSessionTools(async () => {}, state.sessions?.codingTools ?? codingTools);
 		attached.add(controller);
 		try {
 			if (!state.sessions) await controller.owner("sessions.configure", { selection, instructions, codingTools });
-			return new SwarmSessions(controller, workspace, modelRuntime, tickIntervalMs, admission);
+			return new SwarmSessions(controller, workspace, modelRuntime, tickIntervalMs, admission, providerCapability);
 		} catch (error) {
 			attached.delete(controller);
 			throw error;
@@ -38,6 +39,7 @@ export class SwarmSessions {
 	#controller;
 	#workspace;
 	#modelRuntime;
+	#providerCapability;
 	#admission;
 	#sessionDir;
 	#entries = new Map();
@@ -49,10 +51,11 @@ export class SwarmSessions {
 	#pumpQueued = false;
 	#drain = null;
 
-	constructor(controller, workspace, modelRuntime, tickIntervalMs, admission) {
+	constructor(controller, workspace, modelRuntime, tickIntervalMs, admission, providerCapability) {
 		this.#controller = controller;
 		this.#workspace = workspace;
 		this.#modelRuntime = modelRuntime;
+		this.#providerCapability = providerCapability;
 		this.#admission = admission;
 		const state = controller.snapshot();
 		this.#sessionDir = join(state.workspaceRoot, ".swarms", state.runId, "sessions");
@@ -87,6 +90,12 @@ export class SwarmSessions {
 				cwd: state.workspaceRoot, sessionDir: this.#sessionDir,
 				sessionFile: binding ? join(this.#sessionDir, binding.sessionFile) : undefined,
 				modelRuntime: this.#modelRuntime, selection: state.sessions.selection,
+				providerCapability: this.#providerCapability,
+				requestAdmission: {
+					assert: async () => { await this.#controller.system("run.tick"); this.#requestGuard(entry); },
+					check: () => this.#requestGuard(entry),
+					signal: () => entry.active?.signal ?? AbortSignal.abort(),
+				},
 				systemPrompt: buildSpecialistPrompt(state, worker), customTools: tools,
 			});
 			Object.assign(entry, created);
@@ -99,6 +108,16 @@ export class SwarmSessions {
 			throw error;
 		});
 		return entry.ready;
+	}
+
+	#requestGuard(entry) {
+		this.#admission?.assert();
+		this.#controller.assertOwned();
+		const state = this.#controller.snapshot();
+		const turn = entry.active;
+		check(turn && !turn.signal.aborted && state.status === "running" && turn.cycle === state.cycle &&
+			turn.generation === state.generation && turn.guidanceRevision === state.guidanceRevision &&
+			state.sessions.turns.some(item => item.id === turn.id), "FENCED", "Provider request no longer admitted");
 	}
 
 	#guard(entry, signal) {
@@ -228,7 +247,7 @@ export class SwarmSessions {
 		}
 		entry.active = context;
 		let abortPromise;
-		const abort = () => { abortPromise ??= entry.session.abort(); void abortPromise.catch(error => this.#recordError(error)); };
+		const abort = () => { entry.session.abortCompaction(); abortPromise ??= entry.session.abort(); void abortPromise.catch(error => this.#recordError(error)); };
 		context.signal.addEventListener("abort", abort, { once: true });
 		let failure;
 		let outcome = "settled";

@@ -1,14 +1,18 @@
-import { randomUUID } from "node:crypto";
+import {
+	assertProviderSelection,
+	providerDescriptor,
+} from "./provider-capability.mjs";
 import { lstatSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import { SwarmController } from "./core.mjs";
-import { DEFAULT_LIMITS, reduceEvent } from "./state.mjs";
-import { requireCondition as check, SwarmError } from "./errors.mjs";
 import { validId } from "./store/files.mjs";
-import { WorkspaceRuntime } from "./workspace.mjs";
+import { SwarmController } from "./core.mjs";
 import { SwarmSessions } from "./sessions.mjs";
+import { WorkspaceRuntime } from "./workspace.mjs";
 import { readSessionHistory } from "./sdk-session.mjs";
+import { DEFAULT_LIMITS, reduceEvent } from "./state.mjs";
 import { ModeGate, requestSafety } from "./host-gates.mjs";
+import { requireCondition as check, SwarmError } from "./errors.mjs";
 import { inspectCheckout, specificationFingerprint } from "./host-approval.mjs";
 
 function freeze(value) {
@@ -46,10 +50,14 @@ export class SwarmHost {
 	#runner;
 	#beforePrompt;
 	#pendingSafety = 0;
+	#providerCapability;
+	#providerRuntimeBinding;
 
-	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => {} }) {
+	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => {}, providerCapability }) {
 		check(typeof requestApproval === "function", "INPUT", "Human approval callback required");
 		for (const timeout of [approvalTimeoutMs, safetyTimeoutMs]) check(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 600000, "INPUT", "Invalid approval timeout");
+		if (providerCapability !== undefined) providerDescriptor(providerCapability);
+		this.#providerCapability = providerCapability;
 		this.#runner = runner;
 		this.#beforePrompt = beforePrompt;
 		this.#events = events;
@@ -89,9 +97,30 @@ export class SwarmHost {
 		this.#permit = undefined;
 	}
 
+	#assertProvider(selection) {
+		if (!this.#providerCapability) return;
+		const model = assertProviderSelection(this.#providerCapability, selection, this.#modelRuntime);
+		const provider = this.#modelRuntime.getProvider?.(model.provider);
+		check(provider, "PROVIDER", "Explicit mock provider implementation required");
+		const references = [provider, provider.stream, provider.streamSimple, this.#modelRuntime.getModel,
+			this.#modelRuntime.getProvider, this.#modelRuntime.stream, this.#modelRuntime.streamSimple,
+			this.#modelRuntime.complete, this.#modelRuntime.completeSimple];
+		if (!this.#providerRuntimeBinding) this.#providerRuntimeBinding = references;
+		check(references.every((reference, index) => reference === this.#providerRuntimeBinding[index]),
+			"PROVIDER", "Provider implementation replacement requires a new host and fresh approval");
+	}
+
 	#assertAdmission() {
 		check(!this.#closing && !this.#lifetime.signal.aborted && this.#permit && !this.#permit.signal.aborted, "HOST_DENIED", "Explicit current host approval is required");
 		this.#mode.assert(this.#permit.grant.token);
+		if (this.#providerCapability) {
+			try { this.#assertProvider(this.#specification().model); }
+			catch (error) {
+				this.#invalidate();
+				this.#modePause = this.pause().catch(failure => this.#errors.push(failure.message));
+				throw error;
+			}
+		}
 	}
 
 	#setPermit(grant, operation) {
@@ -110,7 +139,8 @@ export class SwarmHost {
 		check(draft && Object.keys(draft).sort().join() === "codingTools,criteria,instructions,limits,model,objective,scope", "INPUT", "Invalid approval specification");
 		reduceEvent(null, { version: 1, operationId: "approval-preflight", actor: "owner", expectedRevision: 0, cycle: 1, generation: 0, atMs: 0, type: "run.create", payload: { runId, ownerSessionId: this.#sessionId, workspaceRoot: root, objective: draft.objective, criteria: draft.criteria, scope: draft.scope, limits: draft.limits } });
 		check(draft.model && Object.keys(draft.model).sort().join() === "modelId,provider,thinkingLevel", "MODEL", "Explicit model selection required");
-		check(draft.model.provider === "swarm-mock" && this.#modelRuntime?.getModel(draft.model.provider, draft.model.modelId)?.api === "swarm-mock", "MODEL", "Live model execution remains disabled");
+		this.#assertProvider(draft.model);
+		check(this.#providerCapability || (draft.model.provider === "swarm-mock" && this.#modelRuntime?.getModel(draft.model.provider, draft.model.modelId)?.api === "swarm-mock"), "MODEL", "Live model execution remains disabled");
 		check(["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(draft.model.thinkingLevel), "MODEL", "Invalid thinking level");
 		check(Array.isArray(draft.codingTools) && new Set(draft.codingTools).size === draft.codingTools.length && draft.codingTools.every(name => ["read", "edit", "write", "bash"].includes(name)), "INPUT", "Unsupported coding tool selection");
 		check(typeof draft.instructions === "string" && draft.instructions.length <= 32768, "INPUT", "Invalid host instructions");
@@ -146,7 +176,8 @@ export class SwarmHost {
 				if (signal.aborted) abort();
 				timer = setTimeout(() => pending.abort(), this.#approvalTimeout);
 			});
-			const request = Object.freeze({ action, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), requiresExistingWorkDecision: inspection.changes.length > 0, requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
+			const provider = this.#providerCapability ? providerDescriptor(this.#providerCapability) : undefined;
+			const request = Object.freeze({ action, provider, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), requiresExistingWorkDecision: inspection.changes.length > 0, requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
 			const answer = structuredClone(await Promise.race([Promise.resolve().then(() => {
 				check(!signal.aborted, "CANCELLED", "Approval cancelled before presentation");
 				return this.#ask(request);
@@ -156,10 +187,13 @@ export class SwarmHost {
 			check(answer?.approved === true, "AUTHORITY", "User did not approve this action");
 			check(!inspection.changes.length || answer.existingChanges === "preserve", "DIRTY", "Explicit preservation of existing changes is required");
 			check(action === "launch" || action === "reconcile" || answer.reconciled === true, "UNSETTLED", "Explicit workspace reconciliation is required");
+			check(answer.provider === undefined, "PROVIDER", "Approval cannot replace the host provider binding");
+			// Settlement attestation grants no model authority and must remain available after provider failure.
+			if (action !== "reconcile") this.#assertProvider(specification.model);
 			const approved = answer.specification ?? specification;
 			if (action !== "launch") check(specificationFingerprint(approved) === specificationFingerprint(specification), "SCOPE", "Continuation cannot silently change the approved scope");
 			if (action === "reconcile") check(answer.attestation?.kind === "user-established-settlement" && typeof answer.attestation.evidence === "string" && answer.attestation.evidence.trim().length > 0 && answer.attestation.evidence.length <= 4096, "UNSETTLED", "Describe independently established process/session settlement; a boolean is not evidence");
-			return { grant, specification: approved, attestation: answer.attestation, approval: { id: randomUUID(), action, workspaceFingerprint: inspection.fingerprint, specificationFingerprint: specificationFingerprint(approved), existingChanges: inspection.changes.length ? "preserve" : "clean" } };
+			return { grant, specification: approved, attestation: answer.attestation, approval: { id: randomUUID(), action, workspaceFingerprint: inspection.fingerprint, specificationFingerprint: specificationFingerprint(approved), existingChanges: inspection.changes.length ? "preserve" : "clean", ...(provider ? { provider } : {}) } };
 		} finally {
 			clearTimeout(timer);
 			signal.removeEventListener("abort", abort);
@@ -173,6 +207,11 @@ export class SwarmHost {
 	}
 
 	async #wire() {
+		const recorded = this.#controller.snapshot().hostApprovals.at(-1)?.provider;
+		const configured = this.#providerCapability ? providerDescriptor(this.#providerCapability) : undefined;
+		check(!recorded || (configured && specificationFingerprint(recorded) === specificationFingerprint(configured)),
+			"PROVIDER", "Restore requires the original host provider capability");
+		this.#assertProvider(this.#specification().model);
 		const admission = { assert: () => this.#assertAdmission(), signal: () => this.#permit?.signal ?? this.#denied };
 		this.#workspace = await WorkspaceRuntime.attach(this.#controller, { admission, runner: this.#runner, authorize: async request => {
 			this.#assertAdmission();
@@ -193,7 +232,7 @@ export class SwarmHost {
 			check(this.#permit === permit && !signal.aborted, "HOST_DENIED", "Approval belongs to an expired host admission");
 			return result.approved === true;
 		} });
-		this.#driver = await SwarmSessions.attach(this.#controller, { workspace: this.#workspace, modelRuntime: this.#modelRuntime, mainModel: this.#modelRuntime.getModel(this.#specification().model.provider, this.#specification().model.modelId), thinkingLevel: this.#specification().model.thinkingLevel, codingTools: this.#specification().codingTools, instructions: this.#specification().instructions, tickIntervalMs: this.#tickInterval, admission });
+		this.#driver = await SwarmSessions.attach(this.#controller, { workspace: this.#workspace, modelRuntime: this.#modelRuntime, mainModel: this.#modelRuntime.getModel(this.#specification().model.provider, this.#specification().model.modelId), thinkingLevel: this.#specification().model.thinkingLevel, codingTools: this.#specification().codingTools, instructions: this.#specification().instructions, tickIntervalMs: this.#tickInterval, admission, providerCapability: this.#providerCapability });
 	}
 
 	#launchSpecification;
@@ -222,10 +261,11 @@ export class SwarmHost {
 		try {
 			this.#controller = await SwarmController.open({ ...this.#location, create: accepted.specification, createOnly: true });
 			this.#assertOperation(operation);
+			this.#unchanged(inspection, accepted.grant);
+			await this.#controller.owner("host.approve", { approval: accepted.approval });
 			await this.#wire();
 			this.#assertOperation(operation);
 			this.#unchanged(inspection, accepted.grant);
-			await this.#controller.owner("host.approve", { approval: accepted.approval });
 			this.#setPermit(accepted.grant, operation);
 			await this.#driver.resume({ reconciled: true });
 			return this.snapshot();

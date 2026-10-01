@@ -27,7 +27,7 @@ Use a deterministic controller for scheduling, ownership, persistence, limits, a
 
 **Confirmed specialist reuse policy:** prefer an existing suitable specialist. Before recruiting another, check current work, queued work, task dependencies, likely file overlap, and whether enough independent work exists to benefit from parallel execution. Require a concrete justification for another specialist. Being busy alone is insufficient; do not use a repeated-busy-check count or arbitrary busy threshold. Another specialist is allowed for useful, independent parallel work within approved limits.
 
-Stages 1–5 (controller/persistence, workspace safeguards, offline SDK integration, host approval/policy integration, and opt-in launch/recovery UI controls) are authorized and implemented; see sections 10–14. SDK execution remains restricted to deterministic mock providers. Phase 5 UI is tested through fake native UI contexts; authorized Phase 6 adds isolated automated CLI/PTY acceptance (section 15). Authorized Phase 7 adds a mock-only live dashboard and read-only history navigation (section 16). Authorized Phase 8 adds real CLI acceptance with production Plan/Safety providers (section 17). Live model execution and activation remain unauthorized. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
+Stages 1–5 (controller/persistence, workspace safeguards, offline SDK integration, host approval/policy integration, and opt-in launch/recovery UI controls) are authorized and implemented; see sections 10–14. SDK execution defaults to deterministic mock providers; the separately injected constrained adapter and HTTPS client are described in sections 19–20. Phase 5 UI is tested through fake native UI contexts; authorized Phase 6 adds isolated automated CLI/PTY acceptance (section 15). Authorized Phase 7 adds a mock-only live dashboard and read-only history navigation (section 16). Authorized Phase 8 adds real CLI acceptance with production Plan/Safety providers (section 17). Phase 9 implements offline provider agreement/readiness plumbing with unsupported real transport failing closed (section 18). Phase 10 implements the offline constrained adapter (section 19); Phase 11 adds explicitly authorized HTTPS tested only against local TLS fixtures (section 20). Live remote model trials and activation remain unauthorized. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
 
 Record decisions in this document as discussion proceeds and update affected sections so superseded designs do not remain implementation requirements.
 
@@ -1065,3 +1065,218 @@ Limitations and remaining gates:
   judgment, semantic scope/progress, usage aggregation, and activation remain deferred.
 - Test fixtures are removed only after confirmed CLI exit, as before. No persistent personal
   configuration or global activation is needed to rerun this acceptance.
+
+### 18. Phase 9 offline provider-agreement readiness
+
+Implemented configuration/approval readiness without enabling live execution. The existing
+SDK mock gate remains before model lookup; there is no generic trusted-runtime bypass.
+Work began from clean `02b5106` on `feat/pi-swarm`; no activation, credentials, network,
+installation, settings changes, commits, or pushes are involved.
+
+Implemented boundaries:
+
+- `provider-capability.mjs` defines a strict versioned descriptor binding provider, model,
+  API, endpoint, transport, and the complete declared context-data scope. Host construction
+  copies/freezes it and brands the capability in a private WeakMap. Serialized descriptors,
+  worker data, or approval answers cannot substitute a capability or mint human approval.
+- The optional host/factory capability path checks exact mock identity/endpoint and rejects
+  model headers, compatibility routing, and sampling payload overrides. Provider and runtime
+  method identity are captured; replacement fails on the next admission, revokes the permit,
+  and requests pause. This is not a sandbox against arbitrary trusted JavaScript/closures.
+- Native approval displays the immutable provider agreement separately from editable scope.
+  Every successful launch/resume/restart records it alongside a fresh human approval ID.
+  Pure replay rejects removal/replacement. Restore requires a matching host-created capability
+  but never restores execution authority. Existing mode/session/lifecycle gates revoke permits;
+  returning Off or restoring old metadata does not authorize work.
+- `scripted-memory` uses the existing deterministic mock SDK integration only. Its complete
+  context scope names objective/guidance, host instructions, workspace content, tool
+  definitions/results, histories, peer messages, and compaction summaries. This declaration
+  is disclosure, not content filtering/redaction; in this transport it remains in process.
+- `https-unsupported` permits pure descriptor validation with a canonical HTTPS endpoint,
+  excluding credentials/query/fragment. Host execution rejects with `UNSUPPORTED_TRANSPORT`
+  before any runtime method, approval prompt, or run storage. No real transport is shipped.
+  Existing callers without a capability retain their legacy mock-only behavior.
+
+Verification with installed SDK and disposable fixtures:
+
+- **335 Swarm tests** (325 prior + 10 new) pass. New tests cover strict/immutable/forged
+  descriptors, complete scope, model/API/endpoint/header/routing/sampling substitutions,
+  implementation replacement, durable launch/resume/restart approval, cancellation,
+  mode revocation, paused recovery, missing restore capability, and unsupported live preflight.
+- Real SDK scripted host integration runs under a test-process network guard over fetch,
+  sockets, TLS, HTTP(S), and common DNS APIs, asserting zero attempted network calls. It is
+  not an OS sandbox and does not certify arbitrary callbacks or external processes.
+- **66 Plan/Safety tests**, **4 PTY cleanup regressions**, and **both existing real CLI PTY
+  scenarios** pass. PTYs exercise the unchanged legacy mock-only path, not a live transport
+  or new capability-specific terminal acceptance.
+- `git diff --check` passes. Global validation retains the pre-existing model/thinking default
+  mismatch and reports the two intentionally untracked new phase-9 files. Defaults are
+  preserved and changes remain unstaged/uncommitted.
+
+Remaining real-transport gate:
+
+The SDK may resolve ambient credentials, OAuth refresh, provider/catalog overrides, proxies,
+provider environment, and request sampling fields (including model substitution). A frozen
+agreement cannot constrain that machinery. Real integration therefore remains unsupported,
+not "ready for live use." A future separately authorized adapter must own explicit auth,
+actual destination/payload validation, redirect/fallback policy, cancellation and per-request
+fencing across follow-ups/compaction/retries, plus transport-level offline acceptance before
+an authorized live trial. No relaxation of the SDK or extension mock gate is justified by
+these tests. All prior semantic scope/progress, usage/UI, process-settlement, stale-lock,
+crash/power-loss, and activation limitations remain in force.
+
+### 19. Phase 10 constrained transport adapter, offline only
+
+Implemented the separately branded `https-chat-completions` path without enabling any
+built-in network client or changing activation. Phase 9 uncommitted work is preserved.
+The new async `createConstrainedRuntime` takes an explicit immutable provider capability,
+literal in-memory credential, trusted offline transport callback, and bounded request timeout.
+No provider destination is selected by default. The exact HTTPS `/chat/completions` URL,
+provider/model, `openai-completions` API and complete context disclosure are required inputs.
+`https-unsupported` remains fail-closed and cannot silently become supported. Legacy mock
+callers remain unchanged.
+
+Implemented contract:
+
+- A frozen SDK-compatible runtime facade avoids `ModelRuntime.create()`, provider registration,
+  ambient credentials/environment, OAuth, catalogs, proxy discovery, compatibility routing,
+  and request overrides. Only public package exports are used; lazy SDK loading preserves
+  the SDK-free pure reducer/foundation suite. Serialized runtimes cannot recover a credential
+  or reproduce the private brand. Credential state never enters the approval/journal/model.
+- One bounded request builder serves stream, streamSimple, complete and completeSimple.
+  It fixes the model and exact URL, POST, JSON/SSE headers and literal Bearer authentication.
+  It serializes text context and function calls/results only. SDK payload/header/response
+  hooks are inert; auth/environment/header/fetch/sampling/metadata overrides fail closed.
+  No retries, fallback, redirects, affinity IDs, attribution or telemetry are forwarded.
+- Strict bounded SSE parsing accepts chunked UTF-8, text and fragmented function arguments.
+  It requires one choice, a supported finish reason and `[DONE]`, checks declared model,
+  validates tool IDs/names/object arguments, and publishes only after complete validation.
+  Status errors, redirect responses, malformed/truncated/unsupported responses and arbitrary
+  thrown values yield fixed sanitized errors. Error text is safe for native SDK persistence.
+- Host/factory/driver/SDK gates accept only the matching branded adapter with thinking Off.
+  Launch records the approved provider agreement before configuring non-mock sessions, but
+  still grants execution only after wiring and final approval/workspace checks. Pure replay
+  requires that recorded agreement for non-mock model selection.
+- Each worker SDK receives a separate request-admission binding. Every request durably checks
+  elapsed run time, verifies fresh host/mode/turn/cycle/generation/guidance admission directly
+  before dispatch, and rechecks before response publication. Signals combine SDK, host/turn,
+  and request-deadline cancellation; host ticks abort active requests at the run deadline.
+  Native manual compaction uses the same stream path and explicitly aborts compaction as well
+  as the session. A transport ignoring abort retains its turn/ownership until actual settlement.
+
+Verification with installed Pi SDK 0.85.1 and disposable fixtures:
+
+- **361 Swarm tests**: 335 previous tests plus **26 new adapter regressions**. New tests run
+  under the shared test-process network guard and assert zero fetch/socket/TLS/HTTP(S)/DNS
+  attempts. Tests cover immutable exact request construction, all four stream/complete paths,
+  forged/substituted bindings, forbidden overrides, UTF-8/SSE/function-call round trips,
+  status/redirect/protocol/size/model errors, sanitized persistence, request and run deadlines,
+  request-construction/response revocation, mode cancellation and non-renewal of approval.
+- Real SDK host tests prove tool follow-up requests, native manual compaction, paused restore
+  and fresh approval. Compaction cancellation deliberately uses an uncooperative transport:
+  pause reports incomplete settlement and retains the durable turn until release, then stores
+  no cancelled summary. Provider errors are not echoed into native history or host state.
+- **155 SDK-free foundation tests**, **66 Plan/Safety regressions**, **4 cleanup regressions**,
+  and **both real CLI PTY scenarios** pass. PTYs still exercise the unchanged legacy mock path,
+  not actual network transport or new-provider terminal acceptance.
+- `git diff --check` passes. Global validation retains the pre-existing model/thinking
+  default mismatch and reports five intentionally untracked phase-9/10 source/test files.
+  No settings are normalized and no files are staged.
+
+Exact limitations and remaining gate:
+
+The injected transport is a trusted offline seam, not a constrained OS process or general
+network authorization. It must honor the frozen request, abort/cleanup and actual-settlement
+contract. No actual Node HTTPS implementation is included; no HTTP client or live provider
+was invoked. A future real client needs separate explicit host egress authorization and
+transport-level verification of direct HTTPS, no ambient proxies/credentials, redirects,
+retries, fallback or routing before any independently authorized live trial. Arbitrary
+injected JavaScript cannot be certified by this adapter's tests.
+
+Supported protocol is text/function-call Chat Completions only: no reasoning, images,
+Responses API, WebSockets, deferred work, alternate authentication, provider-specific fields,
+usage-only SSE frames or broad compatibility promises. Responses are buffered before SDK
+content events. Requests/responses are limited to 4 MiB, 64 calls and 8192 output tokens;
+32768 context capacity is fixed conservative metadata. Usage/cost remain unknown; SDK zero
+counters/prices are placeholders, not measurements. Existing semantic-scope, UI, process
+escape, recovery, stale-lock, crash/power-loss and activation gates remain unchanged.
+The package README documents the constructor, callback contract and these limitations.
+No credential access, remote transmission, dependency install, settings change, global
+activation, commit or push is part of this phase. Changes remain uncommitted for review.
+
+### 20. Phase 11 explicit Node HTTPS transport, loopback acceptance only
+
+Implemented actual HTTPS behind a separate branded host egress authorization. Phase 9/10
+pending edits remain preserved and uncommitted. No real-provider trial, external network,
+real credentials, dependency installation, settings changes, global activation, commit or push
+was authorized or performed. There is still no default remote endpoint or automatic upgrade;
+a future trial must explicitly supply an authorized descriptor, endpoint/model and credential.
+
+Implemented boundaries:
+
+- `https-transport.mjs` adds `authorizeHttpsEgress`, `createHttpsTransport`, and a separate
+  `authorizeLoopbackHttpsTest` policy. Authorizations bind the exact immutable capability
+  identity, HTTPS origin/path and model. Forged/serialized/substituted capabilities and extra
+  options fail closed. These host APIs attest separate egress permission; they do not mint
+  human run approval or become worker-visible tools. Constructors perform no network work.
+- Production dispatch resolves only IPv4 through Node OS lookup, rejects every special-use/
+  private/loopback/link-local/documentation/multicast/reserved answer conservatively (including
+  mixed answer sets), and pins one permitted address without another lookup or fallback.
+  TLS/Host retain the approved hostname. The OS resolver can use hosts files or external DNS;
+  this is not DNSSEC, provider identity attestation, or protection against privileged routing.
+  IPv6-only and private providers remain unsupported. No real external DNS was used in tests.
+- Each request owns an isolated non-pooling Node HTTPS agent with session caching disabled,
+  explicit Node built-in roots, strict chain/hostname verification and TLS 1.2 minimum.
+  No proxy-environment/global-agent routing, ambient auth/extra trust roots, alternate headers,
+  retries, redirects, fallback, model substitution or generic SDK provider composition is used.
+  Header/body limits remain explicit; credentials exist only in private runtime memory and
+  the transient approved request. Fixed sanitized errors enter SDK histories, never raw errors.
+- Every request checks current host/turn admission and combined abort/deadline signal after
+  DNS and immediately before dispatch. The adapter now privately recognizes branded request
+  settlement records: status/parser failure, cancellation and normal completion all wait for
+  actual ClientRequest and socket close before terminal SDK publication. Arbitrary injected
+  callback/response properties cannot forge this transport-settlement contract. Final
+  admission is rechecked after settlement with no await before publication.
+- Loopback policy is explicit and separate: exact localhost/loopback IPv4 URL with explicit
+  port, pinned loopback socket, supplied ephemeral self-signed CA only, normal strict TLS and
+  hostname verification. It cannot authorize a remote host, silently change trust roots or
+  bypass the production public-address gate. Legacy mock/offline paths and `https-unsupported`
+  remain unchanged; callback injection does not inherit built-in socket-settlement guarantees.
+- `test/tls-fixture.mjs` is a test-only minimal DER generator using Node crypto: fresh RSA-2048
+  CA/leaf keys, SHA-256 signatures, random serials, short validity, CA/basic/key-usage constraints,
+  serverAuth and localhost/IP SANs. Nothing is written to disk. `X509Certificate` checks
+  signatures, CA status, validity, SAN and private-key match; actual TLS validates trusted
+  success and rejects wrong-name/untrusted chains. This is not a reusable production PKI API.
+
+Verification with Node 22 and installed Pi SDK 0.85.1:
+
+- Baseline **361/361** Swarm tests passed before implementation. Final **384/384** pass,
+  adding **23 HTTPS/DNS/SDK regressions**. **155 SDK-free foundation**, **66 Plan/Safety**,
+  **4 cleanup tests**, and **both existing real CLI PTY scenarios** pass. The policy run uses
+  Swarm's installed-SDK resolver (the narrower Safety resolver alone does not resolve typebox).
+- Actual loopback HTTPS covers exact headers/path/model, fragmented UTF-8/SSE, redirect,
+  malformed/model-substituted response, certificate mismatch/untrusted CA, credential-safe
+  errors/history, slow headers/body cancellation and deadline, and socket close before result.
+  Proxy environment/global-agent routing are exercised without contacting their destinations.
+- Real SDK requests prove tool follow-ups, native compaction, mode revocation during prompt
+  and compaction, no automatic renewal on returning Off, and paused restore with fresh approval.
+  Stubbed production DNS covers private/mixed/empty rejection, final post-lookup admission,
+  and unsettled cancellation while an OS-style lookup remains outstanding. All other network
+  entry points in the test guard are denied; only the fixture's loopback port is allowed.
+  This guard is defense in depth, not an OS firewall. PTYs remain mock-only regressions.
+- `git diff --check` passes. The global validator reports the existing model/thinking default
+  mismatch and eight intentionally untracked phase-9–11 source/test files. Nothing is staged
+  and no defaults were normalized. README documents exact APIs, trust boundaries and limits.
+
+Remaining limits and gate:
+
+Node OS lookup is not cancellable; outstanding resolution retains request/turn ownership until
+it returns, at which point cancellation fences connection. Pause timeout cannot fabricate
+settlement. Timers require a responsive event loop. Actual local socket closure is not proof
+of remote cancellation, rollback, absence of transmitted bytes, external process death or
+crash/power-loss safety. Arbitrary trusted JavaScript, OS routing and privileged environment
+remain outside this cooperative boundary. Remote TLS/provider compatibility and usefulness
+have not been validated, and no human visual acceptance or activation readiness is claimed.
+The earlier text/function-call subset, unknown usage/cost, fixed context metadata, scope/progress,
+UI, recovery and stale-owner limitations remain. A live trial needs separate explicit user
+permission and explicit endpoint/model/credential inputs; none are selected or recovered here.

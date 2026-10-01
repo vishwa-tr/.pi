@@ -1,14 +1,16 @@
-import { randomUUID } from "node:crypto";
 import { SwarmHost } from "./host.mjs";
+import { randomUUID } from "node:crypto";
+import { showDashboard } from "./dashboard.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { requestUserApproval, statusText } from "./ui.mjs";
-import { showDashboard } from "./dashboard.mjs";
+import { assertProviderSelection } from "./provider-capability.mjs";
 
 const LINK = "swarm-run-v1";
 
 /** Explicit injection only: no default export, provider discovery, or activation entry. */
-export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off", codingTools, instructions, runner, tickIntervalMs = 1000, approvalTimeoutMs = 120000 } = {}) {
-	check(mainModel?.provider === "swarm-mock" && mainModel.api === "swarm-mock" && modelRuntime, "MODEL", "An explicitly injected mock runtime is required");
+export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off", codingTools, instructions, runner, tickIntervalMs = 1000, approvalTimeoutMs = 120000, providerCapability } = {}) {
+	if (providerCapability) assertProviderSelection(providerCapability, { provider: mainModel?.provider, modelId: mainModel?.id, thinkingLevel }, modelRuntime);
+	check(providerCapability || (mainModel?.provider === "swarm-mock" && mainModel.api === "swarm-mock" && modelRuntime), "MODEL", "An explicitly injected mock runtime is required");
 	return function swarmExtension(pi) {
 		let host;
 		let owner;
@@ -25,7 +27,7 @@ export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = 
 			check(!owner || owner === sessionId, "OWNERSHIP", "Another session owns this host");
 			if (!host) {
 				owner = sessionId;
-				host = new SwarmHost({ events: pi.events, sessionId, modelRuntime, mainModel, thinkingLevel, codingTools, instructions, runner, tickIntervalMs, approvalTimeoutMs,
+				host = new SwarmHost({ events: pi.events, sessionId, modelRuntime, mainModel, thinkingLevel, codingTools, instructions, runner, tickIntervalMs, approvalTimeoutMs, providerCapability,
 					requestApproval: request => requestUserApproval(context, request),
 					beforePrompt: async () => { if (viewing) { cancel(); await dashboard; } } });
 			}
