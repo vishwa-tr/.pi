@@ -7,8 +7,8 @@ Usage:
   python shotcut.py render <project.mlt> -o <video.mp4> [--preview]
   python shotcut.py frames <video> -o <sheet.png> [--count 12 | --at 1.5,4]
 
-Every command takes --shotcut-dir, defaulting to the SHOTCUT_DIR environment variable. That
-folder must contain melt, ffmpeg and ffprobe, as the Shotcut portable/tarball builds do.
+The global --shotcut-dir option defaults to SHOTCUT_DIR. That folder must contain melt
+(or mlt-melt/melt-7), ffmpeg and ffprobe. Without a folder, tools are discovered on PATH.
 
 build   Writes a project that melt renders and Shotcut opens and edits as usual. The spec format
         is documented in guides/shotcut-video.md. Media paths in the spec are relative to the
@@ -21,6 +21,7 @@ Exit codes: 0 success, 1 invalid input or tool failure, 2 command-line syntax er
 """
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -151,12 +152,45 @@ def run_render(args, tools):
         encoding["frame_rate_den"] = profile["frame_rate_den"]
         encoding["progressive"] = profile.get("progressive", "1")
 
-    consumer_args = [f"{key}={value}" for key, value in encoding.items()]
     with verified_output(output_path) as temporary:
-        command = [tools.melt, "-progress2", project_path, "-consumer", f"avformat:{temporary}"]
-        run_tool(command + consumer_args, capture=False)
-        duration = probe_duration(tools, temporary)
+        duration = render_with_fallback_codecs(tools, project_path, temporary, encoding)
     print(f"wrote {output_path} ({duration:.2f}s)")
+
+
+def render_with_fallback_codecs(tools, project_path, output_path, encoding):
+    failures = []
+    melt_command = tools.melt_command()
+
+    for vcodec in render_codecs(encoding):
+        render_encoding = dict(encoding, vcodec=vcodec)
+        if vcodec != "libx264":
+            # CRF and preset are x264-specific; the other encoders use a bitrate.
+            render_encoding.pop("preset", None)
+            render_encoding.pop("crf", None)
+            render_encoding["vb"] = "4M"
+        consumer_args = [f"{key}={value}" for key, value in render_encoding.items()]
+        command = [*melt_command, "-progress2", project_path, "-consumer", f"avformat:{output_path}"]
+
+        try:
+            run_tool(command + consumer_args, capture=False)
+            duration = probe_duration(tools, output_path)
+            require_video_stream(tools, output_path)
+            if failures:
+                print(f"render used fallback codec {vcodec}", file=sys.stderr)
+            return duration
+        except ToolError as error:
+            failures.append(f"{vcodec}: {error}")
+            print(f"render attempt with {vcodec} failed: {error}", file=sys.stderr)
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(output_path)
+
+    raise ToolError("render failed with all video codecs: " + "; ".join(failures))
+
+
+def render_codecs(encoding):
+    requested = encoding["vcodec"]
+    fallbacks = ["libopenh264", "mpeg4"]
+    return [requested, *(codec for codec in fallbacks if codec != requested)]
 
 
 def read_profile(project_path):
@@ -1050,23 +1084,35 @@ class Tools:
         self.ffmpeg = ffmpeg
         self.ffprobe = ffprobe
 
+    def melt_command(self):
+        command = [self.melt]
+        if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or
+                                                     os.environ.get("WAYLAND_DISPLAY")):
+            xvfb = shutil.which("xvfb-run")
+            if xvfb is None:
+                raise ToolError("headless Linux rendering needs xvfb-run (or an X11/Wayland display)")
+            command = [xvfb, "-a", *command]
+        return command
+
 
 def find_tools(shotcut_dir):
-    if not shotcut_dir:
-        raise ToolError("set SHOTCUT_DIR or pass --shotcut-dir (the folder holding melt)")
-
     found = {}
 
     for name in ("melt", "ffmpeg", "ffprobe"):
-        candidates = [
-            os.path.join(folder, name + suffix)
-            for folder in (shotcut_dir, os.path.join(shotcut_dir, "bin"))
-            for suffix in ("", ".exe")
-        ]
-        path = next((candidate for candidate in candidates if shutil.which(candidate)), None)
+        names = ("melt", "mlt-melt", "melt-7") if name == "melt" else (name,)
+        if shotcut_dir:
+            candidates = [
+                os.path.join(folder, executable + suffix)
+                for folder in (shotcut_dir, os.path.join(shotcut_dir, "bin"))
+                for executable in names
+                for suffix in ("", ".exe")
+            ]
+        else:
+            candidates = names
+        path = next((path for candidate in candidates if (path := shutil.which(candidate))), None)
 
         if path is None:
-            raise ToolError(f"{name} not found in {shotcut_dir}")
+            raise ToolError(f"{name} not found in {shotcut_dir or 'PATH'}")
 
         found[name] = path
 
@@ -1085,6 +1131,13 @@ def probe_duration(tools, path):
     if not math.isfinite(duration) or duration <= 0:
         raise ToolError(f"ffprobe returned no positive finite duration for {path}")
     return duration
+
+
+def require_video_stream(tools, path):
+    command = [tools.ffprobe, "-v", "error", "-select_streams", "v:0",
+               "-show_entries", "stream=codec_type", "-of", "csv=p=0", path]
+    if run_tool(command).strip() != "video":
+        raise ToolError(f"ffprobe found no video stream in {path}")
 
 
 def run_tool(command, capture=True):

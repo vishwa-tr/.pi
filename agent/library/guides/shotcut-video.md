@@ -10,10 +10,13 @@ spec, **render** it, and pull **frames** to check the result without watching it
 
 Verified 2026-10-01 against Shotcut 25.08.16 (MLT 7.33, FFmpeg 7.1) on Windows: a spec with a
 colour scene, a zoomed video clip, an image, crossfades, three overlapping titles and music built,
-rendered at the right length and frame rate, and opened in Shotcut with its tracks intact. Full MLT rendering on Linux
-and macOS remains unverified. Review verification on 2026-10-01 used Python 3.14 and FFmpeg
-8.1.2 on Linux for synthetic-video frame extraction and contact sheets, plus regression tests
-for project XML, input validation and output handling; no Shotcut/MLT renderer was available.
+rendered at the right length and frame rate, and opened in Shotcut with its tracks intact.
+Linux rendering verified 2026-10-01 on Fedora 44 with Shotcut 26.9.6, MLT 7.40.0 and
+FFmpeg-free 8.1.3: two colour scenes and a text title built and rendered headlessly via Xvfb.
+The audio-only libx264 attempt was rejected and libopenh264 produced H.264 video at
+320×180, 30 fps, with a positive 2.005s container duration. Contact sheet and still extraction
+passed, and the sheet visibly contained both colours and the title. Linux GUI editing, complex
+media projects and macOS rendering remain unverified.
 
 ## Details
 
@@ -22,7 +25,23 @@ for project XML, input validation and output handling; no Shotcut/MLT renderer w
 - Python 3.9+ (stdlib only).
 - A Shotcut install or portable folder holding `melt`, `ffmpeg` and `ffprobe`. Point
   `SHOTCUT_DIR` at it, or pass `--shotcut-dir`. The script also looks in `<dir>/bin`.
+  Without either setting, tools are discovered on `PATH`. `mlt-melt` and `melt-7` are
+  accepted aliases for `melt` (Fedora uses these names).
+- On headless Linux, install `xvfb-run`, Xvfb and its authentication dependency (`xauth`).
+  When neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, the script automatically wraps
+  renders in `xvfb-run -a`; a missing wrapper gives an actionable error. An existing display
+  must be usable; stale display variables are not automatically repaired.
+- MLT's Qt text/image plugins and the filters used by the project must be installed.
 - Fonts named in a spec must be installed; an unknown family silently falls back.
+
+Fedora package installation (changes system packages):
+
+```bash
+sudo dnf install shotcut mlt ffmpeg-free xorg-x11-server-Xvfb
+```
+
+This installed `mlt-qt6`, `xvfb-run` and `xauth` as dependencies in the verified Fedora build.
+Check these dependencies explicitly on other distributions.
 
 ### Workflow
 
@@ -34,7 +53,7 @@ python "$S" build spec.json -o project.mlt               # spec -> Shotcut proje
 python "$S" render project.mlt -o preview.mp4 --preview  # half size, fast
 python "$S" frames preview.mp4 -o sheet.png --count 16   # one contact sheet to eyeball
 python "$S" frames preview.mp4 -o still.png --at 3.2,7.5 # full-size stills at chosen times
-python "$S" render project.mlt -o final.mp4              # H.264 CRF 18 + AAC 256k, faststart
+python "$S" render project.mlt -o final.mp4              # prefers H.264 CRF 18 + AAC 256k, faststart
 ```
 
 To review or polish by hand, open `project.mlt` in Shotcut. **Pick one source of truth per
@@ -43,7 +62,13 @@ those edits. Either keep editing the spec and treat Shotcut as a viewer, or stop
 continue in Shotcut. `render` works on both.
 
 Each completed output replaces an existing file only after a nonempty result is produced;
-a failed output preserves the previous file. Inputs cannot also be output destinations.
+a failed output preserves the previous file. Renders additionally require a video stream and
+positive finite duration according to ffprobe before publishing the output. Failed render commands,
+unreadable outputs and audio-only outputs retry with `libopenh264`, then `mpeg4`, after the
+preferred `libx264`. Retries report errors and the successful fallback codec to stderr.
+Fallbacks use a 4 Mbit/s video bitrate rather than x264's CRF/preset settings; quality and
+compression differ, and the last fallback is MPEG-4 Part 2, not H.264. All failed attempts preserve
+the previous output. Inputs cannot also be output destinations.
 A multi-still request may complete earlier files before a later extraction fails.
 `--at` timestamps must be finite, nonnegative and before the video's end.
 
@@ -127,6 +152,12 @@ a `background` track, V1 for scenes, V2+ for titles, A1+ for audio. Crossfades a
   nested `<svg>` viewports are not supported, so fake shadows with offset translucent shapes.
 - **Screen recordings flash loading states.** Scan the source a second at a time
   (`ffmpeg -vf fps=1,...,tile=`) before choosing an in-point.
+- **Fedora's ffmpeg-free may omit libx264.** MLT can exit successfully with audio-only output;
+  file size and duration alone do not prove a video was rendered. The script probes for a video
+  stream and retries with alternative codecs. Available codecs depend on MLT's linked FFmpeg,
+  not necessarily the standalone `ffmpeg` binary. Large jobs may render fully more than once.
+- **Qt text filters need a display.** Headless Linux uses Xvfb automatically; render validation
+  proves a stream exists, not that every requested filter or font was applied. Inspect the sheet.
 - `melt` writes progress and FFmpeg warnings to stderr; in PowerShell this shows as a
   `NativeCommandError` even when the render succeeded. Check the exit code and the output file.
 
@@ -140,7 +171,10 @@ a `background` track, V1 for scenes, V2+ for titles, A1+ for audio. Crossfades a
 
 Run `python scripts/shotcut.test.py -v` from the repository root. The suite includes real
 frame extraction when FFmpeg/ffprobe are installed; otherwise that integration test is skipped.
-MLT render commands are checked with a test double and are not proof of renderer compatibility.
+The suite covers MLT executable aliases, display/Xvfb selection, codec retries for audio-only
+outputs and command/probe failures, preview frame rates and preservation of existing outputs.
+MLT render commands use test doubles; the separate Fedora smoke test described above provides
+real renderer evidence for the small colour/title project only.
 
 Authoritative references checked 2026-10-01:
 
