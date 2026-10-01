@@ -99,10 +99,8 @@ root `skills/` is the canonical global skill library.
   discussion; Plan uses tagged planning skills and an authorized `save_plan`
   path. Plan-mode workers are fresh read-only one-shot Pi Subagents. The shared
   base instructions live in `skills/plan/`.
-- **MCP:** `pi-mcp-client` loads machine-local `mcp.json` stdio server
-  definitions with a minimal environment. Calls confirm by default, large
-  catalogs use `mcp_search_tools`, and session shutdown owns process cleanup.
-  Remote HTTP and unsupported MCP capabilities are intentionally out of scope.
+- **MCP:** Pi's built-in MCP support reads server definitions from
+  `~/.pi/agent/mcp.json` and provides the `/mcp` command.
 - **Codex helpers:** `pi-codex-web-search` and `pi-codex-image-generation` use
   short-lived Codex clients and the existing ChatGPT login. Image generation
   uses an ephemeral image-only thread, accepts explicit source images, and
