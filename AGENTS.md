@@ -101,6 +101,15 @@ stop and save or extend a reusable version.** Treat repetition as evidence of fu
 routine commands, temporary outputs, and task notes remain excluded. Check the indexes below
 first and reuse an equivalent rather than creating a duplicate.
 
+**Retain and reuse authoritative research.** Before external research, check the relevant shared
+and project indexes for existing references. When research produces guidance likely to be
+reused—especially compliance, security, standards, or API contracts—save a concise source-linked
+guide and index it before finishing the task. Include the verification date, applicability, and
+limitations; distinguish summaries from full archived documents. Repeated research on the same
+topic requires updating or reusing the existing guide rather than another unsaved lookup.
+Refresh sources when currency matters; saved references do not replace current verification.
+Delegated researchers must report reusable findings to the parent, who owns retention and indexing.
+
 Save a working version promptly, after removing sensitive data and choosing the correct scope.
 Parameterization, documentation, verification, and indexing must follow before the task ends;
 disclose any unfinished verification. This trigger does not override privacy, authorization,
