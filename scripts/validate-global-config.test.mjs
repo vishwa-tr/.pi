@@ -16,12 +16,28 @@ test("configuration validation follows the portable skill layout and retains saf
       stdio: "pipe",
     });
     // Exercise the working validator against an isolated copy of committed resources.
-    copyFileSync(join(root, "scripts/validate-global-config.mjs"), join(fixture, "scripts/validate-global-config.mjs"));
+    for (const path of ["scripts/validate-global-config.mjs", ".gitignore"]) {
+      copyFileSync(join(root, path), join(fixture, path));
+    }
 
     await t.test("accepts the 28-skill layout with 30 evals and a separate runtime adapter", () => {
       const result = validate(fixture);
       assert.equal(result.status, 0, result.output);
       assert.match(result.output, /28 global skills/);
+    });
+    await t.test("requires built-in MCP credentials to remain ignored in both layouts", () => {
+      withChangedFile(fixture, ".gitignore",
+        (text) => text.replace(/^\/(?:agent\/)?mcp-auth\.json\*\n/gm, ""), () => {
+          assertFailure(fixture, "expected ignored path is not covered: mcp-auth.json");
+          assertFailure(fixture, "expected ignored path is not covered: agent/mcp-auth.json");
+        });
+    });
+    await t.test("requires rotated MCP logs to remain ignored in both layouts", () => {
+      withChangedFile(fixture, ".gitignore",
+        (text) => text.replace(/^\/(?:agent\/)?mcp\.log\*\n/gm, ""), () => {
+          assertFailure(fixture, "expected ignored path is not covered: mcp.log.1");
+          assertFailure(fixture, "expected ignored path is not covered: agent/mcp.log.1");
+        });
     });
     await t.test("rejects removal of the independent-review requirement", () => {
       withChangedFile(fixture, "skills/github-issue-maintenance/SKILL.md",

@@ -100,7 +100,8 @@ root `skills/` is the canonical global skill library.
   path. Plan-mode workers are fresh read-only one-shot Pi Subagents. The Pi-specific
   base instructions live in `skills/pi-plan-mode/`.
 - **MCP:** Pi's built-in MCP support reads server definitions from
-  `~/.pi/agent/mcp.json` and provides the `/mcp` command.
+  `~/.pi/agent/mcp.json` and provides the `/mcp` command. See
+  [MCP migration](#mcp-migration) before using an existing server configuration.
 - **Codex helpers:** `pi-codex-web-search` and `pi-codex-image-generation` use
   short-lived Codex clients and the existing ChatGPT login. Image generation
   uses an ephemeral image-only thread, accepts explicit source images, and
@@ -162,9 +163,37 @@ Authenticate with `/login`. When migrating an existing installation, restore
 only the machine-local state you intentionally preserved in the private backup;
 keep it outside Git and retain its restrictive permissions.
 
-Start Pi and run `/reload` after resource changes. The tested baseline is Pi
-`0.83.0`; package features may also require Git, a Nerd Font, or the external
-tools named in their package READMEs.
+Start Pi and run `/reload` after resource changes. Built-in MCP requires
+[Pi 0.99.0 or later](https://github.com/earendil-works/pi/releases/tag/v0.99.0).
+The previous Pi 0.83.0 test baseline predates built-in MCP; it is not a verification
+of the new runtime. Check each package's supported versions, especially the
+version-gated optional `void-agent` renderer patches. Package features may also
+require Git, a Nerd Font, or the external tools named in their READMEs.
+
+## MCP migration
+
+The removed local client and built-in MCP use different configuration contracts.
+Back up the existing configuration privately, then convert it before enabling
+servers. Follow Pi's [MCP documentation](https://pi.dev/docs/latest/mcp):
+
+- Move server entries from top-level `servers` to `mcpServers`; remove the old
+  `version`, `eagerToolLimit`, and `eagerSchemaBytes` options.
+- Convert environment-variable mappings to interpolation. For example,
+  `"SERVICE_TOKEN": "SOURCE_SERVICE_TOKEN"` becomes
+  `"SERVICE_TOKEN": "${SOURCE_SERVICE_TOKEN}"`; keep credentials out of the file.
+- Set an explicit absolute `cwd` if the server relied on the old agent-directory
+  default. Built-in relative working directories resolve against the session.
+- Convert `callTimeoutMs` to `timeout` in seconds. Remove old `startupTimeoutMs`,
+  `autoRestart`, and `confirm` fields; review the built-in lifecycle and permission
+  behavior instead of assuming equivalent settings. The old per-call confirmation
+  default is not preserved by this migration; configure an appropriate permission
+  gate before enabling servers that require approval.
+- Use the standard user or trusted-project configuration location instead of
+  relying on the removed `PI_MCP_CONFIG` override. Update any saved tool references
+  for built-in names and discovery; the old `mcp_search_tools` helper is gone.
+
+After reviewing the converted configuration, `pi mcp list` connects enabled
+servers and reports errors. Use `/mcp` to inspect them and `/reload` after edits.
 
 ## Existing-machine cutover
 

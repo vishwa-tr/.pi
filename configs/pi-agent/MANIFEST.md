@@ -1,6 +1,6 @@
 # Pi configuration manifest
 
-Pi packages live under `packages/<name>/` and are enabled through portable relative paths in root `settings.json` and mirrored `agent/settings.json`. The tracked `agent/` compatibility shims expose the same activation surface from Pi's effective global agent directory when the repository is cloned as `~/.pi`; when cloned directly to `~/.pi/agent`, the root files are active and the nested shims are dormant.
+Pi packages live under `packages/<name>/` and are enabled through portable paths in `agent/settings.json`, relative to the effective agent directory. Clone the whole repository to `~/.pi`; the `agent/` resource shims expose its packages and shared resources. MCP uses Pi's built-in support (Pi 0.99.0 or later), not a local package. See the root README's MCP migration instructions before reusing an existing server configuration.
 
 ## Enabled extensions
 
@@ -40,7 +40,7 @@ Pi packages live under `packages/<name>/` and are enabled through portable relat
 
 ## Theme and keybindings
 
-The active theme is `void-agent-one-dark`, bundled at `packages/void-agent/themes/void-agent-one-dark.json` and selected by root `settings.json` plus `agent/settings.json`.
+The active theme is selected by `agent/settings.json` from the bundled themes under `packages/void-agent/themes/`.
 
 Keybindings are stored at root `keybindings.json` and mirrored in `agent/keybindings.json`. `Shift+Tab` is reserved for Plan mode, thinking-level cycling uses `Alt+T`, and forward model cycling uses `Alt+M`.
 

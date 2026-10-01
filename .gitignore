@@ -46,6 +46,8 @@
 /procedures.json
 /commit.json
 /mcp.json
+/mcp-auth.json*
+/mcp.log*
 /changes-*.patch
 /agent/safety.json
 /agent/safety-audit.jsonl*
@@ -59,6 +61,8 @@
 /agent/procedures.json
 /agent/commit.json
 /agent/mcp.json
+/agent/mcp-auth.json*
+/agent/mcp.log*
 /agent/changes-*.patch
 
 # Root runtime output.
