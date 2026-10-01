@@ -32,14 +32,14 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".
 
 VIDEO_DEFAULTS = {"width": 1920, "height": 1080, "fps": 30}
 
-SCENE_KEYS = {"name", "color", "source", "in", "duration", "transition", "zoom"}
+SCENE_KEYS = {"name", "color", "source", "in", "duration", "transition", "zoom", "focus", "crop", "frame"}
 TITLE_KEYS = {
-    "text", "start", "duration", "font", "size", "weight", "italic", "color", "outline",
+    "text", "image", "layer", "start", "duration", "font", "size", "weight", "italic", "color", "outline",
     "outline_color", "background", "padding", "box", "halign", "valign", "fade", "slide_from",
     "slide_distance", "slide_time",
 }
 AUDIO_KEYS = {"source", "start", "in", "duration", "gain_db", "fade_in", "fade_out"}
-SPEC_KEYS = {"video", "scene_audio", "scenes", "titles", "audio"}
+SPEC_KEYS = {"video", "backdrop", "scene_audio", "scenes", "titles", "audio"}
 
 FINAL_ENCODING = {
     "vcodec": "libx264", "preset": "slow", "crf": "18", "pix_fmt": "yuv420p",
@@ -359,8 +359,14 @@ class ProjectBuilder:
         if length < 1:
             raise SpecError(f"{label}: duration must be positive")
 
-        if "zoom" in scene:
-            self.add_zoom(producer, scene["zoom"], source_in, length, label)
+        if "crop" in scene:
+            self.add_crop(producer, scene["crop"], source_in, length, label)
+
+        if "frame" in scene:
+            self.add_frame(producer, scene["frame"], scene.get("zoom", [1, 1]), source_in, length, label)
+        elif "zoom" in scene:
+            focus = scene.get("focus", [self.width / 2, self.height / 2])
+            self.add_zoom(producer, scene["zoom"], focus, source_in, length, label)
 
         return {"producer": producer, "in": source_in, "length": length, "transition": transition}
 
@@ -399,12 +405,15 @@ class ProjectBuilder:
 
         return length, producer.get("id")
 
-    def add_zoom(self, producer_id, zoom, source_in, length, label):
+    def add_zoom(self, producer_id, zoom, focus, source_in, length, label):
         if not (isinstance(zoom, list) and len(zoom) == 2):
             raise SpecError(f"{label}: 'zoom' must be [from, to], e.g. [1.0, 1.15]")
 
-        start_rect = self.centered_rect(zoom[0])
-        end_rect = self.centered_rect(zoom[1])
+        if not (isinstance(focus, list) and len(focus) == 2):
+            raise SpecError(f"{label}: 'focus' must be [x, y] in source pixels")
+
+        start_rect = self.zoom_rect(zoom[0], focus)
+        end_rect = self.zoom_rect(zoom[1], focus)
 
         producer = self.find_by_id(producer_id)
         zoom_filter = ET.SubElement(producer, "filter", {
@@ -419,6 +428,54 @@ class ProjectBuilder:
         add_property(zoom_filter, "transition.valign", "middle")
         add_property(zoom_filter, "transition.halign", "center")
         add_property(zoom_filter, "transition.threads", "0")
+
+    def add_crop(self, producer_id, crop, source_in, length, label):
+        if not (isinstance(crop, list) and len(crop) == 4):
+            raise SpecError(f"{label}: 'crop' must be [x, y, width, height] in project pixels")
+
+        x, y, width, height = crop
+
+        producer = self.find_by_id(producer_id)
+        crop_filter = ET.SubElement(producer, "filter", {
+            "in": str(source_in), "out": str(source_in + length - 1),
+        })
+        add_property(crop_filter, "left", f"{x:g}")
+        add_property(crop_filter, "top", f"{y:g}")
+        add_property(crop_filter, "right", f"{self.width - x - width:g}")
+        add_property(crop_filter, "bottom", f"{self.height - y - height:g}")
+        add_property(crop_filter, "center", "0")
+        add_property(crop_filter, "use_profile", "1")
+        add_property(crop_filter, "mlt_service", "crop")
+        add_property(crop_filter, "shotcut:filter", "crop")
+
+    def add_frame(self, producer_id, frame, zoom, source_in, length, label):
+        if not (isinstance(frame, list) and len(frame) == 4):
+            raise SpecError(f"{label}: 'frame' must be [x, y, width, height] in pixels")
+
+        start_rect = scaled_box(frame, zoom[0])
+        end_rect = scaled_box(frame, zoom[1])
+
+        producer = self.find_by_id(producer_id)
+        frame_filter = ET.SubElement(producer, "filter", {
+            "in": str(source_in), "out": str(source_in + length - 1),
+        })
+        add_property(frame_filter, "background", self.frame_background())
+        add_property(frame_filter, "mlt_service", "affine")
+        add_property(frame_filter, "shotcut:filter", "affineSizePosition")
+        add_property(frame_filter, "transition.fill", "1")
+        add_property(frame_filter, "transition.distort", "0")
+        add_property(frame_filter, "transition.rect", f"0={start_rect};{length - 1}={end_rect}")
+        add_property(frame_filter, "transition.valign", "middle")
+        add_property(frame_filter, "transition.halign", "center")
+        add_property(frame_filter, "transition.threads", "0")
+
+    def frame_background(self):
+        if "backdrop" not in self.spec:
+            return "color:#00000000"
+
+        path = self.media_path(self.spec["backdrop"], "backdrop")
+
+        return "qimage:" + path.replace("\\", "/")
 
     def build_crossfade(self, outgoing_scene, incoming_scene, length):
         outgoing_end = outgoing_scene["in"] + outgoing_scene["length"] - 1
@@ -467,7 +524,14 @@ class ProjectBuilder:
 
         tracks = []
 
-        for track_number, track_titles in enumerate(assign_tracks(titles), start=2):
+        layers = sorted({title["spec"].get("layer", 0) for title in titles})
+        title_tracks = []
+
+        for layer in layers:
+            layer_titles = [title for title in titles if title["spec"].get("layer", 0) == layer]
+            title_tracks.extend(assign_tracks(layer_titles))
+
+        for track_number, track_titles in enumerate(title_tracks, start=2):
             entries = []
             cursor = 0
 
@@ -487,6 +551,9 @@ class ProjectBuilder:
         return tracks
 
     def add_title_producer(self, title):
+        if "image" in title["spec"]:
+            return self.add_image_overlay_producer(title)
+
         spec = title["spec"]
         length = title["length"]
         text = require(spec, "text", title["label"])
@@ -516,6 +583,38 @@ class ProjectBuilder:
         add_property(text_filter, "mlt_service", "dynamictext")
         add_property(text_filter, "shotcut:filter", "dynamicText")
         add_property(text_filter, "shotcut:usePointSize", "0")
+
+        return producer.get("id")
+
+    def add_image_overlay_producer(self, title):
+        spec = title["spec"]
+        length = title["length"]
+        label = title["label"]
+        path = self.media_path(spec["image"], label)
+
+        producer = self.new_element("producer")
+        add_property(producer, "length", str(length))
+        add_property(producer, "mlt_service", "qimage")
+        add_property(producer, "resource", self.project_relative(path))
+        add_property(producer, "ttl", "1")
+        add_property(producer, "shotcut:caption", os.path.basename(path))
+
+        opacity_filter = ET.SubElement(producer, "filter", {"in": "0", "out": str(length - 1)})
+        add_property(opacity_filter, "level", "1")
+        add_property(opacity_filter, "alpha", self.title_opacity(spec, length, label))
+        add_property(opacity_filter, "mlt_service", "brightness")
+        add_property(opacity_filter, "shotcut:filter", "brightnessOpacity")
+
+        position_filter = ET.SubElement(producer, "filter", {"in": "0", "out": str(length - 1)})
+        add_property(position_filter, "background", "color:#00000000")
+        add_property(position_filter, "mlt_service", "affine")
+        add_property(position_filter, "shotcut:filter", "affineSizePosition")
+        add_property(position_filter, "transition.fill", "1")
+        add_property(position_filter, "transition.distort", "0")
+        add_property(position_filter, "transition.rect", self.title_geometry(spec, length, label))
+        add_property(position_filter, "transition.valign", spec.get("valign", "middle"))
+        add_property(position_filter, "transition.halign", spec.get("halign", "center"))
+        add_property(position_filter, "transition.threads", "0")
 
         return producer.get("id")
 
@@ -639,9 +738,17 @@ class ProjectBuilder:
     def build_background(self):
         producer = self.new_element("producer", {"in": "0", "out": str(self.timeline_frames - 1)})
         add_property(producer, "length", str(self.timeline_frames))
-        add_property(producer, "mlt_service", "color")
-        add_property(producer, "resource", "0")
-        add_property(producer, "mlt_image_format", "rgba")
+
+        if "backdrop" in self.spec:
+            path = self.media_path(self.spec["backdrop"], "backdrop")
+            add_property(producer, "mlt_service", "qimage")
+            add_property(producer, "resource", self.project_relative(path))
+            add_property(producer, "ttl", "1")
+        else:
+            add_property(producer, "mlt_service", "color")
+            add_property(producer, "resource", "0")
+            add_property(producer, "mlt_image_format", "rgba")
+
         add_property(producer, "set.test_audio", "0")
 
         entries = [("entry", producer.get("id"), 0, self.timeline_frames - 1)]
@@ -660,12 +767,14 @@ class ProjectBuilder:
             return
 
         blend = ET.SubElement(tractor, "transition")
-        add_property(blend, "a_track", "0" if track_index == 1 else "1")
+        blend_target = "0" if track_index == 1 or "backdrop" in self.spec else "1"
+        add_property(blend, "a_track", blend_target)
         add_property(blend, "b_track", str(track_index))
         add_property(blend, "version", "0.9")
         add_property(blend, "mlt_service", "frei0r.cairoblend")
         add_property(blend, "threads", "0")
-        add_property(blend, "disable", "1" if track_index == 1 else "0")
+        covers_background = track_index == 1 and "backdrop" not in self.spec
+        add_property(blend, "disable", "1" if covers_background else "0")
 
     # Helpers -----------------------------------------------------------------------------------
 
@@ -702,11 +811,18 @@ class ProjectBuilder:
     def frames(self, seconds):
         return round(float(seconds) * self.fps)
 
-    def centered_rect(self, scale):
-        width = self.width * float(scale)
-        height = self.height * float(scale)
+    def zoom_rect(self, scale, focus):
+        scale = float(scale)
+        width = self.width * scale
+        height = self.height * scale
 
-        return f"{(self.width - width) / 2:g} {(self.height - height) / 2:g} {width:g} {height:g} 1"
+        x = self.width / 2 - focus[0] * scale
+        y = self.height / 2 - focus[1] * scale
+
+        x = min(0, max(self.width - width, x))
+        y = min(0, max(self.height - height, y))
+
+        return f"{x:g} {y:g} {width:g} {height:g} 1"
 
     def media_path(self, source, label):
         path = os.path.normpath(os.path.join(self.spec_dir, source))
@@ -744,6 +860,14 @@ def assign_tracks(items):
 
 def add_property(element, name, value):
     ET.SubElement(element, "property", {"name": name}).text = value
+
+
+def scaled_box(box, scale):
+    x, y, width, height = box
+    scaled_width = width * float(scale)
+    scaled_height = height * float(scale)
+
+    return f"{x + (width - scaled_width) / 2:g} {y + (height - scaled_height) / 2:g} {scaled_width:g} {scaled_height:g} 1"
 
 
 def require(item, key, label):

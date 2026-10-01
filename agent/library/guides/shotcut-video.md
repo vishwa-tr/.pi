@@ -53,12 +53,18 @@ loudly instead of being ignored.
 | --- | --- | --- | --- |
 | top | `video` | 1920×1080, 30 fps | `width`, `height`, `fps` |
 | top | `scene_audio` | `true` | `false` mutes the clips' own sound (V1) |
+| top | `backdrop` | black | image (PNG/SVG) shown under the whole timeline and behind framed scenes |
 | `scenes[]` | `color` or `source` | — | solid colour, or a video/image file |
 | | `duration` | file length − `in` | required for colours and images |
 | | `in` | 0 | start point inside a video source |
 | | `transition` | 0 | crossfade from the previous scene; shortens the timeline by that much |
-| | `zoom` | — | `[from, to]` centred scale over the scene, e.g. `[1.0, 1.15]` |
-| `titles[]` | `text`, `start`, `duration` | — | required; overlapping titles get their own tracks |
+| | `zoom` | — | `[from, to]` scale over the scene, e.g. `[1.0, 1.15]` |
+| | `focus` | frame centre | `[x, y]` source pixel the zoom centres on; clamped so the frame stays covered |
+| | `crop` | — | `[x, y, width, height]` part of the source to keep, in project pixels |
+| | `frame` | — | `[x, y, width, height]` box the scene is fitted into over the backdrop; `zoom` then scales the box |
+| `titles[]` | `text` or `image`, `start`, `duration` | — | required; overlapping titles get their own tracks |
+| | `image` | — | PNG/SVG overlay fitted into `box`; uses `box`, `halign`, `valign`, `fade`, `slide_*` |
+| | `layer` | 0 | stacking order: higher layers always sit on higher tracks |
 | | `font`, `size`, `weight`, `italic` | Sans, 80, 400 | weight 100–900 |
 | | `color`, `outline`, `outline_color` | white, 0, black | outline width in pixels |
 | | `background`, `padding` | transparent, 0 | box drawn behind the text only |
@@ -77,14 +83,24 @@ loudly instead of being ignored.
 The output follows Shotcut's own layout, so Shotcut shows normal tracks, clips and filters:
 a `background` track, V1 for scenes, V2+ for titles, A1+ for audio. Crossfades are Shotcut
 `lumaMix` transitions. Titles are transparent colour clips carrying a **Text: Simple**
-(`dynamictext`) filter; zoom is **Size, Position & Rotate** (`affine`); audio uses the **Gain / Volume**,
+(`dynamictext`) filter; image overlays carry **Opacity** (`brightness` alpha) and
+**Size, Position & Rotate**; zoom is **Size, Position & Rotate** (`affine`); audio uses the **Gain / Volume**,
 **Fade In Audio** and **Fade Out Audio** filters. Keyframes use smooth easing.
 
 ### Pitfalls
 
 - **Overlay tracks blend onto V1, not the track below.** In the tractor, the `frei0r.cairoblend`
   transition for every track above V1 needs `a_track` = V1. Blending onto the track below works
-  until that track has a gap, and then everything above it lands on black.
+  until that track has a gap, and then everything above it lands on black. With a `backdrop`, V1 is
+  blended too and every video track targets the background track (0) instead; the frame that comes
+  out is the one the blends target, so a raw V1 target hides the backdrop.
+- **Crossfades between transparent scenes turn grey.** The `luma` dissolve mixes alpha badly, so a
+  scene shrunk into a `frame` over a backdrop must be opaque: the frame's `affine` filter takes the
+  backdrop as its `background` (`qimage:<path>`), which `build` does whenever `backdrop` is set.
+- **Overlap order is not start order.** Tracks are packed greedily, so an overlay that starts first
+  can still land above one that starts later. Set `layer` whenever overlays must stack a set way.
+- **A one-frame `melt ... in=N out=N` render does not seek video.** It returns an early source
+  frame; check footage with a real render and `frames --at` instead.
 - **Changing the output size resets the frame rate.** Passing `width`/`height` to `melt`'s
   consumer drops the project profile and falls back to 25 fps. Pass `frame_rate_num`,
   `frame_rate_den` and `progressive` with them; `render --preview` does.
@@ -96,6 +112,11 @@ a `background` track, V1 for scenes, V2+ for titles, A1+ for audio. Crossfades a
   hashes may be substituted.
 - **Elements must be defined before they are referenced** in MLT XML: producers, then the
   playlists and transition tractors that use them, then the main tractor.
+- **SVG is a good overlay format.** Qt renders rounded rects, gradients, system fonts and
+  `<image>` references (resolved relative to the SVG file) crisply; filters such as blur and
+  nested `<svg>` viewports are not supported, so fake shadows with offset translucent shapes.
+- **Screen recordings flash loading states.** Scan the source a second at a time
+  (`ffmpeg -vf fps=1,...,tile=`) before choosing an in-point.
 - `melt` writes progress and FFmpeg warnings to stderr; in PowerShell this shows as a
   `NativeCommandError` even when the render succeeded. Check the exit code and the output file.
 
