@@ -11,6 +11,7 @@
 ## Guides
 
 - [Firefox automation](guides/firefox-automation.md) — Windows helpers for tabs, control inspection, UI actions, and screenshots; usage and safety guidance.
+- [Shotcut video](guides/shotcut-video.md) — Build, render and check Shotcut/MLT video projects from a JSON spec without the GUI; spec reference and pitfalls.
 
 ## Runtime skills
 

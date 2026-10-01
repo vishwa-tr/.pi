@@ -1,0 +1,20 @@
+{
+  "video": { "width": 1920, "height": 1080, "fps": 30 },
+  "scene_audio": false,
+  "scenes": [
+    { "name": "Intro", "color": "#0b1d3a", "duration": 3 },
+    { "source": "media/clip.mp4", "in": 1, "duration": 4, "transition": 0.8, "zoom": [1.0, 1.15] },
+    { "source": "media/still.png", "duration": 3, "transition": 0.8 }
+  ],
+  "titles": [
+    { "text": "Big headline", "start": 0.4, "duration": 2.4, "size": 140, "weight": 700,
+      "slide_from": "bottom", "fade": 0.4 },
+    { "text": "A supporting line", "start": 3.0, "duration": 3.0, "size": 64,
+      "box": [0, 820, 1920, 160], "background": "#aa000000", "padding": 20, "slide_from": "left" },
+    { "text": "Brand", "start": 5.0, "duration": 3.4, "size": 120, "color": "#ffd166",
+      "outline": 4, "valign": "top", "box": [0, 80, 1920, 300] }
+  ],
+  "audio": [
+    { "source": "media/music.wav", "start": 0, "in": 2, "gain_db": -12, "fade_in": 1, "fade_out": 1.5 }
+  ]
+}
