@@ -53,7 +53,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **395 passing tests on Pi 1.0.0**. It includes actual local shell execution,
+The current combined suite has **408 passing tests on Pi 1.0.0**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -80,7 +80,7 @@ UI contexts. These are not live-model, interactive-terminal, or power-loss tests
 | `extensions/swarm/provider-capability.mjs` | Strict immutable host provider configuration, branded adapter selection and unsupported-transport preflight. |
 | `extensions/swarm/constrained-provider.mjs` | Isolated text Chat Completions request/response adapter with explicit credentials, request fencing and branded transport settlement. |
 | `extensions/swarm/https-transport.mjs` | Explicit host egress authorization, pinned public-IPv4 HTTPS client, separate loopback test policy and actual socket settlement. |
-| `extensions/swarm/extension.mjs`, `ui.mjs` | Opt-in mock-runtime factory, cancellable native launch/recovery dialogs, commands and lifecycle hooks. |
+| `extensions/swarm/extension.mjs`, `ui.mjs`, `decision.mjs` | Opt-in factory, bounded cancellable native decision packets, commands and lifecycle hooks. |
 | `extensions/swarm/dashboard.mjs` | Refreshing, paged, read-only native dashboard; actions return to the existing host controls. |
 | `test/` | Foundation, host recovery, and offline real-SDK/factory integration tests. |
 
@@ -368,8 +368,8 @@ must then actually unwind. Ordinary active SDK turns cannot be retired as orphan
 Recovered orphan intents become unknown receipts/interrupted turns, never successful evidence.
 Workspace/revision drift or cancellation requires a new decision.
 
-Native select/input/confirm dialogs receive cancellation signals, including during agreement
-editing. The native multiline editor is deliberately not used because its current API has no
+Native inputs/selectors receive cancellation signals during agreement editing. Phase 13
+replaces the long agreement/confirmation dialogs with bounded cancellable decision overlays. The native multiline editor is deliberately not used because its current API has no
 AbortSignal dismissal contract. No shortcut, footer replacement, or model-visible lifecycle
 capability is added. Authorizing controls require TUI; status and brakes do not require a dialog.
 
@@ -875,6 +875,58 @@ Native worker compaction remains covered by SDK tests, not the public host/UI sc
 (which has no compaction command). Remote compatibility/cancellation, process escape, power
 loss, cost accuracy and activation remain outside this phase. No external networking, live
 provider, real credentials, global activation, installation, commit or push was performed.
+
+## Phase 13 bounded terminal decisions — offline acceptance only
+
+Launch/resume/restart agreements, provider disclosure, dirty-work preservation, workspace
+reconciliation, and settlement attestation now use focused public `ctx.ui.custom` overlays.
+The complete packet is wrapped and paged, not silently shortened or left in scrollback.
+Objective, criteria, scope, limits, model/tools/instructions, exact provider endpoint and
+outbound-data declaration, dirty paths, unresolved operation/turn IDs, and written evidence
+remain accessible. Terminal controls and bidi controls are visibly escaped before styling.
+
+- **Up/Down**, **PageUp/PageDown**, **Home/End** read the packet. A persistent line-range
+  indicator shows the current position; reach the end before selecting a decision.
+- **Left/Right** selects an action; **Enter** confirms it. **Cancel** is always the default,
+  and **Escape** cancels anywhere. Typing or pasted text never selects or approves an action.
+  Reaching the end is a navigation gate, not proof that a person understood the agreement.
+- Launch editing remains an explicitly selected field followed by native JSON input, then
+  a fresh complete agreement. The immutable host provider binding is not an editable field.
+  Current values are in the packet rather than an unbounded input title.
+- Dirty-work preservation and exact-ID/evidence attestation remain separate explicit decisions.
+  No new execution authority, inferred settlement, replay, or automatic approval is introduced.
+- Rendering reserves four terminal rows outside the overlay. Below 40 columns or 16 rows,
+  it asks for resize and refuses authorization; cancellation remains available. Layout uses
+  public Pi width/wrap helpers and active semantic theme colors, without replacing the footer.
+- Signal cancellation dismisses the custom interaction through its completion callback and
+  removes listeners idempotently. Existing host timeout, mode, session, reload, and modal
+  exclusion gates remain authoritative. A focused overlay is important on Pi 1.0: replacement
+  editor components can leave PageUp/PageDown with fullscreen transcript scrolling.
+
+Verification on installed Pi 1.0.0: **408 Swarm tests** (395 previous + 13 new component
+regressions), **155 foundation**, **66 Plan/Safety**, **4 cleanup**, and **all three real CLI
+PTY scenarios** pass. Component tests assert both width and height at **60×24, 80×24, 100×40**,
+all-page access, Home/End/reverse navigation, huge Unicode objectives, long URLs, deep data,
+ANSI/bidi escaping, persistent controls, safe defaults/paste handling, resize denial,
+cancellation/timeouts, listener disposal, and serialized exact-ID/evidence attestation.
+
+`run.py` navigates launch/edit/preservation at 60×24, continuation with the light theme at
+100×40, and recovery/attestation at 80×24; exact operation IDs are checked against the journal.
+`production.py` and `tls.py` use 80×24 and actually navigate agreement pages. TLS acceptance
+observes the complete endpoint and context declaration before approval, retaining **17 actual
+requests and seven fresh agreements**, unchanged durable command/history/socket evidence,
+production mode revocation, safety exclusion, reload, and shutdown. The prior phase's 120×100
+and 120×160 workarounds are removed.
+
+Limits: deterministic component frames plus automated native keyboard/ANSI and durable-record
+checks are **not a full terminal-emulator viewport, pixel screenshot, or human visual sign-off**.
+No additional emulator/parser or dependency is installed. Contrast, mouse/IME, other terminal
+emulators, and regular-mode visual fidelity remain unverified. Packets are fully materialized
+in memory; extremely large-data performance is not certified. General third-party modal
+arbitration, live providers, remote cancellation, process escape, and activation remain gated.
+Global validation still reports unrelated model/thinking defaults and the three new untracked
+source/test files; no settings or staging changes are made. No external network, real
+credentials, installs, global activation, commits, or pushes are part of this phase.
 
 ## Deferred before activation
 

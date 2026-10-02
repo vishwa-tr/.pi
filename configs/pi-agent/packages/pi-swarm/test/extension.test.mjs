@@ -8,13 +8,19 @@ import { createSwarmExtension } from "../extensions/swarm/extension.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { createMockRuntime } from "./sdk-env.mjs";
 import { repository } from "./helpers.mjs";
+import { decisionUI } from "./decision-fixture.mjs";
+import { SwarmDecision } from "../extensions/swarm/decision.mjs";
 
 function dashboardUI(f) {
 	let view;
 	f.ctx.ui.custom = factory => new Promise(resolve => {
 		f.event("ui_prompt_start", { kind: "custom" });
 		const bindings = { matches: (data, action) => matchesKey(data, action === "tui.select.cancel" ? "escape" : action === "tui.select.confirm" ? "enter" : "up") };
-		view = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_, text) => text }, bindings, resolve);
+		const component = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_, text) => text }, bindings, resolve);
+		if (component instanceof SwarmDecision) {
+			const confirmation = ["Workspace reconciliation", "Attest settlement"].includes(component.title);
+			f.ctx.ui[confirmation ? "confirm" : "select"](component.body, component.choices, { signal: component.signal }).then(answer => component.finish(confirmation ? answer ? component.choices[1] : "Cancel" : answer));
+		} else view = component;
 	});
 	return () => view;
 }
@@ -46,7 +52,7 @@ async function fixture(t, { script = () => ({ text: "Mock planning complete" }),
 	};
 	const ctx = { cwd: root, mode: "tui", hasUI: true,
 		sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries },
-		ui: { input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: (text, level) => notices.push({ text, level }) } };
+		ui: { custom: decisionUI(dialog), input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: (text, level) => notices.push({ text, level }) } };
 	const pi = { events, on: (name, handler) => handlers.set(name, handler), registerCommand: (name, command) => commands.set(name, command), appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
 	createSwarmExtension({ modelRuntime: mock.modelRuntime, mainModel: mock.model, runner, tickIntervalMs: 0, approvalTimeoutMs })(pi);
 	const command = args => commands.get("swarm").handler(args, ctx);

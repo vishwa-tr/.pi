@@ -1343,3 +1343,63 @@ terminal-emulator viewport test or human visual sign-off. Tall agreements do not
 narrow agreement readability. Native worker compaction is SDK-tested, not exposed as a new
 public host/UI command. Remote compatibility/cancellation/rollback, escaped processes, power
 loss, semantic scope, cost accuracy and activation remain outside this completed offline phase.
+
+### 22. Phase 13 bounded native terminal decisions
+
+The user selected normal-terminal dialog polish rather than a live-provider trial. Implemented
+only in the feature worktree; no external networking, live providers, real credentials,
+installation, activation, settings changes, commits, pushes, or parent-checkout edits.
+
+Implemented:
+
+- `decision.mjs` supplies a focused public native custom overlay with a fixed-height reading
+  viewport, persistent action controls, position indicator, and active semantic theme styling.
+  Full agreement/provider/dirty-work/recovery packets wrap through public Pi TUI helpers.
+  No critical packet data is silently truncated. ANSI/control and bidi sequences are visibly
+  escaped; ordinary Unicode remains readable. Layout is cached by width and invalidated safely.
+- Up/Down, PageUp/PageDown and Home/End navigate. Left/Right explicitly selects a decision;
+  Enter confirms. Cancel is always the initial selection and Escape works throughout.
+  Non-cancel actions require reaching the packet end. Typing/pasting cannot approve; the
+  navigation gate does not establish human comprehension. Too-small terminals refuse approval
+  until resized (minimum 40 columns / 16 rows); normal views reserve four terminal rows.
+- Existing launch editing selects a field explicitly and uses a separate cancellable native
+  JSON input before redisplaying the complete agreement. Current field values no longer swell
+  the input title. Immutable provider selection stays outside editable agreement fields.
+- Dirty-work preservation, workspace reconciliation and written settlement attestation remain
+  explicit separate decisions. The attestation packet includes exact unresolved operation and
+  turn IDs together with the full evidence text; unknown effects never become success.
+- Completion and listener disposal are idempotent. Abort signals dismiss custom interactions
+  using the public completion callback. Host timeout, mode/lifecycle fencing and serialization
+  remain unchanged; no execution occurs before human approval. Pi 1.0 fullscreen testing showed
+  a focused overlay is needed to own page keys rather than leave them to transcript scrolling.
+
+Verification on installed Pi 1.0.0:
+
+- **408/408 Swarm tests**: prior 395 plus 13 actual component regressions. Deterministic frames
+  assert width AND height at **60×24, 80×24 and 100×40**; complete multi-page data access,
+  forward/reverse/Home/End navigation, huge objectives, deep data, long URLs, Unicode, hostile
+  ANSI/bidi input, persistent controls, typing/paste/default denial, resizing, signal/timeout
+  cancellation, listener cleanup and serialized dirty-work/exact-ID/evidence attestation.
+- **155 foundation**, **66 Plan/Safety** and **4 cleanup** regressions pass.
+- **All three real CLI PTYs pass** without tall-terminal workarounds. `run.py` exercises 60×24
+  launch/edit/preservation, 100×40 light-theme continuation, and 80×24 recovery/attestation.
+  Recovery and evidence packets show the exact operation ID subsequently checked in the journal.
+  `production.py` and `tls.py` run at 80×24, navigating pages before explicit decisions.
+  HTTPS disclosure includes the complete exact endpoint and outbound-context declaration.
+- Combined TLS evidence remains **exactly 17 requests and seven fresh agreements**, with the
+  existing command receipts, native histories, no-replay/follow-up fencing, actual socket
+  settlement, production mode transitions, safety exclusion, reload and shutdown assertions.
+- `git diff --check` passes. Global validation retains unrelated model/thinking-default errors
+  and lists three intentionally untracked source/test additions; nothing staged or normalized.
+
+Contract basis: complete installed Pi 1.0 `extensions.md`, `tui.md`, relevant public UI types,
+custom-overlay implementation, overlay/Q&A examples and theme guidance. Only public TUI imports
+and `ctx.ui.custom` APIs are used; no new registration or activation entry is added.
+
+Limits: assertions combine deterministic component frames, emitted ANSI/keyboard interaction
+and durable records. They are not a full terminal-emulator viewport, screenshot or human visual
+acceptance. A lightweight parser was considered, but no incomplete emulator is represented as
+visual proof and no dependency was installed. Contrast, IME/mouse, alternate terminals and
+regular-mode visual fidelity remain unverified. Very large packet performance is not certified;
+full data is kept in memory. Arbitrary third-party modal arbitration, remote compatibility,
+escaped processes, power loss, semantic scope, cost accuracy and activation remain deferred.

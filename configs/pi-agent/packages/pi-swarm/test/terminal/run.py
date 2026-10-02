@@ -58,6 +58,7 @@ class Terminal:
         while time.monotonic() < deadline:
             plain = ANSI.sub("", self.output[self.cursor:])
             if text in plain:
+                self.last_expect_start = self.cursor
                 self.cursor = len(self.output)
                 return
             self.pump()
@@ -84,6 +85,28 @@ class Terminal:
             self.send("\x1b[B")
             time.sleep(0.05)
         self.send("\r")
+
+    def decision(self, steps=1):
+        """Read every page of the bounded packet, then explicitly select an action."""
+        self.read_decision()
+        for _ in range(steps):
+            self.send("\x1b[C")
+            time.sleep(0.05)
+        self.send("\r")
+
+    def read_decision(self):
+        for _ in range(100):
+            plain = ANSI.sub("", self.output[self.last_expect_start:])
+            states = re.findall(r"(?:Read to end to decide|Decision available)", plain)
+            if states and states[-1] == "Decision available":
+                self.last_packet = plain
+                return
+            if states:
+                self.send("\x1b[6~")
+            deadline = time.monotonic() + 0.15
+            while time.monotonic() < deadline:
+                self.pump(0.03)
+        raise AssertionError(f"Decision packet did not reach its end: {ANSI.sub('', self.output)[-6000:]}")
 
     def resize(self, columns, rows):
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
@@ -183,15 +206,15 @@ def main():
             terminal.expect("Scope and exclusions")
             terminal.line('["Only disposable project"]')
             terminal.expect("LAUNCH (mock only)")
-            terminal.choose(1)
+            terminal.decision(1)
             terminal.expect("Edit agreement field")
             terminal.choose(1)
             terminal.expect("New objective as JSON")
             terminal.line('"Edited terminal goal"')
             terminal.expect("LAUNCH (mock only)")
-            terminal.choose(2)
+            terminal.decision(2)
             terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect_status("running")
             wait_event("worker-start")
             terminal.line("/swarm dashboard")
@@ -209,11 +232,11 @@ def main():
             terminal.expect_status("paused")
             terminal.line("/swarm resume")
             terminal.expect("RESUME (mock only)")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Workspace reconciliation")
-            terminal.choose(0)
+            terminal.decision()
             terminal.expect_status("running")
             wait_event("worker-start", 2)
             terminal.line("/reload")
@@ -229,11 +252,11 @@ def main():
             terminal.expect("SWARM live / mock only | paused")
             terminal.send("r")
             terminal.expect("RESUME (mock only)")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Workspace reconciliation")
-            terminal.choose(0)
+            terminal.decision()
             wait_event("worker-start", 3)
             terminal.line("/swarm dashboard")
             terminal.expect("SWARM live / mock only | running")
@@ -248,28 +271,34 @@ def main():
             terminal.expect("Uncertain fixture armed")
             terminal.line("/swarm restart")
             terminal.expect("RESTART (mock only)")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Workspace reconciliation")
-            terminal.choose(0)
+            terminal.decision()
             terminal.expect("Fixture shell permission")
             terminal.choose(0)
             wait_event("uncertain-runner")
             time.sleep(0.2)
-            # Recovery includes the full agreement and unresolved execution packet.
-            # Native Pi 1.0 dialogs clip instead of emitting offscreen scrollback.
-            terminal.resize(120, 160)
+            # Recovery must be navigable at ordinary terminal dimensions.
+            terminal.resize(80, 24)
             terminal.line("/swarm reconcile")
             terminal.expect("RECONCILE (mock only)")
-            terminal.choose(1)
+            terminal.read_decision()
+            recovery_packet = terminal.last_packet
+            assert '"operations"' in recovery_packet and '"turns"' in recovery_packet
+            assert '"liveUncertainIds"' in recovery_packet
+            terminal.decision()
             terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Describe how you independently established")
             terminal.line("Fixture runner spawned no process; its promise returned unsettled by design.")
             terminal.expect("Attest settlement")
-            terminal.choose(0)
-            terminal.expect("Attestation recorded")
+            terminal.read_decision()
+            evidence_packet = terminal.last_packet
+            assert "Fixture runner spawned no process" in evidence_packet
+            terminal.decision()
+            # The durable attestation is asserted below; fullscreen may clip notifications.
             time.sleep(0.3)
             terminal.line("/swarm status")
             terminal.expect_status("paused")
@@ -288,6 +317,8 @@ def main():
                            env=env, check=True)
             attestations = [event for event in journal if event["type"] == "host.attest"]
             assert len(attestations) == 1, "One durable attestation, not inferred settlement"
+            operation_id = next(event["payload"]["id"] for event in journal if event["type"] == "workspace.start")
+            assert operation_id in recovery_packet and operation_id in evidence_packet, "Exact operation ID visible before attestation"
             assert sum(event["type"] == "workspace.start" for event in journal) == 1, "Never replay uncertain effects"
             finishes = [event for event in journal if event["type"] == "workspace.finish"]
             assert len(finishes) == 1 and finishes[0]["payload"]["outcome"] == "unknown"

@@ -4,6 +4,7 @@ Uses the existing bounded child cleanup guard; no installs, keys, or global acti
 """
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -43,10 +44,7 @@ def main(tls=False):
                    "--no-themes", "--no-context-files", "--no-approve", "--no-tools",
                    "--provider", "swarm-mock", "--model", "scripted"]
         terminal = fixture.terminal = Terminal(command, project, env)
-        if tls:
-            # Pi 1.0 clips native dialogs to the viewport; disclose every field
-            # in this tall viewport rather than assuming offscreen scrollback.
-            terminal.resize(120, 100)
+        terminal.resize(80, 24)
 
         def events():
             if not event_file.exists():
@@ -89,11 +87,13 @@ def main(tls=False):
             terminal.expect("Scope and exclusions")
             terminal.line(json.dumps([scope]))
             terminal.expect(f"LAUNCH ({label})")
+            terminal.read_decision()
             if tls:
                 wait(lambda: "compaction-summaries" in ANSI.sub("", terminal.output), "complete native provider disclosure")
-                assert "Provider agreement (HTTPS; declared context sent to the exact endpoint)" in ANSI.sub("", terminal.output)
+                assert "declared context sent to the exact endpoint" in ANSI.sub("", terminal.output)
                 # Observe the actual native summary, not fixture metadata or a fake UI.
-                plain = ANSI.sub("", terminal.output)
+                plain = terminal.last_packet
+                assert re.search(r"https://localhost:\d+/v1/chat/completions", plain), "Complete exact endpoint displayed"
                 for value in ("terminal-tls", "terminal-scripted", "/v1/chat/completions", "outboundData",
                               "workspace-content", "tool-definitions-and-results", "compaction-summaries"):
                     assert value in plain, f"Missing native provider disclosure: {value}\n{plain[-10000:]}"
@@ -101,11 +101,11 @@ def main(tls=False):
 
         def approve(action):
             terminal.expect(f"{action} ({label})")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            terminal.decision()
             terminal.expect("Workspace reconciliation")
-            terminal.choose(0)
+            terminal.decision()
 
         def resume(script=None):
             if script:
@@ -156,9 +156,9 @@ def main(tls=False):
             policy_command("/discuss off")
             mode("off")
             start()
-            terminal.choose(2)
+            terminal.decision(2)
             terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            terminal.decision()
             wait_count("worker-start", 1)
             status("running")
 
