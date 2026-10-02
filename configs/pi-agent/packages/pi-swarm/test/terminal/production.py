@@ -12,7 +12,7 @@ import time
 from run import ANSI, HERE, DisposableFixture, Terminal
 
 
-def main():
+def main(tls=False):
     pi = shutil.which(os.environ.get("PI_BIN", "pi"))
     assert pi and shutil.which("node") and shutil.which("git"), "Installed pi, node and git required"
     with DisposableFixture() as fixture:
@@ -25,6 +25,10 @@ def main():
                "LANG": "C.UTF-8", "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1",
                "PI_TELEMETRY": "0", "PI_SKIP_VERSION_CHECK": "1", "GIT_CONFIG_NOSYSTEM": "1",
                "GIT_CONFIG_GLOBAL": os.devnull, "SWARM_TERMINAL_FIXTURE": str(event_file)}
+        if tls:
+            env["SWARM_TERMINAL_TLS"] = "1"
+        label = "HTTPS provider" if tls else "mock only"
+        scope = "Disposable project and explicit local TLS fixture only" if tls else "Disposable project only; no network"
         if os.environ.get("PI_SDK_DIR"):
             env["PI_SDK_DIR"] = os.environ["PI_SDK_DIR"]
         settings = {"quietStartup": True, "enableInstallTelemetry": False,
@@ -39,6 +43,10 @@ def main():
                    "--no-themes", "--no-context-files", "--no-approve", "--no-tools",
                    "--provider", "swarm-mock", "--model", "scripted"]
         terminal = fixture.terminal = Terminal(command, project, env)
+        if tls:
+            # Pi 1.0 clips native dialogs to the viewport; disclose every field
+            # in this tall viewport rather than assuming offscreen scrollback.
+            terminal.resize(120, 100)
 
         def events():
             if not event_file.exists():
@@ -51,7 +59,7 @@ def main():
                 if predicate():
                     return
                 terminal.pump()
-            raise AssertionError(f"Missing {description}; terminal tail:\n{ANSI.sub('', terminal.output)[-5000:]}")
+            raise AssertionError(f"Missing {description}; observations: {events()[-12:]}; terminal tail:\n{ANSI.sub('', terminal.output)[-5000:]}")
 
         def count(kind):
             return sum(event["type"] == kind for event in events())
@@ -72,18 +80,27 @@ def main():
 
         def status(expected):
             terminal.line("/swarm status")
-            terminal.expect(f'"status": "{expected}"')
+            terminal.expect_status(expected, label)
 
         def start():
             terminal.line("/swarm start Production policy acceptance")
             terminal.expect("Acceptance criteria")
             terminal.line('["Only approved benign commands execute"]')
             terminal.expect("Scope and exclusions")
-            terminal.line('["Disposable project only; no network"]')
-            terminal.expect("LAUNCH (mock only)")
+            terminal.line(json.dumps([scope]))
+            terminal.expect(f"LAUNCH ({label})")
+            if tls:
+                wait(lambda: "compaction-summaries" in ANSI.sub("", terminal.output), "complete native provider disclosure")
+                assert "Provider agreement (HTTPS; declared context sent to the exact endpoint)" in ANSI.sub("", terminal.output)
+                # Observe the actual native summary, not fixture metadata or a fake UI.
+                plain = ANSI.sub("", terminal.output)
+                for value in ("terminal-tls", "terminal-scripted", "/v1/chat/completions", "outboundData",
+                              "workspace-content", "tool-definitions-and-results", "compaction-summaries"):
+                    assert value in plain, f"Missing native provider disclosure: {value}\n{plain[-10000:]}"
+                assert count("tls-request") == 0, "No request before human agreement"
 
         def approve(action):
-            terminal.expect(f"{action} (mock only)")
+            terminal.expect(f"{action} ({label})")
             terminal.choose(1)
             terminal.expect("Preserve and proceed?")
             terminal.choose(1)
@@ -108,6 +125,11 @@ def main():
             while time.monotonic() < deadline:
                 terminal.pump(0.1)
             assert count("worker-start") == before, "No automatic Off/reload resume"
+            if tls:
+                assert count("tls-request") == before, "No additional TLS follow-up after revocation"
+                assert count("tls-response-close") == before, "Every received response really closed"
+                assert count("tls-server-socket-close") == before, "Every accepted TLS socket really closed"
+                assert count("tls-fixture-error") == 0
 
         try:
             terminal.expect("Production policy fixture ready")
@@ -173,7 +195,7 @@ def main():
             resume("approved hold")
             wait_count("worker-held", 1)
             terminal.line("/swarm dashboard")
-            terminal.expect("SWARM live / mock only | running")
+            terminal.expect(f"SWARM live / {label} | running")
             terminal.send("\x1bg")
             terminal.expect("phase8-approved")
             before = count("worker-start")
@@ -200,7 +222,7 @@ def main():
 
             # Streaming reload uses the native /reload implementation, not a fixture event.
             resume()
-            terminal.expect('"status": "running"')
+            terminal.expect_status("running", label)
             terminal.line("/reload")
             terminal.expect("Reloaded keybindings")
             wait_count("start", 2)
@@ -218,7 +240,20 @@ def main():
             # Shutdown with a real worker awaiting native confirmation cancels it.
             resume("shutdown")
             terminal.expect("phase8-shutdown")
-            # Native CLI SIGTERM path owns shutdown even while a modal has input focus.
+            if tls:
+                # Also fence the SDK follow-up after cancelling a production safety gate,
+                # then exercise native shutdown with an actually open HTTPS response.
+                terminal.send("\x1b[Z")
+                mode("discuss")
+                time.sleep(0.3)
+                status("paused")
+                policy_command("/discuss off")
+                mode("off")
+                stable_workers()
+                resume()
+                wait_count("tls-request", 17)
+                assert count("tls-response-close") == 16
+            # Native CLI SIGTERM path owns shutdown, including actual socket settlement.
             terminal.process.terminate()
             wait(lambda: terminal.process.poll() is not None, "graceful CLI shutdown")
             assert terminal.process.returncode == 0
@@ -235,7 +270,10 @@ def main():
             assert all(e["activeDialogs"] == 0 for e in observations if e["type"] == "shutdown")
             assert [e["reason"] for e in observations if e["type"] == "shutdown"] == ["reload", "quit"]
             journal_path, = (project / ".swarms").glob("*/events.jsonl")
-            subprocess.run([shutil.which("node"), str(HERE / "assert-production.mjs"), str(journal_path), str(event_file)], env=env, check=True)
+            subprocess.run([shutil.which("node"), str(HERE / "assert-production.mjs"), str(journal_path), str(event_file),
+                            *(["tls"] if tls else [])], env=env, check=True)
+            if tls:
+                subprocess.run([shutil.which("node"), str(HERE / "assert-tls.mjs"), str(journal_path), str(event_file)], env=env, check=True)
             audit = [json.loads(line) for line in (agent / "safety-audit.jsonl").read_text().splitlines()]
             assert any(e["decision"] == "approved" for e in audit)
             assert any(e["decision"] == "denied" for e in audit)

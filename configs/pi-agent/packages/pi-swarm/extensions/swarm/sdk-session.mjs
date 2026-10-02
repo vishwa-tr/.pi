@@ -12,7 +12,7 @@ import { closeSync, constants, fsyncSync, lstatSync, openSync, realpathSync } fr
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const ENTRY_TYPES = new Set([
 	"message", "model_change", "thinking_level_change", "compaction", "branch_summary",
-	"custom", "custom_message", "label", "session_info",
+	"custom", "custom_message", "context_edit", "label", "session_info",
 ]);
 
 function canonicalPath(path) {
@@ -25,7 +25,7 @@ function canonicalPath(path) {
 function validateMessage(message) {
 	invariant(message && typeof message === "object" && Number.isFinite(message.timestamp), "Invalid session message");
 	const { role, content } = message;
-	invariant(["user", "assistant", "toolResult", "bashExecution", "custom", "branchSummary", "compactionSummary"].includes(role),
+	invariant(["system", "user", "assistant", "toolResult", "bashExecution", "custom", "branchSummary", "compactionSummary"].includes(role),
 		"Invalid session message role");
 	if (role === "branchSummary" || role === "compactionSummary") {
 		invariant(typeof message.summary === "string", "Invalid session summary message");
@@ -45,6 +45,25 @@ function validateMessage(message) {
 				invariant(typeof block.id === "string" && typeof block.name === "string" && block.arguments &&
 					typeof block.arguments === "object" && !Array.isArray(block.arguments), "Invalid tool call block");
 			}
+		}
+	}
+	if (role === "system") {
+		invariant(typeof content === "string" || content.every(block => block.type === "text"), "Invalid system content");
+		// Installed Pi 1.0 declarations/replay do not implement replace:true,
+		// despite its mention in the prose docs. Never reopen it as an ignored reset.
+		invariant(message.replace === undefined || message.replace === false, "Unsupported system replacement");
+		if (message.sections !== undefined) {
+			invariant(message.sections && typeof message.sections === "object" && !Array.isArray(message.sections) &&
+				Object.values(message.sections).every(value => value === null || typeof value === "string"), "Invalid system sections");
+		}
+		if (message.toolsAdded !== undefined) {
+			invariant(Array.isArray(message.toolsAdded) && message.toolsAdded.every(tool => tool &&
+				typeof tool.name === "string" && typeof tool.description === "string" && tool.parameters &&
+				typeof tool.parameters === "object" && !Array.isArray(tool.parameters)), "Invalid system tools");
+		}
+		if (message.toolsRemoved !== undefined) {
+			invariant(Array.isArray(message.toolsRemoved) && message.toolsRemoved.every(tool => tool &&
+				typeof tool.name === "string"), "Invalid removed system tools");
 		}
 	}
 	if (role === "assistant") {
@@ -74,6 +93,7 @@ function validateSession(path, cwd) {
 		typeof header.timestamp === "string" && Number.isFinite(Date.parse(header.timestamp)),
 	"Invalid session header or workspace identity");
 	const ids = new Set();
+	const priorEntries = new Map();
 	for (const entry of entries) {
 		invariant(ENTRY_TYPES.has(entry.type) && typeof entry.id === "string" && entry.id.length > 0 &&
 			!ids.has(entry.id) && (entry.parentId === null || ids.has(entry.parentId)) &&
@@ -82,7 +102,11 @@ function validateSession(path, cwd) {
 		if (entry.type === "message") validateMessage(entry.message);
 		if (entry.type === "compaction") {
 			invariant(typeof entry.summary === "string" && Number.isFinite(entry.tokensBefore) &&
-				(Array.isArray(entry.retainedTail) || ids.has(entry.firstKeptEntryId)), "Invalid session compaction");
+				(Array.isArray(entry.retainedTail) || ids.has(entry.firstKeptEntryId) || entry.firstKeptEntryId === entry.id), "Invalid session compaction");
+			if (entry.systemMessage !== undefined) {
+				invariant(entry.systemMessage?.role === "system", "Invalid compaction system checkpoint");
+				validateMessage(entry.systemMessage);
+			}
 			if (entry.retainedTail !== undefined) {
 				invariant(Array.isArray(entry.retainedTail), "Invalid compaction tail");
 				entry.retainedTail.forEach(validateMessage);
@@ -98,6 +122,19 @@ function validateSession(path, cwd) {
 			invariant((typeof entry.content === "string" || Array.isArray(entry.content)) && typeof entry.display === "boolean",
 				"Invalid custom message entry");
 		}
+		if (entry.type === "context_edit") {
+			const target = priorEntries.get(entry.targetId);
+			const message = target?.type === "custom_message"
+				? { role: "custom", content: target.content, timestamp: Date.parse(target.timestamp) }
+				: target?.type === "message" ? target.message : undefined;
+			invariant(message && ["user", "assistant", "toolResult", "custom"].includes(message.role), "Invalid context edit target");
+			if (entry.replacement !== null) {
+				invariant(entry.replacement && typeof entry.replacement === "object" && !Array.isArray(entry.replacement), "Invalid context edit replacement");
+				let content = entry.replacement.content;
+				if (typeof content === "string" && ["assistant", "toolResult"].includes(message.role)) content = [{ type: "text", text: content }];
+				validateMessage({ ...message, content });
+			}
+		}
 		if (entry.type === "label") invariant(ids.has(entry.targetId), "Invalid label target");
 		if (entry.type === "session_info") invariant(typeof entry.name === "string", "Invalid session name");
 		if (entry.type === "model_change") {
@@ -107,6 +144,7 @@ function validateSession(path, cwd) {
 			invariant(THINKING_LEVELS.has(entry.thinkingLevel), "Invalid thinking entry");
 		}
 		ids.add(entry.id);
+		priorEntries.set(entry.id, entry);
 	}
 	return { header, entries };
 }

@@ -20,11 +20,31 @@ function text(content) {
 }
 
 /** Deliberately text-only Chat Completions, without provider-specific payload knobs. */
-function requestBody(descriptor, context, options) {
+function requestBody(binding, context, options) {
+	const { descriptor } = binding;
 	const messages = [];
-	if (context.systemPrompt) messages.push({ role: "system", content: text(context.systemPrompt) });
 	for (const message of context.messages) {
-		if (message.role === "user") messages.push({ role: "user", content: text(message.content) });
+		if (message.role === "system") {
+			// Validate before the public renderers, which otherwise filter non-text blocks.
+			text(message.content);
+			requireValid(message.sections === undefined || (message.sections &&
+				Object.getPrototypeOf(message.sections) === Object.prototype &&
+				Object.values(message.sections).every(value => value === null || typeof value === "string")));
+			requireValid(message.replace === undefined || typeof message.replace === "boolean");
+			if (message.toolsAdded !== undefined) {
+				requireValid(Array.isArray(message.toolsAdded) && message.toolsAdded.every(tool => tool &&
+					typeof tool.name === "string" && typeof tool.description === "string" && tool.parameters &&
+					Object.getPrototypeOf(tool.parameters) === Object.prototype && tool.constrainedSampling === undefined));
+			}
+			if (message.toolsRemoved !== undefined) {
+				requireValid(Array.isArray(message.toolsRemoved) && message.toolsRemoved.every(tool => tool && typeof tool.name === "string"));
+			}
+			// Chat Completions cannot retract an earlier system message. Reject rather
+			// than silently flattening chronology or claiming a replacement was applied.
+			requireValid(!message.replace || messages.length === 0);
+			const content = messages.length === 0 ? binding.getSystemMessageText(message) : binding.renderSystemMessageUpdate(message);
+			messages.push({ role: "system", content });
+		} else if (message.role === "user") messages.push({ role: "user", content: text(message.content) });
 		else if (message.role === "toolResult") {
 			messages.push({ role: "tool", tool_call_id: message.toolCallId, content: text(message.content) });
 		} else if (message.role === "assistant") {
@@ -36,7 +56,8 @@ function requestBody(descriptor, context, options) {
 	}
 	const body = { model: descriptor.modelId, messages, stream: true, max_tokens: options.maxTokens ?? 4096 };
 	requireValid(Number.isSafeInteger(body.max_tokens) && body.max_tokens > 0 && body.max_tokens <= 8192);
-	if (context.tools?.length) body.tools = context.tools.map(tool => ({ type: "function", function: {
+	const tools = binding.getCurrentTools(context.messages);
+	if (tools.length) body.tools = tools.map(tool => ({ type: "function", function: {
 		name: tool.name, description: tool.description, parameters: tool.parameters,
 	} }));
 	const serialized = JSON.stringify(body);
@@ -140,8 +161,9 @@ export async function createConstrainedRuntime({ capability, credential, transpo
 		baseUrl: descriptor.endpoint, name: "Constrained text model", reasoning: false, input: Object.freeze(["text"]),
 		contextWindow: 32768, maxTokens: 8192, cost: Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) });
 	// Keep the pure reducer/descriptor dependency graph SDK-free.
-	const { createAssistantMessageEventStream } = await import("@earendil-works/pi-ai");
-	const binding = { capability, descriptor, credential, transport, timeoutMs, model, createAssistantMessageEventStream };
+	const { createAssistantMessageEventStream, getCurrentTools, getSystemMessageText, normalizeContext, renderSystemMessageUpdate } = await import("@earendil-works/pi-ai");
+	const binding = { capability, descriptor, credential, transport, timeoutMs, model,
+		createAssistantMessageEventStream, getCurrentTools, getSystemMessageText, normalizeContext, renderSystemMessageUpdate };
 	return facade(binding);
 }
 
@@ -170,9 +192,12 @@ function facade(binding, admission) {
 				signal = AbortSignal.any([admission.signal(), deadline.signal, ...(options.signal ? [options.signal] : [])]);
 				timer = setTimeout(() => deadline.abort(), binding.timeoutMs);
 				signal.throwIfAborted();
+				// Direct callers may supply Context; Pi 1.0 sessions already supply
+				// TranscriptContext. normalizeContext preserves existing message order.
+				const transcript = binding.normalizeContext(context);
 				request = Object.freeze({ url: descriptor.endpoint, method: "POST", headers: Object.freeze({
 					"content-type": "application/json", accept: "text/event-stream", authorization: `Bearer ${binding.credential}`,
-				}), body: requestBody(descriptor, context, options), signal, redirect: "error", retries: 0 });
+				}), body: requestBody(binding, transcript, options), signal, redirect: "error", retries: 0 });
 				stream.push({ type: "start", partial: output });
 				// No await between the final admission and transport dispatch. SDK header/payload
 				// callbacks are intentionally never invoked; only this module assembles requests.
@@ -180,7 +205,7 @@ function facade(binding, admission) {
 				const response = await (isHttpsTransport(binding.transport, binding.capability)
 					? dispatchHttpsRequest(binding.transport, request, admission) : binding.transport(request));
 				signal.throwIfAborted();
-				result = await consume(response, signal, context.tools, model.id);
+				result = await consume(response, signal, binding.getCurrentTools(transcript.messages), model.id);
 			} catch {
 				failed = true;
 				output.content = [];

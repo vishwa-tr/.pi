@@ -63,6 +63,17 @@ class Terminal:
             self.pump()
         raise AssertionError(f"Missing display {text!r}; terminal tail:\n{ANSI.sub('', self.output)[-6000:]}")
 
+    def expect_status(self, expected, transport="mock only"):
+        # Pi 1.0 clips and diffs long notifications: neither the JSON prefix
+        # nor unchanged tail need be emitted. Inspect the bounded native view.
+        start = len(self.output)
+        self.line("/swarm dashboard")
+        self.expect(f"SWARM live / {transport} | {expected}")
+        self.cursor = start
+        self.expect("cost: unknown")
+        self.send("\x1b")
+        time.sleep(0.2)
+
     def line(self, text):
         self.send(text)
         time.sleep(0.1)
@@ -181,7 +192,7 @@ def main():
             terminal.choose(2)
             terminal.expect("Preserve and proceed?")
             terminal.choose(1)
-            terminal.expect('"status": "running"')
+            terminal.expect_status("running")
             wait_event("worker-start")
             terminal.line("/swarm dashboard")
             terminal.expect("SWARM live / mock only | running")
@@ -195,7 +206,7 @@ def main():
             wait_event("worker-abort")
             time.sleep(0.3)
             terminal.line("/swarm status")
-            terminal.expect('"status": "paused"')
+            terminal.expect_status("paused")
             terminal.line("/swarm resume")
             terminal.expect("RESUME (mock only)")
             terminal.choose(1)
@@ -203,12 +214,12 @@ def main():
             terminal.choose(1)
             terminal.expect("Workspace reconciliation")
             terminal.choose(0)
-            terminal.expect('"status": "running"')
+            terminal.expect_status("running")
             wait_event("worker-start", 2)
             terminal.line("/reload")
             terminal.expect("Reloaded keybindings")
             terminal.line("/swarm status")
-            terminal.expect('"status": "paused"')
+            terminal.expect_status("paused")
             wait_event("worker-abort", 2)
             assert sum(event["type"] == "worker-start" for event in events()) == 2
             terminal.resize(100, 40)
@@ -230,7 +241,7 @@ def main():
             wait_event("worker-abort", 3)
             time.sleep(0.3)
             terminal.line("/swarm status")
-            terminal.expect('"status": "stopped"')
+            terminal.expect_status("stopped")
             time.sleep(0.3)
             assert sum(event["type"] == "worker-start" for event in events()) == 3
             terminal.line("/fixture-uncertain")
@@ -246,6 +257,9 @@ def main():
             terminal.choose(0)
             wait_event("uncertain-runner")
             time.sleep(0.2)
+            # Recovery includes the full agreement and unresolved execution packet.
+            # Native Pi 1.0 dialogs clip instead of emitting offscreen scrollback.
+            terminal.resize(120, 160)
             terminal.line("/swarm reconcile")
             terminal.expect("RECONCILE (mock only)")
             terminal.choose(1)
@@ -258,11 +272,11 @@ def main():
             terminal.expect("Attestation recorded")
             time.sleep(0.3)
             terminal.line("/swarm status")
-            terminal.expect('"status": "paused"')
+            terminal.expect_status("paused")
             terminal.line("/swarm stop")
             time.sleep(0.3)
             terminal.line("/swarm status")
-            terminal.expect('"status": "stopped"')
+            terminal.expect_status("stopped")
             assert (project / "user.txt").read_text() == "preserve this work\n"
             assert sum(event["type"] == "uncertain-runner" for event in events()) == 1
             journal_path, = (project / ".swarms").glob("*/events.jsonl")

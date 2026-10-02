@@ -36,7 +36,9 @@ uses an already-installed Pi SDK; it never installs dependencies or contacts liv
 
 Requires Node 22+, Git, and a local Unix filesystem that supports the synchronization
 and no-follow operations used by the storage layer. The complete suite also requires the
-installed Pi SDK (verified with 0.85.1). The test bootstrap resolves public package exports;
+installed Pi SDK/CLI **1.0.0 or newer** (only 1.0.0 is verified; later releases require
+revalidation). Pi 1.0 requires Node 22.19+. Older Pi releases are no longer supported by
+this package; historical phase results below describe their original verification. The test bootstrap resolves public package exports;
 set `PI_SDK_DIR` if automatic discovery does not locate the installation. No install fallback
 is provided. `npm run test:foundation` runs the non-SDK tests separately.
 
@@ -51,7 +53,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The combined suite has 384 passing tests. It includes actual local shell execution,
+The current combined suite has **395 passing tests on Pi 1.0.0**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -390,7 +392,7 @@ reconciliation; missing providers fail closed rather than bypassing policy.
 
 ## Phase 6 isolated terminal acceptance
 
-Run with installed Pi 0.85.1, Node 22+, Python 3, and Git on POSIX:
+Run with installed Pi 1.0.0, Node 22.19+, Python 3, and Git on POSIX:
 
 ```bash
 python3 configs/pi-agent/packages/pi-swarm/test/terminal/run.py
@@ -799,6 +801,80 @@ and eight intentionally untracked phase-9–11 source/test files. No settings, a
 installation, real credentials, commits or pushes changed. Remove the explicit HTTPS injection
 to retain mock/offline behavior. Remote compatibility, usefulness, cost/usage accuracy and
 live-provider acceptance remain unverified and require future explicit authorization.
+
+## Phase 12 combined offline hardening — passed on Pi 1.0.0
+
+The explicitly authorized compatibility migration and combined acceptance are complete.
+Swarm remains inactive. The native agreement and dashboard now distinguish constrained
+HTTPS from legacy mock execution: declared context is sent to the exact endpoint, not
+“in-memory only.” Usage and cost remain unknown. Five regressions cover these disclosures.
+
+### Pi 1.0 compatibility contract
+
+The adapter uses public `normalizeContext`, `getCurrentTools`, `getSystemMessageText`, and
+`renderSystemMessageUpdate` exports. Leading structured system content/sections and later
+section additions/removals retain their transcript positions and system role; user/tool
+content is never promoted to instructions. Tool additions/removals determine the current
+request declarations and permitted response calls, without deleting historical calls/results.
+Legacy direct `Context` inputs are normalized too. Unsupported non-text system content and
+constrained-sampling declarations fail closed before transport.
+
+Native history validation now accepts validated system messages, compaction system
+checkpoints, retain-none boundaries, and content-only `context_edit` entries. Pi's native
+SessionManager remains authoritative for active-branch projection and compaction; raw
+history is not rewritten. Rejecting the new system entries had prevented synchronized
+turn retirement and caused the apparent settlement stalls. The driver still awaits public
+`waitForIdle()` and any `abort()` promise, workspace settlement, and synchronized history
+before durable retirement. Abort requests alone never establish settlement; a new regression
+holds a provider after abort and observes idle only after `agent_settled`.
+
+Contract caveat: installed 1.0 prose mentions `SystemMessage.replace`, but its declarations
+and replay helpers do not implement it. Persisted `replace: true` and mid-transcript wire
+replacements fail closed rather than silently ignoring reset semantics. A leading direct
+wire checkpoint has no earlier system state and is safe. No arbitrary new roles or generic
+SDK provider routing were enabled. Sources: installed Pi `docs/sdk.md`, `message-types.md`,
+`session-format.md`, `compaction.md`, `custom-provider.md`, `extensions.md`, and `tui.md`,
+checked against public declarations and transcript/session implementations on 2026-10-01.
+Upstream references: [SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md),
+[message types](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/message-types.md),
+[session format](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/session-format.md).
+These upstream links can change; the verified contract above is the installed 1.0.0 build.
+
+### Combined acceptance
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/terminal/tls.py
+```
+
+The scenario reuses `production.py`, actual Plan/Safety factories and bounded PTY cleanup.
+`tls-worker.mjs` supplies an ephemeral strict-CA-verified loopback receiver, real Node HTTPS
+client and constrained SDK adapter; only the main CLI provider is mocked. Fresh keys and
+fixture credentials stay in memory. The test guard permits only its exact loopback port;
+the process-owned endpoint survives native reload without changing the approved binding.
+
+Verified: **exactly 17 requests**, matching model/path, no replay or follow-up after
+revocation, seven fresh agreements, real benign command receipts, native worker histories,
+and actual client/server socket closure. Production mode transitions, safety cancellation,
+dashboard exclusion, reload and shutdown are exercised together with HTTPS.
+
+Current verification on installed Pi 1.0.0: **395 Swarm tests**, **155 SDK-free foundation
+tests**, **66 Plan/Safety tests (including the six classifier tests)**, **4 cleanup regressions**, and **all three
+PTYs (`run.py`, `production.py`, `tls.py`) pass**. Six new transcript/history/lifecycle tests
+supplement the five disclosure tests. Historical 66-policy-test counts are not reused.
+`git diff --check` passes. The repository validator still reports unrelated model/thinking
+defaults and untracked test additions; settings and staging remain untouched.
+
+Pi 1.0 defaults to fullscreen rendering: clipped notification prefixes and unchanged diff
+lines need not enter scrollback. PTYs now verify status and unknown cost in the bounded
+native dashboard rather than assuming emitted JSON prefixes. Complete HTTPS disclosure uses
+120×100, and the full recovery packet uses 120×160. The 60-column dashboard/control scenario
+still passes, but narrow agreement readability is **not** certified. Assertions inspect ANSI
+output and durable evidence, not a terminal-emulator viewport or human visual sign-off.
+
+Native worker compaction remains covered by SDK tests, not the public host/UI scenario
+(which has no compaction command). Remote compatibility/cancellation, process escape, power
+loss, cost accuracy and activation remain outside this phase. No external networking, live
+provider, real credentials, global activation, installation, commit or push was performed.
 
 ## Deferred before activation
 

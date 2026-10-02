@@ -5,6 +5,7 @@ import planExtension from "../../../pi-plan/extensions/plan/index.ts";
 import safetyExtension from "../../../pi-safety/extensions/safety/index.ts";
 import { createSwarmExtension } from "../../extensions/swarm/extension.mjs";
 import { createMockRuntime } from "../sdk-env.mjs";
+import { createTlsWorker } from "./tls-worker.mjs";
 
 export default async function (pi) {
 	if (!process.env.SWARM_TERMINAL_FIXTURE || process.env.PI_OFFLINE !== "1") throw new Error("Isolated offline fixture required");
@@ -51,7 +52,8 @@ export default async function (pi) {
 	pi.registerProvider(main.modelRuntime.getProvider("swarm-mock"));
 	let steps = [];
 	let release;
-	const worker = await createMockRuntime(async ({ options }) => {
+	const tls = process.env.SWARM_TERMINAL_TLS === "1";
+	const nextStep = async ({ options }) => {
 		record({ type: "worker-start" });
 		options.signal.addEventListener("abort", () => record({ type: "worker-abort" }), { once: true });
 		const step = steps.shift();
@@ -63,8 +65,10 @@ export default async function (pi) {
 			});
 		}
 		return step ?? { waitForAbort: true };
-	});
-	createSwarmExtension({ modelRuntime: worker.modelRuntime, mainModel: worker.model })(observeFactory("swarm"));
+	};
+	const worker = tls ? await createTlsWorker(record, nextStep) : await createMockRuntime(nextStep);
+	createSwarmExtension({ modelRuntime: worker.modelRuntime, mainModel: worker.model,
+		...(tls ? { providerCapability: worker.providerCapability } : {}) })(observeFactory("swarm"));
 	pi.registerCommand("fixture-script", { handler: async (args, ctx) => {
 		const [id, hold] = args.trim().split(/\s+/);
 		if (!/^[a-z]+$/.test(id)) throw new Error("Named disposable script required");
@@ -99,9 +103,10 @@ export default async function (pi) {
 		record({ type: "start", reason: event.reason });
 		ctx.ui.notify("Production policy fixture ready", "info");
 	});
-	pi.on("session_shutdown", event => {
+	pi.on("session_shutdown", async event => {
 		for (const probe of probes) probe.abort();
 		unsubscribeMode();
+		if (tls && event.reason !== "reload") await worker.close();
 		record({ type: "shutdown", reason: event.reason, activeDialogs });
 	});
 }

@@ -128,7 +128,7 @@ Path abbreviations:
 - `TEAMS`: `configs/pi-agent/packages/pi-teams/extensions/teams`
 - `SUBAGENTS`: `configs/pi-agent/packages/pi-subagents/extensions/subagents`
 - `PLAN`: `configs/pi-agent/packages/pi-plan/extensions/plan`
-- `SDK`: the installed Pi package, currently **0.85.1**
+- `SDK`: original research baseline **0.85.1**; current supported/verified baseline is **1.0.0** (section 21).
 
 | Finding | Evidence |
 |---|---|
@@ -515,7 +515,7 @@ Do not add Swarm delegation tools to pi-plan’s restricted allowlists.
 
 #### Compatibility boundaries
 
-- First supported target: Pi 0.85.1, Node 22+, local Unix checkout with Git and Bash.
+- Current minimum target: Pi 1.0.0, Node 22.19+, local Unix checkout with Git and Bash. Only Pi 1.0.0 is currently verified; revalidate newer versions. Earlier phase results below are historical.
 - Use public package-root SDK imports only.
 - v1 execution requires TUI confirmation; other modes may inspect stored status but fail closed on launch.
 - Subagents and Teams retain their current behavior and definitions.
@@ -1280,3 +1280,66 @@ have not been validated, and no human visual acceptance or activation readiness 
 The earlier text/function-call subset, unknown usage/cost, fixed context metadata, scope/progress,
 UI, recovery and stale-owner limitations remain. A live trial needs separate explicit user
 permission and explicit endpoint/model/credential inputs; none are selected or recovered here.
+
+### 21. Phase 12 combined offline hardening — passed on Pi 1.0.0
+
+The user explicitly authorized migration to the installed Pi 1.0.0 contract, then completion
+of combined Node HTTPS/constrained SDK/production Plan/Safety/native terminal acceptance.
+Existing phase-12 work was preserved. No external provider, real credential, dependency
+installation, activation, settings change, commit or push was performed.
+
+Implemented and verified:
+
+- HTTPS agreement/dashboard labels disclose declared context transmission to the exact
+  endpoint rather than claiming in-memory-only mock execution. Usage/cost stay unknown;
+  five disclosure regressions cover both transport paths.
+- The constrained adapter uses public Pi AI transcript normalization and rendering helpers.
+  Structured leading system content/sections and subsequent section changes retain their
+  chronological positions and roles. User/tool text is not escalated to system authority.
+  Ordered tool additions/removals control request declarations and response-call validation;
+  historical tool calls/results remain intact. Unsupported system content fails before I/O.
+- Native-session validation now covers structured system messages, compaction checkpoints,
+  retain-none boundaries and content-only context edits. Native SessionManager still owns
+  active-branch projection; raw history is preserved. The old validator rejected new system
+  entries during synchronization, preventing durable turn retirement and appearing to be an
+  idle/settlement regression. No abort-equals-settled shortcut or lifecycle weakening was needed.
+- Six new Pi1 regressions cover ordered systems/sections/tools, removed-tool response denial,
+  unsupported system/reset rejection, native history corruption, branch edits/retain-none
+  compaction, and an uncooperative provider that keeps abort/idle promises pending until
+  `agent_settled`. Existing real SDK compaction/recovery/settlement tests pass as well.
+- `tls.py` composes the real Plan/Safety factories and native controls with a strict ephemeral
+  loopback TLS receiver and real HTTPS/constrained adapter. Main CLI responses remain mocked.
+  Keys/fixture credentials stay memory-only; the guard allows only the exact loopback port.
+  The process-owned endpoint survives reload; quit owns receiver/guard cleanup.
+- Combined receiver/journal/history assertions pass with **exactly 17 requests** (unchanged),
+  exact model/path, seven fresh provider agreements, no replay/follow-up after revocation,
+  actual benign command evidence, and real client/server socket retirement. Native policy
+  transitions, safety cancellation, dashboard exclusion, reload and shutdown pass together.
+- Pi1 fullscreen output clips long notifications/dialogs and omits unchanged diff lines.
+  PTYs now inspect status and unknown cost through the bounded native dashboard instead of
+  assuming notification prefixes enter scrollback. Complete HTTPS disclosure uses 120×100;
+  the full recovery packet uses 120×160. The 60-column dashboard/control path still passes.
+
+Current verification:
+
+- **395/395 Swarm tests**, **155/155 SDK-free foundation tests**, **66/66 Plan/Safety
+  tests**, and **4/4 cleanup regressions** pass on installed Pi 1.0.0. Historical policy counts
+  are not substituted for the current command's result.
+- **All three real CLI PTYs pass**: `run.py`, `production.py`, and `tls.py`. Request counts,
+  receipts, persisted history, authority replacement and dialog/socket cleanup are asserted.
+- `git diff --check` passes. Global validation still reports unrelated model/thinking defaults
+  and untracked test additions. No configuration normalization or staging was performed.
+
+Compatibility basis: installed `sdk.md`, `message-types.md`, `session-format.md`,
+`compaction.md`, `custom-provider.md`, `extensions.md`, `tui.md` and linked public contracts,
+checked against actual declarations and implementation. In 1.0.0 the prose mentions
+`SystemMessage.replace`, but declarations/replay do not implement it: persisted `replace:true`
+and mid-transcript wire replacements fail closed rather than being ignored. Direct leading
+wire checkpoints have no prior system state. Minimum supported Pi is now 1.0.0 (Node 22.19+);
+newer Pi releases require revalidation. Older SDK support is not claimed.
+
+Remaining limits: automated ANSI/keyboard and durable-record acceptance is not a full
+terminal-emulator viewport test or human visual sign-off. Tall agreements do not certify
+narrow agreement readability. Native worker compaction is SDK-tested, not exposed as a new
+public host/UI command. Remote compatibility/cancellation/rollback, escaped processes, power
+loss, semantic scope, cost accuracy and activation remain outside this completed offline phase.

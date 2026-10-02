@@ -94,7 +94,7 @@ export class SwarmDashboard {
 		if (this.error) return this.error;
 		const worker = run.workers[this.workerIndex];
 		switch (this.section) {
-			case 0: return `Objective: ${run.objective}\nCycle: ${run.cycle} | revision: ${run.revision}\nRecorded active time: ${run.elapsedMs} ms\nWorkers: ${run.workers.length}/${run.limits.agents} | active: ${driver?.active.length ?? "unknown"}/${run.limits.active}\nTasks this cycle: ${run.tasksCreated}/${run.limits.tasks}\nUsage: not aggregated | cost: unknown (mock only)\nLimits: ${json(run.limits)}\n${json({ runId: run.runId, criteria: run.criteria, scope: run.scope, priorCycles: run.cycles, pendingApproval: this.snapshot.pendingApproval, errors: [...errors, ...(driver?.errors ?? [])] })}`;
+			case 0: return `Objective: ${run.objective}\nCycle: ${run.cycle} | revision: ${run.revision}\nRecorded active time: ${run.elapsedMs} ms\nWorkers: ${run.workers.length}/${run.limits.agents} | active: ${driver?.active.length ?? "unknown"}/${run.limits.active}\nTasks this cycle: ${run.tasksCreated}/${run.limits.tasks}\nUsage: not aggregated | cost: unknown\nLimits: ${json(run.limits)}\n${json({ runId: run.runId, criteria: run.criteria, scope: run.scope, priorCycles: run.cycles, pendingApproval: this.snapshot.pendingApproval, errors: [...errors, ...(driver?.errors ?? [])] })}`;
 			case 1: return run.workers.length ? run.workers.map((item, index) => {
 				const activity = !driver ? "activity unknown" : driver.active.includes(item.id) ? "active SDK turn" : driver.queued.includes(item.id) ? "queued" : "idle / not executing";
 				const tasks = run.tasks.filter(task => task.assignment?.workerId === item.id).map(task => task.id);
@@ -112,7 +112,7 @@ export class SwarmDashboard {
 		const status = this.snapshot?.run?.status ?? "unattached";
 		const continuation = status === "paused" ? "r resume | R restart" : ["stopped", "completed", "failed"].includes(status) ? "R restart" : "";
 		const header = [
-			`SWARM live / mock only | ${status}`,
+			`SWARM live / ${this.snapshot?.run?.hostApprovals?.at(-1)?.provider?.transport === "https-chat-completions" ? "HTTPS provider" : "mock only"} | ${status}`,
 			"p PAUSE | s STOP | Esc close",
 			`${continuation}${continuation ? " | " : ""}c reconcile (approval required)`,
 			"1 Overview  2 Workers  3 Tasks  4 Claims  5 Mail  6 History",

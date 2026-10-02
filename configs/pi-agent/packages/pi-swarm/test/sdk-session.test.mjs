@@ -1,14 +1,15 @@
-import test from "node:test";
-import assert from "node:assert/strict";
 import {
 	chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
 	rmSync, statSync, symlinkSync, writeFileSync,
 } from "node:fs";
+import test from "node:test";
+import { Type } from "typebox";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Type } from "typebox";
-import { createSdkSession } from "../extensions/swarm/sdk-session.mjs";
+import assert from "node:assert/strict";
 import { createMockRuntime } from "./sdk-env.mjs";
+import { createSdkSession } from "../extensions/swarm/sdk-session.mjs";
+import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 
 async function fixture(t, script = []) {
 	const root = mkdtempSync(join(tmpdir(), "swarm-sdk-"));
@@ -50,10 +51,12 @@ test("native session identity persists before first prompt and after idle/reopen
 	const events = [];
 	first.session.subscribe((event) => events.push(event.type));
 	await first.session.prompt("First request");
-	await first.session.agent.waitForIdle();
+	await first.session.waitForIdle();
 	first.sync();
 	assert.equal(first.session.isStreaming, false);
 	assert.ok(events.includes("agent_end"));
+	assert.ok(events.indexOf("agent_settled") > events.indexOf("agent_end"));
+	assert.equal(first.session.isIdle, true);
 	assert.equal(f.calls.length, 1);
 	first.session.dispose();
 	const reopened = await f.open({ sessionFile: first.sessionFile });
@@ -82,7 +85,7 @@ test("explicit custom tools replace builtin names and unknown builtin calls neve
 	await session.prompt("Call the tools");
 	sync();
 	assert.equal(reads, 1);
-	assert.deepEqual(f.calls[0].context.tools.map((tool) => tool.name), ["read"]);
+	assert.deepEqual(getCurrentTools(f.calls[0].context.messages).map((tool) => tool.name), ["read"]);
 	assert.ok(session.messages.some((message) => message.role === "toolResult" && message.toolName === "bash" && message.isError));
 	const isolated = await f.open();
 	assert.deepEqual(isolated.session.getAllTools(), []);
@@ -103,7 +106,7 @@ test("resource loader ignores project context, extensions, prompts, skills, and 
 	writeFileSync(join(cwd, ".agents", "skills", "sentinel", "SKILL.md"), "---\nname: sentinel\ndescription: SKILL_DISCOVERY_SENTINEL\n---\nSentinel");
 	const { session } = await f.open();
 	await session.prompt("/sentinel");
-	assert.match(f.calls[0].context.systemPrompt, /Only the explicit swarm prompt/);
+	assert.match(getCurrentSystemPrompt(f.calls[0].context.messages), /Only the explicit swarm prompt/);
 	assert.doesNotMatch(JSON.stringify(f.calls[0].context), /DISCOVERY_SENTINEL/);
 	assert.deepEqual(session.getAllTools(), []);
 	assert.equal(session.settingsManager.getCompactionEnabled(), false);
@@ -119,12 +122,88 @@ test("abort reaches mock stream and real SDK becomes idle without retry", async 
 	assert.equal(session.isStreaming, true);
 	await session.abort();
 	await prompt;
-	await session.agent.waitForIdle();
+	await session.waitForIdle();
 	sync();
 	assert.equal(session.isStreaming, false);
 	assert.equal(f.calls[0].options.signal.aborted, true);
 	assert.equal(f.calls.length, 1);
 	assert.equal(session.messages.at(-1).stopReason, "aborted");
+});
+
+test("Pi 1.0 abort and idle wait for agent_settled after an uncooperative provider unwinds", async t => {
+	let release;
+	const held = new Promise(resolve => { release = resolve; });
+	t.after(() => release());
+	const f = await fixture(t, async () => { await held; return { text: "Must not escape abort" }; });
+	const { session, sync } = await f.open();
+	const events = [];
+	session.subscribe(event => events.push(event.type));
+	const prompt = session.prompt("Hold the provider");
+	await until(() => f.calls.length === 1);
+	let aborted = false;
+	let idle = false;
+	const abort = session.abort().then(() => { aborted = true; });
+	const waiting = session.waitForIdle().then(() => { idle = true; });
+	await new Promise(resolve => setTimeout(resolve, 25));
+	assert.equal(f.calls[0].options.signal.aborted, true);
+	assert.equal(aborted, false);
+	assert.equal(idle, false);
+	assert.equal(session.isIdle, false);
+	assert.ok(!events.includes("agent_settled"));
+	release();
+	await Promise.all([prompt, abort, waiting]);
+	assert.equal(session.isIdle, true);
+	assert.equal(session.messages.at(-1).stopReason, "aborted");
+	assert.ok(events.indexOf("agent_settled") > events.indexOf("agent_end"));
+	sync();
+});
+
+test("Pi 1.0 system history is validated on synchronization and reopen", async t => {
+	const f = await fixture(t, [{ text: "Answer" }]);
+	const first = await f.open();
+	await first.session.prompt("Persist structured system state");
+	first.sync();
+	first.session.dispose();
+	const records = readFileSync(first.sessionFile, "utf8").trimEnd().split("\n").map(JSON.parse);
+	const systemIndex = records.findIndex(entry => entry.type === "message" && entry.message.role === "system");
+	assert.ok(systemIndex > 0, "Actual Pi 1.0 must persist a system message");
+	for (const patch of [
+		{ content: [{ type: "image", data: "unsupported" }] }, { sections: { policy: 123 } },
+		{ replace: "yes" }, { replace: true }, { toolsAdded: [{ name: "bad" }] }, { toolsRemoved: [null] },
+	]) {
+		const corrupted = structuredClone(records);
+		Object.assign(corrupted[systemIndex].message, patch);
+		const text = corrupted.map(JSON.stringify).join("\n") + "\n";
+		writeFileSync(first.sessionFile, text);
+		await assert.rejects(f.open({ sessionFile: first.sessionFile }));
+		assert.equal(readFileSync(first.sessionFile, "utf8"), text);
+	}
+});
+
+test("Pi 1.0 branch context edits and retain-none checkpoints reopen without rewriting raw history", async t => {
+	const f = await fixture(t, [{ text: "Omitted response" }, { text: "After edits" }]);
+	const first = await f.open();
+	await first.session.prompt("Original request");
+	const entries = first.manager.getEntries();
+	const user = entries.find(entry => entry.type === "message" && entry.message.role === "user");
+	const assistant = entries.find(entry => entry.type === "message" && entry.message.role === "assistant");
+	first.manager.appendContextEdit(user.id, { content: "Replacement request" });
+	first.manager.appendContextEdit(assistant.id, null);
+	first.sync();
+	first.session.dispose();
+	const reopened = await f.open({ sessionFile: first.sessionFile });
+	await reopened.session.prompt("Continue");
+	assert.match(JSON.stringify(f.calls[1].context), /Replacement request/);
+	assert.doesNotMatch(JSON.stringify(f.calls[1].context), /Original request|Omitted response/);
+	assert.equal(reopened.manager.getEntry(assistant.id).message.content[0].text, "Omitted response");
+	const checkpointId = reopened.manager.appendCompaction("Retain only this summary", null, 100);
+	assert.equal(reopened.manager.getEntry(checkpointId).firstKeptEntryId, checkpointId);
+	reopened.sync();
+	reopened.session.dispose();
+	const compacted = await f.open({ sessionFile: first.sessionFile });
+	assert.ok(compacted.session.messages.some(message => message.role === "compactionSummary"));
+	assert.ok(!compacted.session.messages.some(message => message.role === "assistant"));
+	assert.equal(compacted.manager.getEntry(assistant.id).message.content[0].text, "Omitted response");
 });
 
 test("manual native compaction preserves session, summary, and full durable history", async (t) => {
@@ -141,7 +220,9 @@ test("manual native compaction preserves session, summary, and full durable hist
 	assert.match(result.summary, /original decision/);
 	assert.equal(session.sessionId, sessionId);
 	assert.equal(manager.getEntries().filter((entry) => entry.type === "message").length, before);
-	assert.ok(manager.getEntries().some((entry) => entry.type === "compaction"));
+	const checkpoint = manager.getEntries().find((entry) => entry.type === "compaction");
+	assert.equal(checkpoint.systemMessage.role, "system");
+	assert.match(getCurrentSystemPrompt([checkpoint.systemMessage]), /Only the explicit swarm prompt/);
 	assert.equal(f.calls.length, 3);
 	assert.equal(f.calls[2].options.maxRetries, 0);
 	assert.equal(f.calls[2].model.provider, "swarm-mock");

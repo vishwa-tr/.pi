@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SwarmController } from "../extensions/swarm/core.mjs";
-import { WorkspaceRuntime } from "../extensions/swarm/workspace.mjs";
-import { SwarmSessions } from "../extensions/swarm/sessions.mjs";
-import { createMockRuntime } from "./sdk-env.mjs";
 import { repository } from "./helpers.mjs";
+import { createMockRuntime } from "./sdk-env.mjs";
+import { SwarmController } from "../extensions/swarm/core.mjs";
+import { SwarmSessions } from "../extensions/swarm/sessions.mjs";
+import { WorkspaceRuntime } from "../extensions/swarm/workspace.mjs";
+import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 
 const code = expected => error => error.code === expected;
 function tool(name, args, id = name) { return { toolCalls: [{ id, name, arguments: args }] }; }
@@ -41,7 +42,7 @@ test("persistent specialist retains identity and context through pause and reope
 
 test("peer tools wake another specialist without main-agent relaying", async t => {
 	const f = await fixture(t, ({ context }) => {
-		const system = context.systemPrompt;
+		const system = getCurrentSystemPrompt(context.messages);
 		const hasResult = context.messages.some(message => message.role === "toolResult");
 		if (system.includes("sender focus") && !hasResult) return tool("swarm_message", { to: "receiver", text: "Use the existing schema" });
 		return { text: system.includes("receiver focus") ? "Received the schema decision" : "Sent" };
@@ -51,19 +52,19 @@ test("peer tools wake another specialist without main-agent relaying", async t =
 	assert.deepEqual(f.driver.snapshot().errors, []);
 	assert.equal(f.c.snapshot().messages.length, 1);
 	assert.equal(f.c.snapshot().sessions.workers.find(worker => worker.workerId === "receiver").delivered.length, 1);
-	assert.ok(f.mock.calls.some(call => JSON.stringify(call.context).includes("Use the existing schema") && call.context.systemPrompt.includes("receiver focus")));
+	assert.ok(f.mock.calls.some(call => JSON.stringify(call.context).includes("Use the existing schema") && getCurrentSystemPrompt(call.context.messages).includes("receiver focus")));
 	await shutdown(f);
 });
 
 test("specialists recruit practical run-local peers with identical tool sets", async t => {
 	const f = await fixture(t, ({ context }) => {
-		if (context.systemPrompt.includes("lead focus") && !context.messages.some(message => message.role === "toolResult")) return tool("swarm_recruit", specialist("database"));
+		if (getCurrentSystemPrompt(context.messages).includes("lead focus") && !context.messages.some(message => message.role === "toolResult")) return tool("swarm_recruit", specialist("database"));
 		return { text: "Focused work" };
 	});
 	await f.driver.recruit(specialist("lead")); f.driver.wake("lead"); await f.driver.idle();
 	assert.deepEqual(f.driver.snapshot().errors, []);
 	assert.equal(f.c.snapshot().workers.length, 2);
-	const sets = f.mock.calls.map(call => call.context.tools.map(tool => tool.name).sort());
+	const sets = f.mock.calls.map(call => getCurrentTools(call.context.messages).map(tool => tool.name).sort());
 	for (const set of sets) assert.deepEqual(set, sets[0]);
 	assert.ok(sets[0].includes("swarm_recruit"));
 	assert.ok(!sets[0].includes("team_spawn"));
@@ -73,7 +74,7 @@ test("specialists recruit practical run-local peers with identical tool sets", a
 test("task assignment stays owned while idle but releases the model execution slot", async t => {
 	const f = await fixture(t, ({ context }) => {
 		if (!context.messages.some(message => message.role === "toolResult")) {
-			const builder = context.systemPrompt.includes("builder focus");
+			const builder = getCurrentSystemPrompt(context.messages).includes("builder focus");
 			return tool("swarm_task", { action: "claim", taskId: builder ? "first" : "second", kind: "build" });
 		}
 		return { text: "Waiting for peer input" };

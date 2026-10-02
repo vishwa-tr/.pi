@@ -7,6 +7,7 @@ import { reduceEvent } from "../../extensions/swarm/state.mjs";
 const readLines = path => readFileSync(path, "utf8").trim().split("\n").map(JSON.parse);
 const journal = readLines(process.argv[2]).map(record => record.payload);
 const observations = readLines(process.argv[3]);
+const tls = process.argv[4] === "tls";
 let state = null;
 let continuations = 0;
 for (const event of journal) {
@@ -19,11 +20,11 @@ for (const event of journal) {
 	assert.equal(state.elapsedMs, previous.elapsedMs);
 	assert.equal(state.tasksCreated, previous.tasksCreated);
 }
-assert.equal(continuations, 5);
+assert.equal(continuations, tls ? 6 : 5);
 assert.equal(state.status, "paused", "Shutdown restores a paused run, not completion");
 assert.equal(state.objective, "Production policy acceptance");
 assert.deepEqual(state.criteria, ["Only approved benign commands execute"]);
-assert.deepEqual(state.scope, ["Disposable project only; no network"]);
+assert.deepEqual(state.scope, [tls ? "Disposable project and explicit local TLS fixture only" : "Disposable project only; no network"]);
 assert.equal(state.workspace.operations.length, 0);
 assert.equal(state.sessions.turns.length, 0, "SDK turns settled before shutdown finished");
 assert.ok(state.tasks.every(task => !task.assignment), "All assignments actually settled");

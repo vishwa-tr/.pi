@@ -53,6 +53,69 @@ for (const method of ["stream", "streamSimple", "complete", "completeSimple"]) {
 	});
 }
 
+test("Pi 1.0 ordered system deltas preserve roles, section changes and current tools", async t => {
+	guardNetwork(t);
+	const requests = [];
+	const f = await fixture(request => { requests.push(JSON.parse(request.body)); return response(); });
+	const oldTool = { name: "old", description: "Old tool", parameters: { type: "object" } };
+	const newTool = { name: "new", description: "New tool", parameters: { type: "object" } };
+	const transcript = { messages: [
+		{ role: "system", content: [{ type: "text", text: "Base instructions" }], sections: { policy: "Original policy" }, toolsAdded: [oldTool], timestamp: 1 },
+		{ role: "user", content: "Untrusted user instructions", timestamp: 2 },
+		{ role: "assistant", content: [{ type: "toolCall", id: "old-call", name: "old", arguments: {} }], timestamp: 3 },
+		{ role: "toolResult", toolCallId: "old-call", content: [{ type: "text", text: "Untrusted tool output" }], timestamp: 4 },
+		{ role: "system", content: "Later guidance", sections: { policy: null, focus: "New focus" }, toolsRemoved: [{ name: "old" }], toolsAdded: [newTool], timestamp: 5 },
+		{ role: "user", content: "Continue", timestamp: 6 },
+	] };
+	const original = structuredClone(transcript);
+	assert.equal((await f.bound.completeSimple(f.model, transcript)).stopReason, "stop");
+	assert.deepEqual(transcript, original, "Request conversion must not rewrite persisted/model context");
+	assert.deepEqual(requests[0].messages.map(message => message.role), ["system", "user", "assistant", "tool", "system", "user"]);
+	assert.equal(requests[0].messages[0].content, "Base instructions\n\nOriginal policy");
+	assert.equal(requests[0].messages[1].content, "Untrusted user instructions");
+	assert.equal(requests[0].messages[3].content, "Untrusted tool output");
+	assert.equal(requests[0].messages[3].tool_call_id, "old-call");
+	assert.equal(requests[0].messages[4].content, 'Later guidance\n\nRemoved system prompt section "policy".\n\nUpdated system prompt section "focus":\n\nNew focus');
+	assert.deepEqual(requests[0].tools.map(tool => tool.function.name), ["new"]);
+});
+
+test("Pi 1.0 removed tool declarations cannot authorize new response calls", async t => {
+	guardNetwork(t);
+	const wire = delta({ tool_calls: [{ index: 0, id: "call", type: "function", function: { name: "removed", arguments: "{}" } }] }, "tool_calls") + "data: [DONE]\n\n";
+	const f = await fixture(() => response(wire));
+	const result = await f.bound.completeSimple(f.model, { messages: [
+		{ role: "system", content: "", toolsAdded: [{ name: "removed", description: "Old", parameters: {} }], timestamp: 1 },
+		{ role: "user", content: "Continue", timestamp: 2 },
+		{ role: "system", content: "", toolsRemoved: [{ name: "removed" }], timestamp: 3 },
+	] });
+	assert.equal(result.stopReason, "error");
+	assert.deepEqual(result.content, []);
+});
+
+test("unsupported Pi 1.0 system content and mid-transcript replacements fail before dispatch", async t => {
+	guardNetwork(t);
+	let calls = 0;
+	const f = await fixture(() => { calls++; return response(); });
+	for (const patch of [
+		{ content: [{ type: "image", data: "unsupported", mimeType: "image/png" }] },
+		{ sections: { policy: 42 } }, { toolsAdded: [{ name: "missing-schema" }] },
+		{ toolsRemoved: ["not-a-reference"] }, { replace: true },
+	]) {
+		const result = await f.bound.completeSimple(f.model, { messages: [
+			{ role: "user", content: "Earlier context", timestamp: 1 },
+			{ role: "system", content: "Later", timestamp: 2, ...patch },
+		] });
+		assert.equal(result.stopReason, "error");
+		assert.deepEqual(result.content, []);
+	}
+	assert.equal(calls, 0);
+	assert.equal((await f.bound.completeSimple(f.model, { messages: [
+		{ role: "system", content: "Compacted checkpoint", replace: true, timestamp: 1 },
+		{ role: "user", content: "Retained summary", timestamp: 2 },
+	] })).stopReason, "stop");
+	assert.equal(calls, 1);
+});
+
 test("branded selection rejects forged runtimes, capabilities, model and request overrides before transport", async t => {
 	guardNetwork(t);
 	let calls = 0;

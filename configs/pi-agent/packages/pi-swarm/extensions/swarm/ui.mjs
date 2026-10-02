@@ -10,7 +10,9 @@ export async function requestUserApproval(ctx, request) {
 	let specification = structuredClone(request.specification);
 	while (!signal.aborted) {
 		const choices = request.action === "launch" ? ["Cancel", "Edit agreement", "Approve"] : ["Cancel", "Approve"];
-		const summary = `${request.action.toUpperCase()} (mock only)\n${json(specification)}${request.provider ? `\nProvider agreement (in-memory only; no network):\n${json(request.provider)}` : ""}\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`;
+		const network = request.provider?.transport === "https-chat-completions";
+		const disclosure = network ? "HTTPS; declared context sent to the exact endpoint" : "in-memory only; no network";
+		const summary = `${request.action.toUpperCase()} (${network ? "HTTPS provider" : "mock only"})\n${json(specification)}${request.provider ? `\nProvider agreement (${disclosure}):\n${json(request.provider)}` : ""}\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`;
 		const choice = await ctx.ui.select(summary, choices, options);
 		if (signal.aborted || !choice || choice === "Cancel") return { approved: false };
 		if (choice === "Edit agreement") {
@@ -46,11 +48,11 @@ export async function requestUserApproval(ctx, request) {
 }
 
 export function statusText(snapshot) {
-	if (!snapshot?.run) return "No Swarm run attached. Mock-only controls: start, restore <run-id>.";
+	if (!snapshot?.run) return "No Swarm run attached. Controls: start, restore <run-id>.";
 	const { run, driver, workspace } = snapshot;
 	return json({ runId: run.runId, status: run.status, cycle: run.cycle, elapsedMs: run.elapsedMs,
 		limits: run.limits, objective: run.objective, workers: run.workers, tasks: run.tasks,
 		active: driver?.active, queued: driver?.queued, claims: workspace?.coordination,
 		unresolvedOperations: run.workspace?.operations, unresolvedTurns: run.sessions?.turns,
-		usage: "Not yet aggregated; cost unknown (mock-only)", errors: [...snapshot.errors, ...(driver?.errors ?? [])] });
+		usage: "Not yet aggregated; cost unknown", errors: [...snapshot.errors, ...(driver?.errors ?? [])] });
 }
