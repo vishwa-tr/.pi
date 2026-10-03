@@ -2,10 +2,17 @@ import { SwarmHost } from "./host.mjs";
 import { randomUUID } from "node:crypto";
 import { showDashboard } from "./dashboard.mjs";
 import { requireCondition as check } from "./errors.mjs";
+import { createNativeRuntime } from "./native-provider.mjs";
 import { requestUserApproval, statusText } from "./ui.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
 
 const LINK = "swarm-run-v1";
+
+/** Explicit public host injection; no runtime creation, auth lookup, or discovery. */
+export async function createNativeSwarmExtension(options) {
+	const native = await createNativeRuntime(options);
+	return createSwarmExtension({ ...options, ...native });
+}
 
 /** Explicit injection only: no default export, provider discovery, or activation entry. */
 export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off", codingTools, instructions, runner, tickIntervalMs = 1000, approvalTimeoutMs = 120000, providerCapability } = {}) {
@@ -51,7 +58,7 @@ export function createSwarmExtension({ modelRuntime, mainModel, thinkingLevel = 
 		pi.on("ui_prompt_start", event => { if (viewing && event.kind !== "custom") cancel(); });
 
 		pi.registerCommand("swarm", {
-			description: "Mock Swarm live dashboard, launch, status, pause, stop, resume, restart, and reconciliation",
+			description: "Swarm dashboard, launch, status, pause, stop, resume, restart, and reconciliation",
 			handler: async (args, ctx) => {
 				const [action = "", ...rest] = args.trim().split(/\s+/);
 				check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot control the Swarm host");

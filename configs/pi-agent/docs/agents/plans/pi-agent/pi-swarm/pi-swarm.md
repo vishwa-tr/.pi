@@ -29,6 +29,13 @@ Use a deterministic controller for scheduling, ownership, persistence, limits, a
 
 Stages 1–5 (controller/persistence, workspace safeguards, offline SDK integration, host approval/policy integration, and opt-in launch/recovery UI controls) are authorized and implemented; see sections 10–14. SDK execution defaults to deterministic mock providers; the separately injected constrained adapter and HTTPS client are described in sections 19–20. Phase 5 UI is tested through fake native UI contexts; authorized Phase 6 adds isolated automated CLI/PTY acceptance (section 15). Authorized Phase 7 adds a mock-only live dashboard and read-only history navigation (section 16). Authorized Phase 8 adds real CLI acceptance with production Plan/Safety providers (section 17). Phase 9 implements offline provider agreement/readiness plumbing with unsupported real transport failing closed (section 18). Phase 10 implements the offline constrained adapter (section 19); Phase 11 adds explicitly authorized HTTPS tested only against local TLS fixtures (section 20). Live remote model trials and activation remain unauthorized. The agreed direction above supersedes the original proposal to reuse shared subagent definitions. Other implementation details remain proposals unless explicitly confirmed.
 
+**Confirmed architecture simplification (section 23):** production integration should reuse the
+host's public native Pi model/provider and credential machinery, not require a bespoke HTTP/auth
+stack. Sections 18–20 describe retained optional legacy/experimental work, not requirements for
+the preferred production path. Native networking follows trusted host configuration; no exact
+egress-pinning, secret-redaction or OS-sandbox promise is made. Live trials and activation remain
+separately gated.
+
 Record decisions in this document as discussion proceeds and update affected sections so superseded designs do not remain implementation requirements.
 
 **Confirmed file-claim policy:** provide a file-claim tool and enforce ownership in worker `edit`/`write` wrappers. Reads remain allowed. Conflicting claims identify the owner and related task so agents can coordinate a handoff or work elsewhere. Multi-file claims are all-or-nothing. Release claims when work finishes or cancellation safely settles; never forcibly transfer ownership while the previous agent is still editing. A new owner rereads current contents before editing. Claims coordinate swarm agents, not external editors or arbitrary shell commands. Confirmed for v1: shell commands acquire an exclusive workspace lock after active edits settle and file claims are released. While a command runs, other swarm edits and shell commands wait. This includes tests and apparently read-only commands. Discussion and planning can continue; reads during execution may become stale. External editors and detached processes are not covered.
@@ -1403,3 +1410,155 @@ visual proof and no dependency was installed. Contrast, IME/mouse, alternate ter
 regular-mode visual fidelity remain unverified. Very large packet performance is not certified;
 full data is kept in memory. Arbitrary third-party modal arbitration, remote compatibility,
 escaped processes, power loss, semantic scope, cost accuracy and activation remain deferred.
+
+### 23. Native Pi model/provider integration — architecture decision and offline acceptance
+
+The user questioned custom HTTPS overengineering and approved native Pi integration. The
+preferred production architecture now delegates model transport/auth to the host's existing
+public Pi **ModelRuntime**, or the public **ModelRegistry** exposed by extension context.
+Do not access `ModelRegistry.runtime`: it is private. Do not create a second ambient runtime
+or independently discover credentials/catalogs/resources just to start a Swarm worker.
+The custom constrained adapter and HTTPS files/tests remain intact as optional legacy and
+experimental paths; deletion, automatic migration and production activation are not authorized.
+
+Implemented:
+
+- `native-provider.mjs` provides async host-only `createNativeRuntime`, accepting exactly one
+  existing public runtime/registry plus explicit main model/thinking and an optional explicit
+  swarm-wide override. Its branded facade is passed to the existing host/session machinery.
+  `createNativeSwarmExtension` composes it with the inactive explicitly injected factory.
+  A host extension supplies `ctx.modelRegistry`, `ctx.model`, and `pi.getThinkingLevel()` when
+  preparing its launch agreement; the run retains the approved snapshot. No worker can switch
+  models. Virtual/router models are rejected rather than silently choosing a physical provider.
+- Durable `pi-native` descriptors disclose provider/model/API, informational catalog endpoint
+  when known, and all potentially outbound context categories. They are distinct from old
+  HTTPS descriptors; no silent upgrade is possible. Approval remains human, fresh on every
+  launch/resume/restart, and restore opens paused without execution. Capability copies and
+  arbitrary runtime objects cannot mint the native brand.
+- A small request facade delegates all four stream/complete entry points to public Pi methods,
+  preserving native context/options/headers/reasoning/usage rather than serializing HTTP itself.
+  SDK pre-compaction auth probing supplies no override; native streaming resolves credentials
+  once through the same host provider mechanism. No Swarm credential store or login is added.
+- Existing per-request budget ticks, human approval, mode, ownership, turn, cycle/generation,
+  guidance and cancellation checks cover SDK tool follow-ups and manual compaction. A native
+  header-transform guard rechecks after auth before provider dispatch. Native stream/result
+  draining and SDK idle/history synchronization remain required before durable turn retirement;
+  abort alone never settles a held SDK stream. Worker cache warming is explicitly off alongside
+  existing disabled automatic compaction/retries. No arbitrary extension tools are inherited.
+- Full catalog model metadata and public provider/method identity are checked in memory at
+  admission. Headers/compatibility metadata are not persisted as agreement data. Provider or
+  catalog mutation during approval denies launch; mutation during execution revokes admission.
+  Restore compares the durable descriptor and obtains fresh approval under newly trusted host
+  configuration; it does not prove that hidden configuration stayed identical across processes.
+- Agreement/dashboard labels distinguish native Pi from mock and constrained HTTPS. Native
+  disclosure expressly says the endpoint is informational, not pinned, and that Pi owns
+  credentials, OAuth, environment and routing. Native provider errors are not promised redacted.
+
+Verification on installed Pi 1.0.0, starting from clean `ab77860`:
+
+- Baseline **408/408** Swarm tests passed. Final **428/428** pass, adding 19 native integration
+  regressions and one native disclosure regression. **155/155 foundation**, **66/66 Plan/Safety**,
+  **4/4 cleanup**, and **all three CLI PTYs** (`run.py`, `production.py`, `tls.py`) also pass.
+- Native tests use real public `ModelRuntime`, `createProvider`, `ModelRegistry`, normal
+  `openai-responses` model/API metadata, in-memory fixture credentials and scripted streams.
+  A process network guard asserts no network attempts. All four request methods preserve native
+  auth/header transformation/options; factory/status paths perform no implicit runtime creation,
+  credential lookup or discovery. Tests cover branding, metadata drift, stale approval, explicit
+  selection snapshots, virtual-model rejection, tool follow-ups, native manual compaction,
+  budget/mode cancellation, held prompt/compaction settlement and paused restore/fresh approvals.
+- Existing PTYs remain mock and constrained-loopback regressions; they do not certify a native
+  live provider. TLS acceptance still observes exactly **17 requests and seven fresh agreements**.
+- `git diff --check` passes. Repository validation retains the unrelated model/thinking default
+  mismatch and flags the two new unstaged/untracked source/test files. No settings normalized,
+  files staged, real credentials accessed, external network used, dependencies installed, global
+  activation performed, commits created, pushes made or parent checkout edited.
+
+Contract basis: complete installed Pi 1.0 SDK, extensions, custom-provider, models/providers,
+settings/configuration, message/session/compaction and TUI documentation; complete Pi AI README;
+public ModelRuntime/ModelRegistry declarations, actual SDK/session request/auth paths, and
+installed full-control/credential examples. Runtime imports use public package roots only.
+
+Trust boundary and remaining authorization:
+
+Native Pi and its configured provider are trusted in-process code. Auth/OAuth refresh, catalogs,
+provider environment, proxies, internal retries, network routing and SDK cleanup follow host
+configuration; Swarm does not pin every destination, filter/redact context, constrain internal
+provider work or implement an OS sandbox. Header/model metadata checks cannot inspect provider
+closures, credential/env changes, or mutations that revert between checks. SDK completion is
+not proof of socket closure, terminated OAuth work, remote cancellation, or rollback. Deferred
+provider work remains unsupported. Externally enforced network/credential policy belongs to
+host isolation, not a new custom Swarm HTTP client.
+
+The next real trial should use native Pi under separately explicit human authorization for
+its selected provider/model and disclosed context. Remote compatibility/usefulness, actual
+OAuth/network cancellation, usage aggregation/cost accuracy, human visual acceptance and
+activation are still unverified. No live/default activation is introduced by this decision.
+Disable by removing explicit native host injection; preserve histories and user workspace work.
+
+Bounded simplification follow-up: `SwarmSessions.history` now shares the host dashboard's
+validated persisted-history reader instead of constructing an SDK session/provider solely for
+inspection. Limits, detached raw entries (including compaction), and identity/corruption guards
+remain; persisted output may lag in-flight work. A restored/unopened regression proves no model
+runtime access or run/file mutation. **429 Swarm, 66 Plan/Safety, and four cleanup tests pass**.
+Public `ScrollView` was considered but needs additional child/layout plumbing and still leaves
+key handling and decision read-to-end/resize policy local. A shared pager helper would only move
+a few branches while joining unlike policies; retain the existing small pagers unchanged.
+No workspace/recovery guard, native-provider behavior, activation or authorization gate changed.
+
+### 24. Native provider terminal acceptance
+
+A fourth real CLI/PTY variant, `test/terminal/native.py`, now exercises the native path with
+production Plan/Safety factories. It shares the `production.py` workflow, 80×24 terminal and
+existing bounded cleanup/isolation guard instead of duplicating a terminal driver. Its host
+fixture creates a real public Pi `ModelRuntime` and `ModelRegistry`, registers a native scripted
+`createProvider` with normal `openai-responses` model metadata and in-memory credentials, then
+passes that registry/model through `createNativeSwarmExtension` / `createNativeRuntime`.
+Worker requests never use the mock-runtime or constrained-HTTP path. A separate main CLI mock
+turn remains solely for selected/enforced mode-transition timing.
+
+Verified through real keyboard/native UI plus replayed durable evidence:
+
+- Paged launch/provider agreement discloses provider/model/API, full declared context and
+  Pi-owned credentials/OAuth/environment/routing, explicitly informational rather than pinned
+  endpoint metadata. No worker dispatch precedes approval. Restriction cancels launch; fresh
+  approval preserves dirty work.
+- Real SDK task create/claim and production Safety approve/deny/cancel; exactly one benign
+  shell process executes successfully and its actual stdout reaches native history/provider.
+  Dashboard worker/history navigation precedes Safety dialog exclusion. Agreement/recovery
+  page controls retain the read-to-end requirement.
+- Discuss/Quick/Plan restriction revokes authority; selected-versus-enforced transitions deny
+  continuation while the prior restricted mode remains enforced. Off/reload never resumes
+  automatically and no post-revocation tool follow-up is dispatched.
+- Four aborted native streams deliberately drain after a short delay. Pause/reload/shutdown
+  completion requires stream settlement, not merely abort notification. Native `/reload`
+  constructs a second real registry binding, restores paused and retains the durable descriptor.
+- Fresh resume agreements retain allowances; explicit restart reaches cycle 2. SIGTERM during
+  worker Safety confirmation cancels the gate and leaves no active SDK turn/assignment.
+- One controlled shell runner returns `settled: false` **without spawning a process**, then
+  written human evidence and native attestation retire that exact intent as unknown, not
+  successful or replayed. Native provider streams are not falsely labeled uncertain effects.
+  Exact operation IDs appear in both decisions. This proves the attestation flow, not arbitrary
+  process-death detection or independent establishment of settlement.
+
+The combined assertions require exactly **19 native worker dispatches**, **seven unique fresh
+launch/continuation agreements**, **two registry bindings**, matching native provider/API/model
+histories, native credential/header resolution, actual tool outcomes, paused settlement and
+**zero attempted network calls** under the process guard. No HTTP receiver is involved: the
+scripted native provider records invocations only. Guarding is defense-in-depth, not an OS
+sandbox. Disposal waits for confirmed CLI exit before removing temporary evidence; no personal
+configuration/credentials are copied or used.
+
+Verification on Pi 1.0.0: **429/429 Swarm**, **155/155 foundation**, **66/66 Plan/Safety**, **4/4
+cleanup**, and **all four real CLI PTYs** (`run.py`, `production.py`, `tls.py`, `native.py`) pass.
+No production bug required a fix or new unit regression. `git diff --check` passes. Validation
+still flags unrelated model/thinking defaults and intentionally untracked implementation/test
+files; settings remain untouched and nothing is staged or committed.
+
+Run: `PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/terminal/native.py`.
+This closes offline native terminal integration coverage only. Dashboard acceptance covers
+section/Enter navigation, not all keys: installed Pi's global transcript scrolling can intercept
+End/PageUp in the non-overlay dashboard; broader key arbitration remains follow-up.
+Native live-provider compatibility,
+usefulness/cost, real OAuth/network cancellation and remote effects, human visual acceptance,
+richer dashboard/activity UX and activation remain separately authorized trial gates. No live
+provider, real credential, external network, install, global activation, commit or push occurred.

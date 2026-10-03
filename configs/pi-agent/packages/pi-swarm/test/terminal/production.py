@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real CLI/PTY acceptance with production Plan/Safety and offline mock SDK workers.
+"""Real CLI/PTY acceptance with production Plan/Safety and offline scripted SDK workers.
 Uses the existing bounded child cleanup guard; no installs, keys, or global activation.
 """
 import json
@@ -13,7 +13,7 @@ import time
 from run import ANSI, HERE, DisposableFixture, Terminal
 
 
-def main(tls=False):
+def main(tls=False, native=False):
     pi = shutil.which(os.environ.get("PI_BIN", "pi"))
     assert pi and shutil.which("node") and shutil.which("git"), "Installed pi, node and git required"
     with DisposableFixture() as fixture:
@@ -28,7 +28,9 @@ def main(tls=False):
                "GIT_CONFIG_GLOBAL": os.devnull, "SWARM_TERMINAL_FIXTURE": str(event_file)}
         if tls:
             env["SWARM_TERMINAL_TLS"] = "1"
-        label = "HTTPS provider" if tls else "mock only"
+        if native:
+            env["SWARM_TERMINAL_NATIVE"] = "1"
+        label = "Pi native provider" if native else "HTTPS provider" if tls else "mock only"
         scope = "Disposable project and explicit local TLS fixture only" if tls else "Disposable project only; no network"
         if os.environ.get("PI_SDK_DIR"):
             env["PI_SDK_DIR"] = os.environ["PI_SDK_DIR"]
@@ -88,6 +90,14 @@ def main(tls=False):
             terminal.line(json.dumps([scope]))
             terminal.expect(f"LAUNCH ({label})")
             terminal.read_decision()
+            if native:
+                plain = terminal.last_packet
+                for value in ("terminal-native", "native-scripted", "openai-responses", "https://native.invalid/v1",
+                              "Pi owns credentials", "OAuth, environment and routing", "informational, not pinned",
+                              "objective-and-guidance", "host-instructions", "workspace-content", "tool-definitions-and-results",
+                              "worker-history", "peer-messages", "compaction-summaries"):
+                    assert value in plain, f"Missing native agreement disclosure: {value}"
+                assert count("native-request") == 0, "No native request before agreement"
             if tls:
                 wait(lambda: "compaction-summaries" in ANSI.sub("", terminal.output), "complete native provider disclosure")
                 assert "declared context sent to the exact endpoint" in ANSI.sub("", terminal.output)
@@ -125,6 +135,9 @@ def main(tls=False):
             while time.monotonic() < deadline:
                 terminal.pump(0.1)
             assert count("worker-start") == before, "No automatic Off/reload resume"
+            if native:
+                assert count("native-request") == before, "No native follow-up after revocation"
+                assert count("native-settled") == before, "Every native stream actually drained"
             if tls:
                 assert count("tls-request") == before, "No additional TLS follow-up after revocation"
                 assert count("tls-response-close") == before, "Every received response really closed"
@@ -196,6 +209,11 @@ def main(tls=False):
             wait_count("worker-held", 1)
             terminal.line("/swarm dashboard")
             terminal.expect(f"SWARM live / {label} | running")
+            if native:
+                terminal.send("2")
+                terminal.expect("active SDK turn")
+                terminal.send("\r")
+                terminal.expect("Native persisted history")
             terminal.send("\x1bg")
             terminal.expect("phase8-approved")
             before = count("worker-start")
@@ -237,6 +255,34 @@ def main(tls=False):
             terminal.send("n")
             wait_count("probe-result", 6)
 
+            if native:
+                # A controlled shell seam, NOT an uncertain native model stream.
+                terminal.line("/fixture-script uncertain")
+                terminal.expect("Script armed: uncertain")
+                terminal.line("/swarm restart")
+                approve("RESTART")
+                terminal.expect("phase8-uncertain")
+                terminal.send("y")
+                wait_count("uncertain-runner", 1)
+                terminal.line("/swarm reconcile")
+                terminal.expect(f"RECONCILE ({label})")
+                terminal.read_decision()
+                recovery_packet = terminal.last_packet
+                for value in ('"operations"', '"turns"', '"liveUncertainIds"'):
+                    assert value in recovery_packet
+                terminal.decision()
+                terminal.expect("Preserve and proceed?")
+                terminal.decision()
+                terminal.expect("Describe how you independently established")
+                terminal.line("Fixture runner spawned no process; its promise returned unsettled by design.")
+                terminal.expect("Attest settlement")
+                terminal.read_decision()
+                evidence_packet = terminal.last_packet
+                terminal.decision()
+                time.sleep(0.4)
+                status("paused")
+                stable_workers()
+
             # Shutdown with a real worker awaiting native confirmation cancels it.
             resume("shutdown")
             terminal.expect("phase8-shutdown")
@@ -271,7 +317,12 @@ def main(tls=False):
             assert [e["reason"] for e in observations if e["type"] == "shutdown"] == ["reload", "quit"]
             journal_path, = (project / ".swarms").glob("*/events.jsonl")
             subprocess.run([shutil.which("node"), str(HERE / "assert-production.mjs"), str(journal_path), str(event_file),
-                            *(["tls"] if tls else [])], env=env, check=True)
+                            *(["native"] if native else ["tls"] if tls else [])], env=env, check=True)
+            if native:
+                subprocess.run([shutil.which("node"), str(HERE / "assert-native.mjs"), str(journal_path), str(event_file)], env=env, check=True)
+                journal = [json.loads(line)["payload"] for line in journal_path.read_text().splitlines()]
+                operation = next(event["payload"]["id"] for event in journal if event["type"] == "workspace.start" and "uncertain" in event["payload"].get("command", ""))
+                assert operation in recovery_packet and operation in evidence_packet, "Exact uncertain intent shown in both decisions"
             if tls:
                 subprocess.run([shutil.which("node"), str(HERE / "assert-tls.mjs"), str(journal_path), str(event_file)], env=env, check=True)
             audit = [json.loads(line) for line in (agent / "safety-audit.jsonl").read_text().splitlines()]

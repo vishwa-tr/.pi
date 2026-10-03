@@ -1,10 +1,12 @@
 import test from "node:test";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { repository } from "./helpers.mjs";
 import { createMockRuntime } from "./sdk-env.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { SwarmSessions } from "../extensions/swarm/sessions.mjs";
 import { WorkspaceRuntime } from "../extensions/swarm/workspace.mjs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 
 const code = expected => error => error.code === expected;
@@ -38,6 +40,61 @@ test("persistent specialist retains identity and context through pause and reope
 	assert.ok(JSON.stringify(f.mock.calls.at(-1).context).includes("Remember the email decision"));
 	assert.equal(c.snapshot().sessions.selection.modelId, f.mock.selection.modelId);
 	await driver.pause(); await driver.close();
+});
+
+test("restored unopened history is detached, bounded, validated and independent of the model runtime", async t => {
+	const f = await fixture(t, [{ text: "Persisted decision" }]);
+	await f.driver.recruit(specialist("builder"));
+	await f.driver.recruit(specialist("unprompted"));
+	await f.c.owner("worker.create", { ...specialist("unbound"), workloadRevision: f.c.snapshot().revision });
+	f.driver.wake("builder"); await f.driver.idle();
+	const expected = await f.driver.history("builder", 100);
+	const unprompted = await f.driver.history("unprompted");
+	await shutdown(f);
+
+	const c = await SwarmController.open(f.config);
+	const workspace = await WorkspaceRuntime.attach(c, { authorize: async () => true });
+	let runtimeReads = 0;
+	const modelRuntime = new Proxy({}, { get(_target, property) {
+		runtimeReads++;
+		assert.equal(property, "getModel", "history must not construct SDK services");
+		assert.equal(runtimeReads, 1, "only attachment may resolve the model");
+		return () => f.mock.model;
+	} });
+	const driver = await SwarmSessions.attach(c, { workspace, modelRuntime, mainModel: f.mock.model, tickIntervalMs: 0 });
+	const before = c.snapshot();
+	const directory = join(f.root, ".swarms", "run1", "sessions");
+	const files = readdirSync(directory);
+	const binding = before.sessions.workers.find(worker => worker.workerId === "builder");
+	const path = join(directory, binding.sessionFile);
+	const original = readFileSync(path, "utf8");
+	assert.deepEqual(await driver.history("builder", 100), expected);
+	assert.deepEqual(await driver.history("builder", 1), expected.slice(-1));
+	assert.deepEqual(await driver.history("builder"), expected.slice(-20));
+	const detached = await driver.history("builder", 100);
+	detached.find(entry => entry.type === "message").message.content = "Mutated inspection";
+	assert.deepEqual(await driver.history("builder", 100), expected);
+	assert.deepEqual(await driver.history("unprompted"), unprompted);
+	for (const workerId of ["unbound", "missing"]) assert.deepEqual(await driver.history(workerId), []);
+	for (const limit of [0, -1, 101, 1.5, NaN, "1"]) await assert.rejects(driver.history("missing", limit), code("INPUT"));
+	assert.equal(readFileSync(path, "utf8"), original);
+
+	try {
+		const records = original.trimEnd().split("\n").map(line => JSON.parse(line));
+		records[0].id = "wrong-session";
+		writeFileSync(path, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+		await assert.rejects(driver.history("builder"), /Session history identity changed/);
+		writeFileSync(path, original + "not-json\n");
+		await assert.rejects(driver.history("builder"));
+	} finally { writeFileSync(path, original); }
+	assert.equal(runtimeReads, 1);
+	assert.equal(f.mock.calls.length, 1);
+	assert.deepEqual(c.snapshot(), before);
+	assert.deepEqual(readdirSync(directory), files);
+	assert.equal(readFileSync(path, "utf8"), original);
+	assert.deepEqual(driver.snapshot().active, []);
+	assert.deepEqual(driver.snapshot().queued, []);
+	await driver.close();
 });
 
 test("peer tools wake another specialist without main-agent relaying", async t => {

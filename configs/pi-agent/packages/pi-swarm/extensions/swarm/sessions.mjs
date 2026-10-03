@@ -1,10 +1,10 @@
 import { basename, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { privateDirectory } from "./store/files.mjs";
-import { createSdkSession } from "./sdk-session.mjs";
 import { makeSessionTools } from "./session-tools.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { pendingMail, sessionWorker } from "./session-state.mjs";
+import { createSdkSession, readSessionHistory } from "./sdk-session.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { buildSpecialistPrompt, buildTurnPrompt } from "./specializations.mjs";
@@ -366,9 +366,10 @@ export class SwarmSessions {
 
 	async history(workerId, limit = 20) {
 		check(Number.isInteger(limit) && limit > 0 && limit <= 100, "INPUT", "Invalid history limit");
-		if (!sessionWorker(this.#controller.snapshot(), workerId)) return [];
-		const entry = await this.#entry(workerId);
-		return structuredClone(entry.manager.getEntries().slice(-limit));
+		const state = this.#controller.snapshot();
+		const binding = sessionWorker(state, workerId);
+		if (!binding) return [];
+		return readSessionHistory(join(this.#sessionDir, binding.sessionFile), state.workspaceRoot, binding.sessionId).slice(-limit);
 	}
 
 	async idle() {

@@ -1,10 +1,14 @@
-# Pi Swarm — offline live dashboard and recovery controls
+# Pi Swarm — native Pi workers and recovery controls
 
 ## Status
 
-This is an **inactive implementation**, not an activated Pi extension. Phase 3 creates
-real Pi SDK sessions with deterministic mock providers only; live model execution is
-explicitly rejected. Phase 2's host-authorized workspace adapter performs guarded file
+This is an **inactive implementation**, not an activated Pi extension. The preferred
+model integration now reuses an explicitly supplied **public Pi ModelRuntime or ModelRegistry**
+and its configured providers/credentials. It has been tested only with in-memory credentials
+and scripted providers. No live provider trial or activation is authorized by this change.
+The default factory still requires explicit injection; legacy callers remain mock-only.
+Historical phases below describe their original boundaries; Phase 14 supersedes the earlier
+requirement to build a custom HTTP/auth stack for production integration. Phase 2's host-authorized workspace adapter performs guarded file
 mutations and shell execution in disposable test repositories. Phase 5 adds an explicitly
 injected extension factory and native UI controls for offline testing. No default entry
 point, package registration, or activation is installed. Phase 6 adds a disposable CLI/PTY
@@ -14,7 +18,9 @@ adds separate real CLI acceptance with the actual production Plan/Safety factori
 Phase 9 adds opt-in provider agreement/readiness plumbing. Phase 10 adds a constrained
 Chat Completions adapter tested through an explicitly injected offline transport. Phase 11 adds
 an explicitly authorized Node HTTPS client, verified only against ephemeral loopback TLS fixtures.
-**No live provider trial, default remote endpoint, provider discovery, or activation is included.**
+The custom constrained/HTTPS stack is retained as an **optional legacy/experimental path**,
+not the production default. **No live provider trial, default remote endpoint, new provider
+discovery, or activation is included.**
 
 Stage 1 implements:
 
@@ -53,7 +59,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **408 passing tests on Pi 1.0.0**. It includes actual local shell execution,
+The current combined suite has **429 passing tests on Pi 1.0.0**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -75,9 +81,10 @@ UI contexts. These are not live-model, interactive-terminal, or power-loss tests
 | `extensions/swarm/shell.mjs` | Actual Bash exit status and bounded process-group cancellation. |
 | `extensions/swarm/sessions.mjs` | Offline SDK driver, bounded turn scheduling, peer waking, guidance, pause/stop, and compaction. |
 | `extensions/swarm/session-state.mjs` | Durable model/tool selection, session bindings, delivery records, and turn settlement. |
-| `extensions/swarm/sdk-session.mjs` | Non-discovering SDK factory, mock-only gate, private native JSONL validation and synchronization. |
+| `extensions/swarm/sdk-session.mjs` | Non-discovering SDK factory, explicit branded native/legacy or mock gate, private native JSONL validation and synchronization. |
 | `extensions/swarm/session-tools.mjs`, `specializations.mjs` | Uniform model-visible tool definitions and generated specialist/context prompts. |
 | `extensions/swarm/provider-capability.mjs` | Strict immutable host provider configuration, branded adapter selection and unsupported-transport preflight. |
+| `extensions/swarm/native-provider.mjs` | Branded public Pi runtime/registry delegation, model snapshot and per-request host admission; native Pi owns auth and transport. |
 | `extensions/swarm/constrained-provider.mjs` | Isolated text Chat Completions request/response adapter with explicit credentials, request fencing and branded transport settlement. |
 | `extensions/swarm/https-transport.mjs` | Explicit host egress authorization, pinned public-IPv4 HTTPS client, separate loopback test policy and actual socket settlement. |
 | `extensions/swarm/extension.mjs`, `ui.mjs`, `decision.mjs` | Opt-in factory, bounded cancellable native decision packets, commands and lifecycle hooks. |
@@ -260,8 +267,10 @@ The driver exposes trusted host methods:
 - `send(workerId, text)` and `redirect(text)`. Peer tools can recruit and message without
   main-agent relaying. Busy peers receive mail on their next turn; user redirection aborts
   stale turns and refreshes authoritative guidance before more tools. Paused work stays paused.
-- `history(workerId, limit?)` and `compact(workerId)`. Compaction uses the native SDK and
-  preserves session identity. Every later prompt reloads shared state. Automatic compaction
+- `history(workerId, limit?)` reads validated persisted entries directly, without constructing
+  an SDK session or consulting the model runtime. Limits remain 1–100 (default 20); raw
+  compaction entries are retained and in-flight output may lag, as in the dashboard.
+  `compact(workerId)` uses the native SDK and preserves session identity. Every later prompt reloads shared state. Automatic compaction
   and automatic provider retries remain disabled in this phase.
 - `pause({ stop?, timeoutMs? })`, `idle()`, `reconcile({ settled: true })`, and `close()`.
   A timeout reports incomplete settlement, not permission to dispose or release ownership.
@@ -928,10 +937,145 @@ Global validation still reports unrelated model/thinking defaults and the three 
 source/test files; no settings or staging changes are made. No external network, real
 credentials, installs, global activation, commits, or pushes are part of this phase.
 
+## Phase 14 native Pi integration — preferred architecture, offline verified
+
+`createNativeRuntime({ modelRuntime, mainModel, thinkingLevel, override? })` from
+`extensions/swarm/native-provider.mjs` reuses an **existing** public Pi `ModelRuntime`.
+Alternatively supply `modelRegistry` instead of `modelRuntime`: an extension's public
+`ctx.modelRegistry`, `ctx.model`, and `pi.getThinkingLevel()` provide the host inputs.
+Never access the registry's private runtime. No new runtime, resource loader discovery,
+credential-store read, catalog refresh or provider request occurs during construction.
+The helper returns `{ modelRuntime, mainModel, thinkingLevel, providerCapability }` for
+`SwarmHost` or `createSwarmExtension`. `createNativeSwarmExtension(options)` combines those
+steps for explicit host injection. Neither factory has a default export or activation entry.
+The host must capture its selected model/thinking when preparing the launch agreement;
+the run then retains that approved snapshot, not a live link to later main-agent selection.
+`override: { model?, thinkingLevel? }` is an explicit host/user choice, never worker input.
+Virtual/router models are rejected: workers cannot autonomously switch the approved model.
+
+The new durable transport kind is **`pi-native`**. Its human agreement names the provider,
+model, API, thinking, full declared worker context, and catalog endpoint when safely known
+(otherwise null). Endpoint metadata is **informational, not an egress pin**. Restoring an old
+HTTPS agreement does not upgrade it. Restore remains paused and requires a newly host-created
+matching capability; resume/restart each requires fresh human approval. Model metadata and
+provider/method identity drift are checked during approval and every request admission.
+Full model metadata (including headers/compatibility options) is compared privately in memory,
+not copied into the journal. Across process restoration only the durable descriptor is compared;
+other host configuration is trusted anew and disclosed through the fresh native agreement.
+Unobservable changes inside provider closures, credential/environment changes and changes
+that occur and revert between checks cannot be certified by these identity checks.
+
+A small worker-local facade delegates `stream`, `streamSimple`, `complete`, and `completeSimple`
+to the public native runtime/registry. It preserves native options, header transformation,
+message conversion, reasoning, usage and errors rather than duplicating HTTP/auth/serialization.
+Native request-time auth owns credentials, OAuth refresh, provider environment, catalogs,
+proxies and routing according to host configuration. Swarm does not extract credentials;
+its SDK pre-compaction auth probe returns no override so native streaming resolves auth once.
+This is an explicit-selection adapter, not an authentication-availability certification.
+
+Every SDK request, tool follow-up and manual compaction checks durable budget, current human
+approval, mode, owner, active turn, generation and guidance. Combined cancellation signals
+reach Pi; a header-transform guard rechecks after native auth and before provider dispatch.
+Automatic compaction/retries and prompt-cache warming remain disabled in worker settings.
+No arbitrary extension tools/resources are inherited. Request completion drains the native
+stream/result and the driver still waits for SDK idle and synchronized durable history.
+A provider that holds its SDK stream after abort keeps the turn unsettled and ownership fenced.
+This is **SDK settlement, not proof of socket closure, stopped OAuth refresh, remote cancellation
+or rollback**. Pi/provider internals may perform network work within one admitted SDK request;
+Swarm does not fence each internal retry/auth/network operation. Deferred work is unsupported.
+Native provider errors and history are not promised secret-redacted. Treat the host provider
+and its configuration as trusted code; neither path is an OS sandbox or semantic data filter.
+
+Offline verification: **428 Swarm tests** (408 baseline + 20), **155 foundation**, **66
+Plan/Safety**, **4 cleanup**, and all three existing CLI PTYs pass. New coverage uses real Pi
+1.0 `ModelRuntime`, native `createProvider`, public `ModelRegistry`, normal `openai-responses`
+model/API metadata, in-memory credentials, scripted streams and the network guard. It covers
+all four methods, native auth/headers/options, factory non-discovery/status, forged capabilities,
+metadata/approval drift, explicit snapshots, virtual routing rejection, SDK follow-ups/manual
+compaction, budget cancellation, mode revocation, incomplete prompt/compaction settlement,
+paused restore, fresh continuation/restart agreements and truthful UI disclosure. At that point,
+PTYs remained legacy mock/constrained TLS regressions; native terminal coverage follows below.
+
+The next separately authorized trial should use the host's native Pi integration, not require
+another custom HTTPS implementation. Live compatibility/usefulness/cost, real OAuth/network
+cancellation, human visual acceptance and activation are still unverified and gated. Disable
+native use by removing its explicit host injection; preserve run history and user changes.
+No global settings, installation, real credentials, external calls, commits or pushes changed.
+
+### Bounded simplification follow-up
+
+Worker and host history now share the existing validated file reader; inspection no longer
+opens a worker session/provider or clones already-detached parsed entries. A restored/unopened
+history regression covers runtime independence, identity/corruption rejection, bounds, and
+non-mutation; **429 Swarm, 66 Plan/Safety, and four cleanup tests pass**.
+
+The dashboard and decision pagers remain local: public `ScrollView` needs child/layout
+integration and does not replace their key handling. A shared helper would mostly move a few
+branches while coupling different key policies, refresh and read-to-end/resize behavior.
+No viewport changes or new abstraction were needed; all workspace/recovery guards remain.
+
+### Native provider terminal acceptance
+
+Run with the same installed Pi 1.0/POSIX prerequisites (no install fallback):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/terminal/native.py
+```
+
+The fourth CLI/PTY variant reuses `production.py` and the actual production Plan/Safety
+factories. Its host fixture supplies a real public `ModelRegistry` over `ModelRuntime` to
+`createNativeSwarmExtension` (and thus `createNativeRuntime`). A native `createProvider`
+registration uses normal `openai-responses` metadata, in-memory fixture credentials and
+scripted SDK streams. Worker requests do not use the mock runtime or custom HTTP adapter;
+the separate main CLI turn remains scripted mock solely to expose selected/enforced mode
+transitions. No real credentials or ambient configuration are forwarded.
+
+At **80 columns / 24 rows**, automated keyboard input verifies:
+
+- Complete paged human provider agreement before any worker dispatch: provider/model/API,
+  declared context, and truthful Pi-owned auth/routing with an informational, unpinned URL.
+  Launch cancellation on restriction, fresh launch approval and dirty-work preservation.
+- Actual SDK task tools and one approved benign shell execution through production Safety;
+  denied/cancelled requests produce no effects. Dashboard worker/history navigation works,
+  and the dashboard closes before Safety takes input. Agreement/recovery page controls retain
+  their read-to-end requirement.
+- Off/Quick selected-versus-enforced transitions, Discuss/Plan revocation, no automatic
+  Off/reload resumption or post-revocation follow-up. Four aborted open native streams delay
+  completion deliberately; pause/reload/shutdown cannot report completion before draining.
+- Native `/reload` constructs a fresh registry binding, restores paused with the same durable
+  provider descriptor and needs fresh approval. Resume retains allowances; explicit restart
+  opens cycle 2. SIGTERM during a real Safety confirmation cancels and settles to paused.
+- Recovery through written human attestation for one **controlled shell-runner seam** that
+  returns uncertainty without spawning a process. Native model streams are not fabricated as
+  uncertain effects. Both recovery decisions show the exact operation ID; the sole uncertain
+  intent becomes an unknown receipt, never success or replay. This tests the attestation UI,
+  not independent proof that an arbitrary process stopped.
+
+Combined provider observations, replayed journal and native SDK histories assert exactly
+**19 worker dispatches**, **seven fresh launch/continuation agreements**, **two registry
+bindings**, actual native auth/header resolution, approved stdout and denied tool feedback,
+settled turns/assignments and no completion claim. The guard asserts **zero network attempts**;
+no HTTP request occurs. Disposable HOME/agent/project isolation, private temporary evidence,
+empty auth, unchanged dirty content and bounded child-exit-before-cleanup are retained.
+
+Verification: **429 Swarm tests**, **155 foundation tests**, **66 Plan/Safety tests**, **four
+cleanup tests**, and **all four CLI PTYs** (`run.py`, `production.py`, `tls.py`, `native.py`)
+pass on Pi 1.0.0. No production fix or new unit regression was needed. The repository validator
+still reports the unrelated model/thinking defaults and intentionally untracked new files;
+no settings were normalized or files staged.
+
+This is offline scripted-provider acceptance of the native SDK path, **not a live-provider
+trial, HTTP compatibility test, human visual sign-off or viewport/pixel test**. Dashboard
+coverage here is section/Enter navigation, not all keys: installed Pi's global transcript
+scroll handling can intercept End/PageUp in the non-overlay dashboard. Native stream
+settlement does not certify network/socket/OAuth cancellation or remote rollback. Real provider
+compatibility/usefulness/cost, richer UI, human acceptance and activation remain separately gated.
+No external network, real credentials, installation, global activation, commit or push is included.
+
 ## Deferred before activation
 
-- An independently authorized live provider trial and remote compatibility validation;
-  actual transport acceptance is currently restricted to local TLS fixtures.
+- An independently authorized **native Pi** live provider trial and remote compatibility
+  validation; native tests are scripted/offline and custom HTTPS acceptance remains local TLS.
 - Human visual TUI acceptance, broader policy/category/terminal acceptance, a compact
   persistent activity tree, and richer dashboard/conversation rendering.
 - Full native coding-tool presentation parity and additional coding tools.

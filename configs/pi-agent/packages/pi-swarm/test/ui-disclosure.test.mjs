@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { requestUserApproval, statusText } from "../extensions/swarm/ui.mjs";
 import { PROVIDER_DATA_SCOPE } from "../extensions/swarm/provider-capability.mjs";
 
-for (const transport of [undefined, "scripted-memory", "https-chat-completions"]) {
+for (const transport of [undefined, "scripted-memory", "https-chat-completions", "pi-native"]) {
 	test(`native agreement discloses ${transport ?? "legacy mock"} without misleading network claims`, async () => {
 		const provider = transport ? { transport, provider: "fixture", modelId: "scripted",
 			endpoint: "https://fixture.invalid/v1/chat/completions", outboundData: [...PROVIDER_DATA_SCOPE] } : undefined;
@@ -12,7 +12,12 @@ for (const transport of [undefined, "scripted-memory", "https-chat-completions"]
 		const ctx = { mode: "tui", hasUI: true, ui: { custom: decisionUI(() => async title => { summary = title; return "Cancel"; }) } };
 		assert.deepEqual(await requestUserApproval(ctx, { action: "launch", specification: { objective: "Goal" },
 			changes: [], provider, signal: new AbortController().signal }), { approved: false });
-		if (transport === "https-chat-completions") {
+		if (transport === "pi-native") {
+			assert.match(summary, /LAUNCH \(Pi native provider\)/);
+			assert.match(summary, /credentials, OAuth, environment and routing/);
+			assert.match(summary, /informational, not pinned/);
+			assert.doesNotMatch(summary, /exact endpoint|mock only|in-memory only|no network/);
+		} else if (transport === "https-chat-completions") {
 			assert.match(summary, /LAUNCH \(HTTPS provider\)/);
 			assert.match(summary, /declared context sent to the exact endpoint/);
 			assert.doesNotMatch(summary, /mock only|in-memory only|no network/);

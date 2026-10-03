@@ -1,4 +1,5 @@
 import { requireCondition as check } from "./errors.mjs";
+import { assertNativeRuntime } from "./native-provider.mjs";
 import { isConstrainedRuntime } from "./constrained-provider.mjs";
 
 // These categories describe the complete context, not a promise to filter sensitive text.
@@ -14,17 +15,27 @@ export function validateProviderDescriptor(value) {
 	check(value && Object.getPrototypeOf(value) === Object.prototype && Object.keys(value).sort().join() === fields,
 		"PROVIDER", "Invalid provider descriptor fields");
 	check(value.version === 1, "PROVIDER", "Unsupported provider descriptor version");
+	const identityPattern = value.transport === "pi-native" ? /^[^\x00-\x20\x7f]{1,512}$/ : /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/;
 	for (const key of ["provider", "modelId", "api"]) {
-		check(typeof value[key] === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/.test(value[key]),
+		check(typeof value[key] === "string" && identityPattern.test(value[key]),
 			"PROVIDER", "Invalid provider identity");
 	}
-	check(["scripted-memory", "https-unsupported", "https-chat-completions"].includes(value.transport), "PROVIDER", "Unknown transport");
+	check(["scripted-memory", "https-unsupported", "https-chat-completions", "pi-native"].includes(value.transport), "PROVIDER", "Unknown transport");
 	check(Array.isArray(value.outboundData) && value.outboundData.length === PROVIDER_DATA_SCOPE.length &&
 		PROVIDER_DATA_SCOPE.every((scope, index) => value.outboundData[index] === scope),
 	"PROVIDER", "The complete worker context data scope must be declared");
 	if (value.transport === "scripted-memory") {
 		check(value.provider === "swarm-mock" && value.api === "swarm-mock" && value.endpoint === "https://swarm-mock.invalid",
 			"PROVIDER", "Scripted transport requires the offline mock identity and endpoint");
+	} else if (value.transport === "pi-native") {
+		check(value.api !== "pi-virtual", "PROVIDER", "Virtual model routing is unsupported");
+		if (value.endpoint !== null) {
+			let endpoint;
+			try { endpoint = new URL(value.endpoint); } catch { check(false, "PROVIDER", "Invalid informational endpoint"); }
+			check(typeof value.endpoint === "string" && value.endpoint.length <= 2048 &&
+				["http:", "https:"].includes(endpoint.protocol) && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash && endpoint.href === value.endpoint,
+			"PROVIDER", "Invalid informational endpoint");
+		}
 	} else {
 		check(typeof value.endpoint === "string" && value.endpoint.length <= 2048, "PROVIDER", "Invalid endpoint");
 		let endpoint;
@@ -64,6 +75,7 @@ export function assertProviderSelection(capability, selection, modelRuntime) {
 		"Real provider transport is unsupported; no credentials or network execution are authorized");
 	check(selection?.provider === descriptor.provider && selection.modelId === descriptor.modelId,
 		"PROVIDER", "Model selection differs from the immutable provider agreement");
+	if (descriptor.transport === "pi-native") return assertNativeRuntime(modelRuntime, capability, selection);
 	if (descriptor.transport === "https-chat-completions") {
 		check(isConstrainedRuntime(modelRuntime, capability) && (!selection.thinkingLevel || selection.thinkingLevel === "off"),
 			"PROVIDER", "A matching branded constrained runtime with thinking off is required");

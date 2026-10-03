@@ -23,7 +23,7 @@ function freeze(value) {
 	return value;
 }
 
-/** Host-only approval orchestration. No UI, extension registration, or live provider support. */
+/** Host-only approval orchestration; provider execution requires explicit capability injection. */
 export class SwarmHost {
 	#events;
 	#sessionId;
@@ -101,7 +101,7 @@ export class SwarmHost {
 		if (!this.#providerCapability) return;
 		const model = assertProviderSelection(this.#providerCapability, selection, this.#modelRuntime);
 		const provider = this.#modelRuntime.getProvider?.(model.provider);
-		check(provider, "PROVIDER", "Explicit mock provider implementation required");
+		check(provider, "PROVIDER", "Explicit provider implementation required");
 		const references = [provider, provider.stream, provider.streamSimple, this.#modelRuntime.getModel,
 			this.#modelRuntime.getProvider, this.#modelRuntime.stream, this.#modelRuntime.streamSimple,
 			this.#modelRuntime.complete, this.#modelRuntime.completeSimple];

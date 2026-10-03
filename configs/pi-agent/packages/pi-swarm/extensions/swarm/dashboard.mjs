@@ -111,8 +111,10 @@ export class SwarmDashboard {
 		if (width <= 0) return [""];
 		const status = this.snapshot?.run?.status ?? "unattached";
 		const continuation = status === "paused" ? "r resume | R restart" : ["stopped", "completed", "failed"].includes(status) ? "R restart" : "";
+		const transport = this.snapshot?.run?.hostApprovals?.at(-1)?.provider?.transport;
+		const providerLabel = transport === "pi-native" ? "Pi native provider" : transport === "https-chat-completions" ? "HTTPS provider" : "mock only";
 		const header = [
-			`SWARM live / ${this.snapshot?.run?.hostApprovals?.at(-1)?.provider?.transport === "https-chat-completions" ? "HTTPS provider" : "mock only"} | ${status}`,
+			`SWARM live / ${providerLabel} | ${status}`,
 			"p PAUSE | s STOP | Esc close",
 			`${continuation}${continuation ? " | " : ""}c reconcile (approval required)`,
 			"1 Overview  2 Workers  3 Tasks  4 Claims  5 Mail  6 History",
