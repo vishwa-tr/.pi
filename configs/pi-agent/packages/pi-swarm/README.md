@@ -4,8 +4,9 @@
 
 This is an **inactive implementation**, not an activated Pi extension. The preferred
 model integration now reuses an explicitly supplied **public Pi ModelRuntime or ModelRegistry**
-and its configured providers/credentials. It has been tested only with in-memory credentials
-and scripted providers. No live provider trial or activation is authorized by this change.
+and its configured providers/credentials. Offline coverage uses in-memory credentials and scripted providers; one separately
+approved bounded native-model trial is recorded below. No further live trial or activation
+is authorized by this change.
 The default factory still requires explicit injection; legacy callers remain mock-only.
 Historical phases below describe their original boundaries; Phase 14 supersedes the earlier
 requirement to build a custom HTTP/auth stack for production integration. Phase 2's host-authorized workspace adapter performs guarded file
@@ -19,8 +20,7 @@ Phase 9 adds opt-in provider agreement/readiness plumbing. Phase 10 adds a const
 Chat Completions adapter tested through an explicitly injected offline transport. Phase 11 adds
 an explicitly authorized Node HTTPS client, verified only against ephemeral loopback TLS fixtures.
 The custom constrained/HTTPS stack is retained as an **optional legacy/experimental path**,
-not the production default. **No live provider trial, default remote endpoint, new provider
-discovery, or activation is included.**
+not the production default. **No default remote endpoint, new provider discovery, or activation is included.**
 
 Stage 1 implements:
 
@@ -59,10 +59,14 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **429 passing tests on Pi 1.0.0**. It includes actual local shell execution,
+The current combined suite has **436 passing tests on Pi 1.0.0**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
+
+An opt-in, supervised synthetic exercise is documented in [test/live/README.md](test/live/README.md).
+It requires separate outbound approval and inspection of generated source before executing tests;
+its default invocation is a dry run with no provider calls.
 
 ## Modules
 
@@ -1072,10 +1076,44 @@ settlement does not certify network/socket/OAuth cancellation or remote rollback
 compatibility/usefulness/cost, richer UI, human acceptance and activation remain separately gated.
 No external network, real credentials, installation, global activation, commit or push is included.
 
+## Bounded native live trial — core completed, harness reporting repaired offline
+
+One separately approved trial used the **approved native model** and explicitly approved
+thinking level, without fallback, activation, or installation. Outbound scope was synthetic
+CSV source/tests, task and host instructions, tool definitions/results, worker histories and
+peer messages. Existing native authentication stayed SDK-owned. This is not authorization
+for another trial or broader outbound data.
+
+Reducer replay confirms two worker identities, one completed build task, zero failed/rejected
+attempts, a non-writing independent reviewer approval, a current candidate, and a successful
+host final-check receipt (exit 0). There were no pending turns or workspace operations.
+The run completed in about two minutes within the five-minute allowance (two identities,
+two active workers, five tasks, one failed/rejected attempt per task). Generated source was
+separately inspected before execution; its unchanged approved fingerprint was checked before
+an offline rerun of all **12 passing tests**. No further model call was made for recovery.
+
+The original harness did **not** write its result summary: after durable `run.complete`
+automatically closed the controller, cleanup requested `run.stop` and received `CLOSED`.
+Its outer catch misleadingly labeled that reporting/cleanup failure as setup failure.
+The session driver now treats stop after completed/failed as already terminal without a new
+owner command. The harness separates setup, execution, reporting and cleanup errors, gathers
+usage after settlement, and attempts close in `finally` even if history reading or summary
+writing fails. Unsettled execution retains ownership; raw histories/errors stay private.
+The historical result is recovered from retained journal/history, not a second successful
+live harness run. Persisted response/token counts are not HTTP-call or billing measurements;
+cost remains unknown.
+
+Verification: **436 offline tests pass**, including the completed-controller regression and
+five reporting/cleanup regressions; default harness invocation remains inert. This proves
+only the bounded synthetic exercise and offline repair, not general remote compatibility,
+remote cancellation, spending control, human visual acceptance, or activation readiness.
+See [trial protocol](test/live/README.md) for explicit approval and source-review gates.
+
 ## Deferred before activation
 
-- An independently authorized **native Pi** live provider trial and remote compatibility
-  validation; native tests are scripted/offline and custom HTTPS acceptance remains local TLS.
+- Broader independently authorized **native Pi** remote compatibility validation; the one
+  bounded synthetic trial is not general provider certification. Custom HTTPS acceptance
+  remains local TLS.
 - Human visual TUI acceptance, broader policy/category/terminal acceptance, a compact
   persistent activity tree, and richer dashboard/conversation rendering.
 - Full native coding-tool presentation parity and additional coding tools.

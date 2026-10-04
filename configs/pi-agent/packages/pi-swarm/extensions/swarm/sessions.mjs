@@ -142,7 +142,13 @@ export class SwarmSessions {
 			return task;
 		};
 		switch (name) {
-			case "swarm_status": return state;
+			case "swarm_status": {
+				// Host agreements and native storage bindings are not worker context.
+				const { status, revision, cycle, generation, objective, criteria, scope, limits,
+					guidanceRevision, guidance, workers, tasks, messages } = state;
+				return { status, revision, cycle, generation, objective, criteria, scope, limits,
+					guidanceRevision, guidance, workers, tasks, messages };
+			}
 			case "swarm_task": {
 				const { action, ...payload } = params;
 				if (action === "claim") payload.assignmentId = operationId;
@@ -346,7 +352,7 @@ export class SwarmSessions {
 		check(Number.isFinite(timeoutMs) && timeoutMs >= 0, "INPUT", "Invalid settlement timeout");
 		this.#queue.clear();
 		const status = this.#controller.snapshot().status;
-		if (stop && !["stopping", "stopped"].includes(status)) await this.#controller.owner("run.stop");
+		if (stop && !["stopping", "stopped", "completed", "failed"].includes(status)) await this.#controller.owner("run.stop");
 		else if (!stop && ["running", "verifying"].includes(status)) await this.#controller.owner("run.pause");
 		let timer;
 		try {

@@ -24,6 +24,48 @@ async function fixture(t, script, limits, workspaceOptions = {}) {
 const specialist = id => ({ id, specialization: `${id} focus`, brief: "Preserve focused context", reason: "Independent approved work" });
 async function shutdown(f) { await f.driver.pause(); await f.driver.close(); }
 
+test("stop after completed auto-close preserves completion and permits disposal", async t => {
+	const f = await fixture(t, []);
+	try {
+		for (const id of ["builder", "reviewer"]) {
+			await f.driver.recruit(specialist(id));
+			await f.c.system("session.turn.start", { id: `${id}-turn`, workerId: id, kind: "prompt", messageIds: [], guidanceRevision: 0 });
+		}
+		await f.c.owner("task.create", { id: "task1", title: "Feature", criteria: [0], dependencies: [] });
+		await f.c.worker("builder").dispatch("task.claim", { taskId: "task1", kind: "build", assignmentId: "build1" });
+		const builder = f.workspace.worker("builder");
+		const receipt = await builder.shell("true");
+		await builder.submit("Candidate", [receipt.executionId]);
+		await f.c.system("session.turn.end", { id: "builder-turn", outcome: "settled" });
+		await f.workspace.settle("task1");
+		await f.c.worker("reviewer").dispatch("task.claim", { taskId: "task1", kind: "review", assignmentId: "review1" });
+		await f.workspace.worker("reviewer").review(true, "Independent check");
+		await f.c.system("session.turn.end", { id: "reviewer-turn", outcome: "settled" });
+		await f.workspace.settle("task1");
+		await f.workspace.finalCheck("true");
+		const completed = f.c.snapshot();
+		assert.equal(completed.status, "completed");
+		assert.deepEqual(await f.driver.pause({ stop: true }), { settled: true });
+		assert.deepEqual(await f.driver.pause({ stop: true }), { settled: true });
+		assert.deepEqual(f.c.snapshot(), completed);
+	} finally { await shutdown(f); }
+});
+
+test("worker status exposes collaboration state, not host or storage metadata", async t => {
+	const f = await fixture(t, [tool("swarm_status", {}), { text: "Inspected board" }]);
+	try {
+		await f.driver.recruit(specialist("builder"));
+		f.driver.wake("builder"); await f.driver.idle();
+		const result = f.mock.calls[1].context.messages.find(message => message.role === "toolResult");
+		const status = JSON.parse(result.content[0].text);
+		assert.deepEqual(Object.keys(status).sort(), ["status", "revision", "cycle", "generation", "objective", "criteria", "scope", "limits", "guidanceRevision", "guidance", "workers", "tasks", "messages"].sort());
+		assert.equal(status.workers[0].id, "builder");
+		assert.equal(status.objective, "Implement invitations");
+		assert.ok(!JSON.stringify(status).includes(f.root));
+		assert.ok(f.c.snapshot().sessions.workers[0].sessionFile);
+	} finally { await shutdown(f); }
+});
+
 test("persistent specialist retains identity and context through pause and reopen", async t => {
 	const f = await fixture(t, [{ text: "Remember the email decision" }, { text: "I retained the decision" }]);
 	const created = await f.driver.recruit(specialist("builder"));
