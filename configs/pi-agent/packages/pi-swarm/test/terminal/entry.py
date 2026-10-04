@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Explicit normal entry smoke test, isolated offline CLI, no SDK resolver preload."""
+"""Normal file/package entry smoke test, isolated offline CLI, no SDK resolver preload."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ import time
 from run import DisposableFixture, Terminal, HERE
 
 
-def main(scripted=False):
+def main(scripted=False, package_root=False):
     pi = shutil.which(os.environ.get("PI_BIN", "pi"))
     assert pi and shutil.which("node") and shutil.which("git")
     with DisposableFixture() as fixture:
@@ -26,8 +27,9 @@ def main(scripted=False):
         (project / ".git" / "info" / "exclude").write_text(".swarms/\n")
         if scripted:
             (project / "user.txt").write_text("Preserve fixture work\n")
+        entry = HERE.parent.parent if package_root else HERE.parent.parent / "extensions" / "index.ts"
         command = [shutil.which("node"), str(Path(pi).resolve()), "--no-extensions",
-                   "-e", str(HERE.parent.parent / "extensions" / "index.ts"),
+                   "-e", str(entry),
                    "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
                    "--no-approve", "--no-tools"]
         if scripted:
@@ -100,5 +102,8 @@ def main(scripted=False):
 
 
 if __name__ == "__main__":
-    main()
-    main(scripted=True)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--package-root", action="store_true", help="Load the package manifest instead of the raw entry file")
+    args = parser.parse_args()
+    main(package_root=args.package_root)
+    main(scripted=True, package_root=args.package_root)

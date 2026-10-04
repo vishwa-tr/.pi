@@ -2,17 +2,20 @@
 
 ## Status
 
-Swarm is **not globally enabled**. An explicit per-invocation entry now supports normal Pi
-usage through the current public **ModelRegistry**, model and thinking level. The injected
-factories remain available; legacy callers remain mock-only. Offline coverage uses in-memory
-fixture authentication and scripted providers; one separately approved bounded native-model
-trial is recorded below. This preparation performs no further live trial or global activation.
-Historical phases below describe their original boundaries; Phase 14 supersedes the earlier
+Swarm is **registered and enabled** by this repository's canonical `agent/settings.json`.
+Its package manifest loads the native entry through the current public **ModelRegistry**,
+model and thinking level. Normal use needs no `-e` flag. Registration does not authorize
+execution: every launch and continuation still needs explicit human approval, ready Plan Off
+and Safety providers. Loading, reload and session resume never automatically dispatch work.
+The injected factories remain available; legacy callers remain mock-only. Offline coverage
+uses in-memory fixture authentication and scripted providers; one separately approved bounded
+native-model trial is recorded below. Activation does not authorize another live trial.
+Historical phases below describe their original boundaries, not the current activation status;
+Phase 14 supersedes the earlier
 requirement to build a custom HTTP/auth stack for production integration. Phase 2's host-authorized workspace adapter performs guarded file
 mutations and shell execution in disposable test repositories. Phase 5 added an explicitly
 injected extension factory and native UI controls for offline testing, without an entry point
-at that stage. The explicit normal entry below now supplements it; package registration and
-global activation remain unchanged. Phase 6 adds a disposable CLI/PTY
+at that stage. The registered normal entry below now supplements it. Phase 6 adds a disposable CLI/PTY
 acceptance harness; it does not activate the package. Phase 7 adds a continuously refreshed
 native inspection dashboard to that same explicitly injected mock-only factory. Phase 8
 adds separate real CLI acceptance with the actual production Plan/Safety factories.
@@ -20,7 +23,7 @@ Phase 9 adds opt-in provider agreement/readiness plumbing. Phase 10 adds a const
 Chat Completions adapter tested through an explicitly injected offline transport. Phase 11 adds
 an explicitly authorized Node HTTPS client, verified only against ephemeral loopback TLS fixtures.
 The custom constrained/HTTPS stack is retained as an **optional legacy/experimental path**,
-not the production default. **No default remote endpoint, new provider discovery, or activation is included.**
+not the production default. **No default remote endpoint or new provider discovery is included.**
 
 Stage 1 implements:
 
@@ -40,7 +43,7 @@ uses an already-installed Pi SDK; it never installs dependencies or contacts liv
 
 ## Verification
 
-Requires Node 22+, Git, and a local Unix filesystem that supports the synchronization
+Requires Node 22.19+, Git, and a local Unix filesystem that supports the synchronization
 and no-follow operations used by the storage layer. The complete suite also requires the
 installed Pi SDK/CLI **1.0.0 or newer** (only 1.0.0 is verified; later releases require
 revalidation). Pi 1.0 requires Node 22.19+. Older Pi releases are no longer supported by
@@ -68,22 +71,19 @@ An opt-in, supervised synthetic exercise is documented in [test/live/README.md](
 It requires separate outbound approval and inspection of generated source before executing tests;
 its default invocation is a dry run with no provider calls.
 
-## Explicit normal Pi usage
+## Normal Pi usage
 
-From your target Git checkout, load the reviewed entry for this invocation only:
+With this repository's global configuration, start Pi in your target Git checkout and use
+`/swarm`; the configured package already loads the reviewed native entry. Do not add another
+Swarm, Plan, or Safety copy via `-e` or a second checkout.
 
-```bash
-pi -e <configuration-root>/configs/pi-agent/packages/pi-swarm/extensions/index.ts
-```
-
-No install, package manifest registration or settings change is needed. This does not enable
-Swarm globally. If production Plan and Safety are not already loaded, add their explicit paths
-(do not load a second copy of either):
+For a separate configuration without these packages, explicit per-invocation loading remains
+available. Load each package only once (omit entries already configured):
 
 ```bash
 pi -e <configuration-root>/configs/pi-agent/packages/pi-plan/extensions/plan/index.ts \
    -e <configuration-root>/configs/pi-agent/packages/pi-safety/extensions/safety/index.ts \
-   -e <configuration-root>/configs/pi-agent/packages/pi-swarm/extensions/index.ts
+   -e <configuration-root>/configs/pi-agent/packages/pi-swarm
 ```
 
 Use a persisted interactive session, an already configured physical chat model (`/model`),
@@ -114,16 +114,20 @@ required. Authorization controls require TUI, not print/JSON/RPC. Approval defau
 informational, not an egress pin. Review outbound context before approving. There is no cost cap,
 OS sandbox, general provider certification or claim of human visual acceptance.
 
-Disable by settling work and omitting the `-e` entry on the next invocation. Preserve run evidence
-and project changes. The enabled-package inventory and settings remain unchanged.
+To disable, stop and establish settlement first, then remove the Swarm package entry from
+`agent/settings.json` and restart Pi or reload. For per-invocation use, omit its `-e` entry
+next time. Preserve run evidence and project changes; removing registration is not settlement
+or permission to delete a run.
 
 Fresh-loader acceptance (no SDK resolver preload):
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/terminal/entry.py
+PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/terminal/entry.py --package-root
 ```
 
-This runs isolated offline CLI sessions: missing-model load/status/reload, then a scripted native
+These exercise both raw-file and package-root loading in isolated offline CLI sessions:
+missing-model load/status/reload, then a scripted native
 provider registered through Pi alongside actual Plan/Safety entries, current-model selection,
 cancelled agreement with zero auth/dispatch, approved dirty-work launch and paused reload.
 The other four PTY scenarios remain separate broader policy/workspace regressions.
@@ -1170,7 +1174,7 @@ only the bounded synthetic exercise and offline repair, not general remote compa
 remote cancellation, spending control, human visual acceptance, or activation readiness.
 See [trial protocol](test/live/README.md) for explicit approval and source-review gates.
 
-## Deferred before activation
+## Remaining limitations after activation
 
 - Broader independently authorized **native Pi** remote compatibility validation; the one
   bounded synthetic trial is not general provider certification. Custom HTTPS acceptance
@@ -1183,8 +1187,8 @@ See [trial protocol](test/live/README.md) for explicit approval and source-revie
 - Semantic scope/specialization checks, duplicate-recruitment judgments, and detection of
   repetitive non-progressing discussion. Capacity/revision checks do not replace those judgments.
 - Automatic compaction policy and session-slot yielding during live tool waits.
-- Scope revision, rich/streaming transcript UI, usage aggregation, safe stale-owner recovery, and
-  package activation. There is no automatic cleanup, commit, push, or rollback.
+- Scope revision, rich/streaming transcript UI, usage aggregation, and safe stale-owner recovery.
+  There is no automatic cleanup, commit, push, or rollback.
 
-Keep global activation separately gated. Explicit per-invocation usage does not certify the
-deferred capabilities or authorize another live trial.
+Approved global registration does not certify these deferred capabilities or authorize another
+live trial. Execution remains separately gated by each run's explicit human agreement.

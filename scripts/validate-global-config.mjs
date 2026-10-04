@@ -9,7 +9,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
 const notes = [];
 
-const EXPECTED_PACKAGE_COUNT = 31;
+const EXPECTED_PACKAGE_COUNT = 32;
 const EXPECTED_SKILL_COUNT = 28;
 const AGENT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
 

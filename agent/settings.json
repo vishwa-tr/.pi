@@ -34,7 +34,8 @@
     "./configs/pi-agent/packages/void-agent",
     "./configs/pi-agent/packages/pi-todo",
     "./configs/pi-agent/packages/pi-procedure",
-    "./configs/pi-agent/packages/pi-turn-stats"
+    "./configs/pi-agent/packages/pi-turn-stats",
+    "./configs/pi-agent/packages/pi-swarm"
   ],
   "skills": [
     "./skills"

@@ -127,6 +127,12 @@ root `skills/` is the canonical global skill library.
 - **Teams and merging:** `pi-teams` adds persistent team agents and optional peer
   messaging. `pi-merge` synthesizes selected session branches into a new session
   while leaving source branches intact.
+- **Swarm:** `pi-swarm` provides `/swarm start <goal>` and `/swarm` inspection
+  using native Pi workers with the current model/thinking snapshot. Launch and
+  continuation require explicit user approval; Plan must be ready and Off, and
+  Safety gates worker commands. Use `/swarm pause` or `/swarm stop` to brake work.
+  Load, reload, session resume, and ordinary prompts never automatically dispatch
+  Swarm work. See its [usage and limitations](configs/pi-agent/packages/pi-swarm/README.md).
 - **User notices and turn statistics:** `pi-notify-user` renders structured
   end-of-turn notices with optional urgent toasts. `pi-turn-stats` emits a
   compact TUI-only notice after the agent truly settles; it does not alter the
@@ -163,6 +169,8 @@ Authenticate with `/login`. When migrating an existing installation, restore
 only the machine-local state you intentionally preserved in the private backup;
 keep it outside Git and retain its restrictive permissions.
 
+The enabled Swarm package requires **Pi 1.0.0+ and Node 22.19+**; Pi 1.0.0 is
+its verified runtime baseline, and later versions require revalidation.
 Start Pi and run `/reload` after resource changes. Built-in MCP requires
 [Pi 0.99.0 or later](https://github.com/earendil-works/pi/releases/tag/v0.99.0).
 The previous Pi 0.83.0 test baseline predates built-in MCP; it is not a verification
