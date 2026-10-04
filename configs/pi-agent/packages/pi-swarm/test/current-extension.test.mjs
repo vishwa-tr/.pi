@@ -102,6 +102,26 @@ test("normal entry snapshots current model and thinking at launch, not load or c
 	assert.ok(f.packets.length > before); assert.equal(f.calls[1].model, "second");
 });
 
+for (const event of ["model_select", "thinking_level_select"]) {
+	for (const stage of ["objective", "agreement"]) {
+		test(`${event} during ${stage} prevents late approval and auth`, async t => {
+			const f = await fixture(t); f.select("first");
+			let shown = false; let release;
+			const answer = new Promise(resolve => { release = resolve; });
+			if (stage === "objective") f.ctx.ui.input = async () => { shown = true; return answer; };
+			else f.ctx.ui.custom = decisionUI(() => async () => { shown = true; return answer; });
+			const launch = stage === "objective" ? f.command("start") : assert.rejects(f.command("start goal"));
+			await until(() => shown);
+			f.select("second"); f.thinking("low");
+			await f.event(event);
+			release(stage === "objective" ? "Late goal" : "Approve");
+			await launch;
+			assert.equal(f.calls.length, 0); assert.equal(f.auth(), 0);
+			assert.equal(existsSync(join(f.ctx.cwd, ".swarms")), false);
+		});
+	}
+}
+
 test("main model change aborts active native work and requires new approval of the pinned model", async t => {
 	const f = await fixture(t, { hold: true }); f.select("first");
 	await f.command("start goal"); await until(() => f.calls.length === 1);
@@ -231,9 +251,9 @@ test("normal entry obtains setup consent before questions, host binding or model
 	const confirmations = []; const questions = [];
 	f.ctx.ui.confirm = async title => { confirmations.push(title); return true; };
 	f.ctx.ui.input = async title => { questions.push(title); return undefined; };
-	await f.command("start goal");
+	await f.command("start");
 	assert.equal(confirmations.length, 2);
-	assert.match(questions[0], /how will you check success/);
+	assert.deepEqual(questions, ["Swarm objective"]);
 	assert.equal(readFileSync(join(root, ".gitignore"), "utf8"), "/.swarms/\n");
 	assert.equal(readFileSync(join(root, "source.txt"), "utf8"), "preserve\n");
 	assert.equal(existsSync(join(root, ".swarms")), false);

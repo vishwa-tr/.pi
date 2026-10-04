@@ -163,7 +163,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 						};
 						if (!await prepareLaunchCheckout(ctx, { signal: pending.signal, assertCurrent, timeout: approvalTimeoutMs })) return;
 						assertCurrent();
-						const specification = await requestLaunchSpecification(ctx, rest.join(" "), pending.signal, current);
+						const specification = await requestLaunchSpecification(ctx, args.trimStart().replace(/^start(?:\s|$)/, ""), pending.signal, current);
 						if (!current() || !specification) return;
 						assertCurrent();
 						setupPhase = false;

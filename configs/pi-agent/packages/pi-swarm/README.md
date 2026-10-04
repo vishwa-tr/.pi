@@ -62,7 +62,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **525 passing tests on Pi 1.0.0**. It includes actual local shell execution,
+The current combined suite has **508 passing tests on Pi 1.0.0**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -113,16 +113,20 @@ use a checked atomic replacement; these are cooperative local-filesystem safegua
 OS sandbox against concurrent external writers.
 This guided setup supersedes historical manual-prerequisite instructions below.
 
-- `/swarm start <goal>` captures the **current** model/thinking after criteria/scope input,
-  presents the bounded provider/context agreement and run limits, and starts only after approval.
-  **Acceptance criteria** asks how you will check success: observable outcomes or checks
-  (for example `Tests pass`). **Scope and exclusions** asks what may change and what must not:
-  allowed files/areas and boundaries (for example `Only src and tests; no deployment`).
-  Enter one plain-text description for each, or JSON string arrays for multiple entries:
-  `["Tests pass", "No regressions"]` and `["src", "No deployment"]`. Examples are
-  placeholders, not defaults. Blank or invalid entries re-prompt; Escape cancels. Each
-  objective or list entry must be non-empty and at most 32768 characters. JSON arrays
-  retain their entries; malformed JSON is never silently treated as plain text.
+- `/swarm start <complete prompt>` preserves the full prompt as the objective and opens
+  one editable approval screen, without separate success-criteria or scope questions.
+  `/swarm start` without a prompt asks only for the objective first; blank or overlong
+  answers re-prompt and Escape cancels. The objective must be non-empty and at most
+  32768 characters. Swarm captures the **current** model/thinking for the agreement.
+  Criteria default to satisfying the behavior and verification requirements in the approved
+  objective; scope defaults to only the requested task, honoring its file and dependency
+  constraints. These are automatically seeded, editable references to the full objective,
+  not semantic extraction, proof of adequate requirements, or inferred permission to broaden
+  the task. No model call is made to prepare them. Review the full objective, criteria,
+  scope, provider/context and limits; use **Edit agreement** to change any run field before
+  approving (JSON string for objective, JSON string arrays for criteria/scope).
+  Workers still receive the full approved objective. Existing-work preservation and any
+  necessary Git setup remain separate explicit consent decisions.
   Cancelling the agreement creates no run or model request. Authentication is resolved by Pi only at an
   admitted request; selecting a model is not certification that its credentials will work.
 - `/swarm`, `/swarm status`, `/swarm pause` and `/swarm stop` inspect or brake work. Load,
@@ -160,7 +164,7 @@ These exercise both raw-file and package-root loading in isolated offline CLI se
 missing-model load/status/reload, then a scripted native
 provider registered through Pi alongside actual Plan/Safety entries, current-model selection,
 declined initialization with zero changes, separately approved Git/ignore setup, declined
-ignore changes, CRLF/permission/source preservation, clearer questions, cancelled agreement
+ignore changes, CRLF/permission/source preservation, prompt-first approval, cancelled agreement
 with zero auth/dispatch, approved dirty-work launch and paused reload.
 The other four PTY scenarios remain separate broader policy/workspace regressions.
 Guided-setup verification also passes **68 Plan/Safety tests**, **four PTY cleanup tests**,
@@ -195,7 +199,7 @@ These are automated offline checks, not human visual sign-off.
 | `extensions/swarm/constrained-provider.mjs` | Isolated text Chat Completions request/response adapter with explicit credentials, request fencing and branded transport settlement. |
 | `extensions/swarm/https-transport.mjs` | Explicit host egress authorization, pinned public-IPv4 HTTPS client, separate loopback test policy and actual socket settlement. |
 | `extensions/swarm/extension.mjs`, `ui.mjs`, `decision.mjs` | Opt-in factory, bounded cancellable native decision packets, commands and lifecycle hooks. |
-| `extensions/swarm/launch-setup.mjs`, `launch-input.mjs` | Explicitly consented Git/runtime-exclusion prerequisites and required plain-English success/scope questions, before host binding. |
+| `extensions/swarm/launch-setup.mjs`, `launch-input.mjs` | Explicitly consented Git/runtime-exclusion prerequisites, optional objective input and editable objective-referencing defaults, before host binding. |
 | `extensions/swarm/dashboard.mjs` | Refreshing, paged, read-only native dashboard; actions return to the existing host controls. |
 | `test/` | Foundation, host recovery, and offline real-SDK/factory integration tests. |
 
@@ -459,10 +463,10 @@ runner seam for disposable mock tests. Runner injection is never a command or mo
 When explicitly injected, `/swarm` now opens the phase-7 dashboard described below.
 The phase-5 commands remain available:
 
-- `start <goal>`: enter acceptance criteria and scope/exclusions as plain text (one entry)
-  or JSON string arrays; inspect the complete agreement; optionally edit each field using
-  JSON input; then approve. Blank/invalid launch fields re-prompt and Escape cancels before
-  host preparation. Malformed JSON edits leave the agreement unchanged for another edit.
+- `start <goal>`: inspect the complete agreement with the full objective and automatically
+  seeded criteria/scope references; optionally edit each field using JSON input; then approve.
+  With no goal, only objective input is requested. Blank/invalid objectives re-prompt and
+  Escape cancels before host preparation. Malformed JSON edits leave the agreement unchanged.
   Dirty work requires a separate **Preserve existing work** choice. A real mock SDK planner
   investigates the approved goal without a second planning approval; fields are not
   semantically clarified by a live model.
@@ -535,8 +539,8 @@ This is a **real interactive CLI on a Python PTY**, not a fake UI context. It se
 keyboard input through native Pi dialogs and checks emitted terminal text and durable
 journal evidence. Verified scenarios:
 
-- Escape cancels initial criteria input without creating run storage.
-- At 60 columns / 24 rows, launch criteria/scope, edit the objective, approve the
+- Escape cancels initial objective input without creating run storage.
+- At 60 columns / 24 rows, open the agreement directly, edit objective/criteria/scope, approve the
   agreement, and explicitly preserve dirty work. Replay asserts the persisted edited
   objective and approved criteria/scope.
 - Pause an actually streaming mock worker; confirm resume without resetting the cycle.

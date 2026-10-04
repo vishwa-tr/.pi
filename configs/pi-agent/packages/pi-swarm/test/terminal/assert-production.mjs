@@ -29,9 +29,10 @@ for (const event of journal) {
 }
 assert.equal(continuations, tls || nativeProvider ? 6 : 5);
 assert.equal(state.status, "paused", "Shutdown restores a paused run, not completion");
-assert.equal(state.objective, "Production policy acceptance");
-assert.deepEqual(state.criteria, ["Only approved benign commands execute"]);
-assert.deepEqual(state.scope, [tls ? "Disposable project and explicit local TLS fixture only" : "Disposable project only; no network"]);
+const boundary = tls ? "Disposable project and explicit local TLS fixture only" : "Disposable project only; no network";
+assert.equal(state.objective, `Production policy acceptance. Only approved benign commands execute. ${boundary}.`);
+assert.deepEqual(state.criteria, ["Satisfy the behavior and verification requirements in the approved objective."]);
+assert.deepEqual(state.scope, ["Work only on the requested task; honor the objective's file and dependency constraints."]);
 assert.equal(state.workspace.operations.length, 0);
 assert.equal(state.sessions.turns.length, 0, "SDK turns settled before shutdown finished");
 assert.ok(state.tasks.every(task => !task.assignment), "All assignments actually settled");

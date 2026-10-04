@@ -83,11 +83,7 @@ def main(tls=False, native=False):
             terminal.expect_status(expected, label)
 
         def start():
-            terminal.line("/swarm start Production policy acceptance")
-            terminal.expect("Acceptance criteria")
-            terminal.line('["Only approved benign commands execute"]')
-            terminal.expect("Scope and exclusions")
-            terminal.line(json.dumps([scope]))
+            terminal.line(f"/swarm start Production policy acceptance. Only approved benign commands execute. {scope}.")
             terminal.expect(f"LAUNCH ({label})")
             terminal.read_decision()
             if native:

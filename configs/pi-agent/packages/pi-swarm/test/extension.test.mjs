@@ -46,8 +46,6 @@ async function fixture(t, { script = () => ({ text: "Mock planning complete" }),
 		if (answer !== undefined) return answer;
 		if (kind === "select") return args[1].includes("Approve") ? "Approve" : args[1].includes("Preserve existing work") ? "Preserve existing work" : undefined;
 		if (kind === "confirm") return true;
-		if (args[0].startsWith("Acceptance")) return '["Observable result"]';
-		if (args[0].startsWith("Scope")) return '["src", "No deployment"]';
 		return "All processes independently checked and stopped in the mock fixture";
 	};
 	const ctx = { cwd: root, mode: "tui", hasUI: true,
@@ -69,7 +67,7 @@ test("factory is opt-in and rejects absent or live runtimes without registration
 test("editable agreement and explicit preservation launch a real mock SDK planner; shutdown/reload stays paused", async t => {
 	const f = await fixture(t);
 	writeFileSync(join(f.root, "user.txt"), "preserve\n");
-	f.responses.input.push('["Observable result"]', '["src"]', '"Edited goal"');
+	f.responses.input.push('"Edited goal"');
 	f.responses.select.push("Edit agreement", "objective", "Approve", "Preserve existing work");
 	await f.command("start Original goal");
 	await until(() => f.mock.calls.length === 1);
@@ -92,27 +90,26 @@ test("editable agreement and explicit preservation launch a real mock SDK planne
 });
 
 for (const field of ["criteria", "scope"]) {
-	for (const [label, invalid] of Object.entries({ empty: "", whitespace: "  ", malformed: '["private-input",', object: '{}', scalar: '"text"', null: 'null', number: '12', boolean: 'true', emptyArray: '[]', mixed: '["ok", 1]', blank: '[" "]', long: JSON.stringify(["x".repeat(32769)]) })) {
-		test(`${field} ${label} re-prompts, then cancellation preserves zero effects`, async t => {
-			const f = await fixture(t);
-			if (field === "scope") f.responses.input.push("Tests pass");
-			f.responses.input.push(invalid, "Valid description");
-			f.responses.select.push("Cancel");
-			await assert.rejects(f.command("start goal"), { code: "AUTHORITY" });
-			assert.equal(f.notices.filter(n => n.level === "warning").length, 1);
-			assert.equal(f.notices.some(n => /private-input|SyntaxError|Unexpected/.test(n.text)), false);
-			assert.equal(existsSync(join(f.root, ".swarms")), false);
-			assert.equal(f.entries.length, 0);
-			assert.equal(f.mock.calls.length, 0);
-			await f.event("session_shutdown");
-		});
-	}
+	test(`${field} remains editable in the approval screen`, async t => {
+		const f = await fixture(t);
+		f.responses.select.push("Edit agreement", field, "Cancel");
+		f.responses.input.push('["Explicit requirement", "No deployment"]');
+		await assert.rejects(f.command("start goal"), { code: "AUTHORITY" });
+		const packets = f.prompts.filter(p => p.kind === "select" && p.args[1].includes("Approve"));
+		assert.equal(packets.length, 2);
+		assert.match(packets[1].args[0], /Explicit requirement/);
+		assert.match(packets[1].args[0], /No deployment/);
+		assert.equal(f.prompts.filter(p => p.kind === "input").length, 1);
+		assert.equal(existsSync(join(f.root, ".swarms")), false);
+		assert.equal(f.mock.calls.length, 0);
+		await f.event("session_shutdown");
+	});
 }
 
 for (const invalid of ["", "  ", "x".repeat(32769)]) {
-	test(`invalid objective of length ${invalid.length} can recover and Escape without binding an owner`, async t => {
+	test(`invalid objective of length ${invalid.length} can Escape without binding an owner`, async t => {
 		const f = await fixture(t);
-		f.responses.input.push(invalid, "Valid goal", () => undefined);
+		f.responses.input.push(invalid, () => undefined);
 		await f.command("start");
 		assert.equal(f.notices.length, 1);
 		assert.equal(f.entries.length, 0);
@@ -128,7 +125,7 @@ for (const action of ["pause", "stop", "session_before_tree", "session_shutdown"
 	test(`${action} fences a late answer during input re-prompt`, async t => {
 		const f = await fixture(t); const shown = deferred(); const answer = deferred();
 		f.responses.input.push("", (_title, _placeholder, options) => { shown.resolve(options.signal); return answer.promise; });
-		const launch = f.command("start goal"); const signal = await shown.promise;
+		const launch = f.command("start"); const signal = await shown.promise;
 		if (action === "session-change") f.ctx.sessionManager.getSessionId = () => "other";
 		else if (action.startsWith("session_")) await f.event(action);
 		else await f.command(action);
@@ -142,20 +139,42 @@ for (const action of ["pause", "stop", "session_before_tree", "session_shutdown"
 	});
 }
 
-test("plain text launch preserves one criterion and one scope description", async t => {
+for (const supplied of [true, false]) {
+	test(`${supplied ? "supplied" : "prompted"} objective reaches one agreement without redundant questions`, async t => {
+		const f = await fixture(t);
+		const objective = "Fix src/example.js.\n  Preserve spacing; no new dependencies. Run tests.";
+		if (!supplied) f.responses.input.push(objective);
+		f.responses.select.push("Cancel");
+		await assert.rejects(f.command(supplied ? `start ${objective}` : "start"), { code: "AUTHORITY" });
+		assert.equal(f.prompts.filter(p => p.kind === "input").length, supplied ? 0 : 1);
+		const packets = f.prompts.filter(p => p.kind === "select");
+		assert.equal(packets.length, 1);
+		assert.ok(packets[0].args[0].includes(JSON.stringify(objective)));
+		assert.match(packets[0].args[0], /requirements in the approved objective/);
+		assert.match(packets[0].args[0], /file and dependency constraints/);
+		assert.equal(f.mock.calls.length, 0);
+		assert.equal(existsSync(join(f.root, ".swarms")), false);
+		await f.event("session_shutdown");
+	});
+}
+
+test("maximum-length objective is preserved without duplicating it into seeded fields", async t => {
 	const f = await fixture(t);
-	f.responses.input.push("Tests pass, no regressions", "Only src; no deployment");
-	await f.command("start goal");
-	const packet = f.prompts.find(p => p.kind === "select").args[0];
-	assert.match(packet, /"criteria": \[\s*"Tests pass, no regressions"\s*\]/);
-	assert.match(packet, /"scope": \[\s*"Only src; no deployment"\s*\]/);
+	const constraints = "\nOnly src/example.js; no new dependencies; run the existing tests.";
+	const objective = "x".repeat(32768 - constraints.length) + constraints;
+	await f.command(`start ${objective}`);
+	await until(() => f.mock.calls.length === 1);
+	assert.equal((await f.status()).objective, objective);
+	const quotedObjective = JSON.stringify(objective); // Worker instructions contain a JSON data record.
+	assert.ok(JSON.stringify(f.mock.calls[0].context).includes(JSON.stringify(quotedObjective).slice(1, -1)));
+	assert.equal(f.prompts.filter(p => p.kind === "input").length, 0);
 	await f.event("session_shutdown");
 });
 
-test("Escape from invalid criteria re-prompt produces no error or owner binding", async t => {
+test("Escape from invalid objective re-prompt produces no error or owner binding", async t => {
 	const f = await fixture(t);
 	f.responses.input.push("", () => undefined);
-	await f.command("start goal");
+	await f.command("start");
 	assert.deepEqual(f.notices.map(n => n.level), ["warning"]);
 	f.ctx.sessionManager.getSessionId = () => "other";
 	await f.command("status");
@@ -167,7 +186,7 @@ test("Escape from invalid criteria re-prompt produces no error or owner binding"
 
 test("malformed agreement edit retains original and permits a corrected edit", async t => {
 	const f = await fixture(t);
-	f.responses.input.push("Result", "src", '[', '"Corrected goal"');
+	f.responses.input.push('[', '"Corrected goal"');
 	f.responses.select.push("Edit agreement", "objective", "Edit agreement", "objective", "Approve");
 	await f.command("start goal");
 	assert.equal((await f.status()).objective, "Corrected goal");
@@ -177,7 +196,7 @@ test("malformed agreement edit retains original and permits a corrected edit", a
 
 test("invalid agreement value reports sanitized input guidance without throwing", async t => {
 	const f = await fixture(t);
-	f.responses.input.push("Result", "src", '[]');
+	f.responses.input.push('[]');
 	f.responses.select.push("Edit agreement", "objective", "Approve");
 	await f.command("start goal");
 	assert.match(f.notices.at(-1).text, /Invalid Swarm input/);
@@ -186,15 +205,14 @@ test("invalid agreement value reports sanitized input guidance without throwing"
 	await f.event("session_shutdown");
 });
 
-for (const stage of ["approval", "preservation", "criteria", "scope"]) {
+for (const stage of ["approval", "preservation", "objective"]) {
 	test(`cancel at ${stage} creates no storage or SDK calls`, async t => {
 		const f = await fixture(t);
 		if (stage === "approval") f.responses.select.push("Cancel");
 		if (stage === "preservation") f.responses.select.push("Approve", "Cancel");
-		if (stage === "criteria") f.responses.input.push(() => undefined);
-		if (stage === "scope") f.responses.input.push('["Result"]', () => undefined);
+		if (stage === "objective") f.responses.input.push(() => undefined);
 		if (["approval", "preservation"].includes(stage)) await assert.rejects(f.command("start goal"), { code: "AUTHORITY" });
-		else await f.command("start goal");
+		else await f.command("start");
 		assert.equal(existsSync(join(f.root, ".swarms")), false);
 		assert.equal(f.mock.calls.length, 0);
 		await f.event("session_shutdown");
@@ -222,7 +240,7 @@ for (const action of ["pause", "stop", "shutdown", "tree", "mode"]) {
 test("shutdown during a prelaunch field input cancels the dialog without creating a run", async t => {
 	const f = await fixture(t); const shown = deferred(); const answer = deferred();
 	f.responses.input.push((title, placeholder, options) => { shown.resolve(options.signal); return answer.promise; });
-	const launch = f.command("start goal"); const signal = await shown.promise;
+	const launch = f.command("start"); const signal = await shown.promise;
 	await f.event("session_shutdown"); assert.equal(signal.aborted, true);
 	answer.resolve('["Result"]'); await launch;
 	assert.equal(existsSync(join(f.root, ".swarms")), false);
@@ -303,7 +321,7 @@ for (const action of ["pause", "shutdown"]) {
 test("agreement editing is cancelled by shutdown with no late launch", async t => {
 	const f = await fixture(t); const shown = deferred(); const answer = deferred();
 	f.responses.select.push("Edit agreement", "objective");
-	f.responses.input.push('["Result"]', '["src"]', (_title, _placeholder, options) => { shown.resolve(options.signal); return answer.promise; });
+	f.responses.input.push((_title, _placeholder, options) => { shown.resolve(options.signal); return answer.promise; });
 	const launch = assert.rejects(f.command("start goal")); const signal = await shown.promise;
 	await f.event("session_shutdown"); assert.equal(signal.aborted, true);
 	answer.resolve('"Late edit"'); await launch;

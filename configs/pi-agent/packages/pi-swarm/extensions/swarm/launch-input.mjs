@@ -1,36 +1,17 @@
 const validText = value => typeof value === "string" && value.trim().length > 0 && value.length <= 32768;
 
-/** Collect required fields before binding a host; every await rechecks command ownership. */
+/** Seed editable agreement fields without model work or redundant launch questions. */
 export async function requestLaunchSpecification(ctx, objective, signal, current) {
-	objective = await promptField(ctx, "Swarm objective", "Describe the goal", objective || undefined, false, signal, current);
-	if (objective === undefined) return;
-	const criteria = await promptField(ctx, "Acceptance criteria: how will you check success?", 'Example: Tests pass. Enter one success check or a JSON array of checks.', undefined, true, signal, current);
-	if (criteria === undefined) return;
-	const scope = await promptField(ctx, "Scope and exclusions: what may change, and what must not?", 'Example: Only src and tests; no deployment. Enter text or a JSON array.', undefined, true, signal, current);
-	if (scope === undefined) return;
-	return { objective, criteria, scope };
-}
-
-async function promptField(ctx, title, placeholder, initial, list, signal, current) {
-	let value = initial;
+	let value = objective.trim() ? objective : undefined;
 	while (current()) {
-		if (value === undefined) value = await ctx.ui.input(title, placeholder, { signal });
+		if (value === undefined) value = await ctx.ui.input("Swarm objective", "Describe the goal", { signal });
 		if (!current() || value === undefined) return;
-		const parsed = list ? parseList(value) : value;
-		if (list ? Array.isArray(parsed) && parsed.length > 0 && parsed.every(validText) : validText(parsed)) return parsed;
-		ctx.ui.notify(list
-			? "Enter one non-empty description or a JSON array of non-empty strings (maximum 32768 characters each). Escape cancels."
-			: "Enter a non-empty objective (maximum 32768 characters). Escape cancels.", "warning");
+		if (validText(value)) return {
+			objective: value,
+			criteria: ["Satisfy the behavior and verification requirements in the approved objective."],
+			scope: ["Work only on the requested task; honor the objective's file and dependency constraints."],
+		};
+		ctx.ui.notify("Enter a non-empty objective (maximum 32768 characters). Escape cancels.", "warning");
 		value = undefined;
-	}
-}
-
-function parseList(value) {
-	if (!value.trim()) return;
-	try { return JSON.parse(value); }
-	catch {
-		// Never silently turn a malformed JSON array/object/string into approved scope.
-		if (/^[\[{"]/.test(value.trimStart())) return;
-		return [value];
 	}
 }
