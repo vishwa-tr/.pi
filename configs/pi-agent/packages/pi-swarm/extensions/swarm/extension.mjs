@@ -1,9 +1,11 @@
 import { SwarmHost } from "./host.mjs";
 import { randomUUID } from "node:crypto";
+import { ModeGate } from "./host-gates.mjs";
 import { showDashboard } from "./dashboard.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { requestUserApproval, statusText } from "./ui.mjs";
 import { createNativeRuntime } from "./native-provider.mjs";
+import { prepareLaunchCheckout } from "./launch-setup.mjs";
 import { requestLaunchSpecification } from "./launch-input.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
 
@@ -133,6 +135,8 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				const pending = new AbortController();
 				command = pending;
 				const current = contextGuard(ctx, pending.signal);
+				let setupGate;
+				let setupPhase = false;
 				try {
 					let selected = action;
 					if (!selected || selected === "dashboard") {
@@ -149,8 +153,22 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					let activeHost;
 					if (selected === "start") {
 						if (resolveSelection) check(ctx.model, "MODEL", "Select a physical chat model with /model before starting Swarm");
+						check(ctx.sessionManager.getSessionFile(), "SESSION", "A persisted owner session is required");
+						setupPhase = true;
+						setupGate = new ModeGate({ events: pi.events, sessionId: ctx.sessionManager.getSessionId(), onRevoke: () => { if (setupPhase) pending.abort(); } });
+						const permission = setupGate.capture();
+						const assertCurrent = () => {
+							check(current(), "OWNERSHIP", "Swarm setup was cancelled or its context changed");
+							setupGate.assert(permission.token);
+						};
+						if (!await prepareLaunchCheckout(ctx, { signal: pending.signal, assertCurrent, timeout: approvalTimeoutMs })) return;
+						assertCurrent();
 						const specification = await requestLaunchSpecification(ctx, rest.join(" "), pending.signal, current);
 						if (!current() || !specification) return;
+						assertCurrent();
+						setupPhase = false;
+						setupGate.dispose();
+						setupGate = undefined;
 						activeHost = await ensureHost(ctx);
 						if (!current()) return;
 						await activeHost.launch({ workspace: ctx.cwd, runId: randomUUID(), specification });
@@ -176,6 +194,12 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					} else check(false, "INPUT", "Use start, status, pause, stop, restore <run-id>, resume, restart, or reconcile");
 					if (!retired) notify(ctx, statusText(activeHost.snapshot()));
 				} catch (error) {
+					if (error.code === "SETUP" || (setupPhase && error.code === "MODE_DENIED")) {
+						if (!retired) notify(ctx, error.code === "SETUP" ? error.message : "Swarm setup requires Plan to be ready and Off. Return to Off and start again; approved setup changes are not rolled back.", "warning");
+						if (error.code === "MODE_DENIED") throw error;
+						return;
+					}
+					if (setupPhase && pending.signal.aborted) return;
 					if (error.code === "INPUT") {
 						if (current()) notify(ctx, "Invalid Swarm input. Check the command and agreement fields, then try again. No automatic retry or rollback.", "warning");
 						return;
@@ -183,6 +207,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					if (!retired) notify(ctx, `Swarm control failed (${error.code ?? "INPUT"}). No automatic retry or rollback. Inspect status before continuing.`, "error");
 					throw error;
 				} finally {
+					setupGate?.dispose();
 					remember(ctx);
 					viewing = false;
 					if (command === pending) command = undefined;

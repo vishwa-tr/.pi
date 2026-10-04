@@ -23,10 +23,13 @@ def main(scripted=False, package_root=False):
                "GIT_CONFIG_GLOBAL": os.devnull, "SWARM_TERMINAL_FIXTURE": str(fixture.root / "events.jsonl")}
         (agent / "settings.json").write_text(json.dumps({"quietStartup": True, "enableInstallTelemetry": False,
             "compaction": {"enabled": False}, "retry": {"enabled": False}, "cacheWarming": {"enabled": False}}))
-        subprocess.run(["git", "init", "-q", str(project)], env=env, check=True)
-        (project / ".git" / "info" / "exclude").write_text(".swarms/\n")
+        if not scripted:
+            subprocess.run(["git", "init", "-q", str(project)], env=env, check=True)
+            (project / ".git" / "info" / "exclude").write_text(".swarms/\n")
         if scripted:
             (project / "user.txt").write_text("Preserve fixture work\n")
+            (project / ".gitignore").write_bytes(b"# Preserve existing rules\r\n")
+            (project / ".gitignore").chmod(0o640)
         entry = HERE.parent.parent if package_root else HERE.parent.parent / "extensions" / "index.ts"
         command = [shutil.which("node"), str(Path(pi).resolve()), "--no-extensions",
                    "-e", str(entry),
@@ -67,13 +70,37 @@ def main(scripted=False, package_root=False):
                 terminal.line("/fixture-model")
                 terminal.expect("Entry model changed")
                 terminal.line("/swarm start fixture goal")
-                terminal.expect("Acceptance criteria")
+                terminal.expect("Set up Git for Swarm?")
+                terminal.choose(1)  # Explicit No: no Git, ignore, run or provider changes.
+                time.sleep(0.3)
+                assert not (project / ".git").exists()
+                assert (project / ".gitignore").read_bytes() == b"# Preserve existing rules\r\n"
+                assert not (project / ".swarms").exists()
+                assert not any(event["type"] in ("auth", "dispatch") for event in events())
+                terminal.line("/swarm start fixture goal")
+                terminal.expect("Set up Git for Swarm?")
+                terminal.choose(0)  # Explicit Yes to init, then No to ignore mutation.
+                terminal.expect("Keep Swarm runtime files out of Git?")
+                terminal.choose(1)
+                time.sleep(0.3)
+                assert (project / ".git").is_dir()
+                assert (project / ".gitignore").read_bytes() == b"# Preserve existing rules\r\n"
+                assert subprocess.check_output(["git", "-C", str(project), "ls-files"], env=env) == b""
+                assert not (project / ".swarms").exists()
+                terminal.line("/swarm start fixture goal")
+                terminal.expect("Keep Swarm runtime files out of Git?")
+                terminal.choose(0)
+                terminal.expect("Acceptance criteria: how will you check success?")
+                assert (project / ".gitignore").read_bytes() == b"# Preserve existing rules\r\n/.swarms/\r\n"
+                assert (project / ".gitignore").stat().st_mode & 0o777 == 0o640
+                assert (project / "user.txt").read_text() == "Preserve fixture work\n"
+                subprocess.run(["git", "-C", str(project), "check-ignore", "-q", ".swarms/probe/events.jsonl"], env=env, check=True)
                 terminal.line("")  # Placeholder is not a default; blank Enter must re-prompt.
                 time.sleep(0.3)
                 terminal.line('["unfinished",')
                 time.sleep(0.3)
                 terminal.line("Fixture only")
-                terminal.expect("Scope and exclusions")
+                terminal.expect("Scope and exclusions: what may change, and what must not?")
                 terminal.line("Disposable checkout only")
                 terminal.expect("LAUNCH (Pi native provider)")
                 terminal.send("\x1b")

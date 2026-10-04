@@ -62,7 +62,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **484 passing tests on Pi 1.0.0**. It includes actual local shell execution,
+The current combined suite has **525 passing tests on Pi 1.0.0**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -73,7 +73,7 @@ its default invocation is a dry run with no provider calls.
 
 ## Normal Pi usage
 
-With this repository's global configuration, start Pi in your target Git checkout and use
+With this repository's global configuration, start Pi in your target project folder and use
 `/swarm`; the configured package already loads the reviewed native entry. Do not add another
 Swarm, Plan, or Safety copy via `-e` or a second checkout.
 
@@ -88,13 +88,37 @@ pi -e <configuration-root>/configs/pi-agent/packages/pi-plan/extensions/plan/ind
 
 Use a persisted interactive session, an already configured physical chat model (`/model`),
 and the desired `/thinking` level. Plan must be ready and **Off**; missing or conflicting policy
-providers deny execution. The checkout must already exclude `.swarms/` from Git; Swarm does not
-modify ignore rules. It preserves pre-existing work and requires an explicit preservation decision.
+providers deny execution. Before asking launch questions or binding a model host, Swarm checks
+Git prerequisites. If the folder is not in a repository, it offers a native confirmation to
+initialize Git in that exact folder, without staging or committing. For an existing repository,
+start Pi at its checkout root (including a worktree root), not a subdirectory; Swarm never
+silently initializes a nested repository or modifies a parent checkout.
+
+If runtime records are not excluded, a separate confirmation offers to append `/.swarms/` to
+the root `.gitignore`. It preserves existing bytes, newline style and file permissions; it
+refuses linked/non-regular or unsupported-encoding ignore files. Git verifies both the runtime
+directory and a nested runtime path are ignored and that no runtime records are tracked.
+Tracked `.swarms` files require your own review: Swarm never removes, unstages or deletes them.
+Git must be installed and accessible; setup errors give local corrective guidance without
+printing raw Git errors. Existing source/index work is preserved and still needs an explicit
+preservation decision at launch.
+
+Each setup change requires its own positive consent, ready Plan Off and the same current
+owner/model context. Declining, Escape, timeout, restriction or context cancellation prevents
+further writes. **Previously approved setup changes remain if a later step or launch is
+cancelled**; there is no automatic rollback. Setup creates no run or model request and writes
+no `.git/info` exclusions. Setup rechecks the root directory's device/inode identity as well
+as its canonical path across confirmation and inspection, and before mutation. Ignore updates
+use a checked atomic replacement; these are cooperative local-filesystem safeguards, not an
+OS sandbox against concurrent external writers.
+This guided setup supersedes historical manual-prerequisite instructions below.
 
 - `/swarm start <goal>` captures the **current** model/thinking after criteria/scope input,
   presents the bounded provider/context agreement and run limits, and starts only after approval.
-  Enter one plain-text criterion (for example `Tests pass`) and one scope description
-  (for example `Only src; no deployment`), or JSON string arrays for multiple entries:
+  **Acceptance criteria** asks how you will check success: observable outcomes or checks
+  (for example `Tests pass`). **Scope and exclusions** asks what may change and what must not:
+  allowed files/areas and boundaries (for example `Only src and tests; no deployment`).
+  Enter one plain-text description for each, or JSON string arrays for multiple entries:
   `["Tests pass", "No regressions"]` and `["src", "No deployment"]`. Examples are
   placeholders, not defaults. Blank or invalid entries re-prompt; Escape cancels. Each
   objective or list entry must be non-empty and at most 32768 characters. JSON arrays
@@ -135,8 +159,16 @@ PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/termin
 These exercise both raw-file and package-root loading in isolated offline CLI sessions:
 missing-model load/status/reload, then a scripted native
 provider registered through Pi alongside actual Plan/Safety entries, current-model selection,
-cancelled agreement with zero auth/dispatch, approved dirty-work launch and paused reload.
+declined initialization with zero changes, separately approved Git/ignore setup, declined
+ignore changes, CRLF/permission/source preservation, clearer questions, cancelled agreement
+with zero auth/dispatch, approved dirty-work launch and paused reload.
 The other four PTY scenarios remain separate broader policy/workspace regressions.
+Guided-setup verification also passes **68 Plan/Safety tests**, **four PTY cleanup tests**,
+and all five PTY scenarios (normal entry checked as both raw file and package root).
+Setup regressions cover permission/Git failures, linked ignore files, tracked runtime state,
+worktree roots, concurrent user edits, same-path root replacement during either setup consent,
+ambient Git routing, and policy/owner/model cancellation without later writes.
+These are automated offline checks, not human visual sign-off.
 
 ## Modules
 
@@ -163,6 +195,7 @@ The other four PTY scenarios remain separate broader policy/workspace regression
 | `extensions/swarm/constrained-provider.mjs` | Isolated text Chat Completions request/response adapter with explicit credentials, request fencing and branded transport settlement. |
 | `extensions/swarm/https-transport.mjs` | Explicit host egress authorization, pinned public-IPv4 HTTPS client, separate loopback test policy and actual socket settlement. |
 | `extensions/swarm/extension.mjs`, `ui.mjs`, `decision.mjs` | Opt-in factory, bounded cancellable native decision packets, commands and lifecycle hooks. |
+| `extensions/swarm/launch-setup.mjs`, `launch-input.mjs` | Explicitly consented Git/runtime-exclusion prerequisites and required plain-English success/scope questions, before host binding. |
 | `extensions/swarm/dashboard.mjs` | Refreshing, paged, read-only native dashboard; actions return to the existing host controls. |
 | `test/` | Foundation, host recovery, and offline real-SDK/factory integration tests. |
 

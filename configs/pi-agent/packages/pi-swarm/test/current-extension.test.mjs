@@ -3,15 +3,17 @@ import {
 } from "@earendil-works/pi-ai";
 import test from "node:test";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { repository } from "./helpers.mjs";
-import { decisionUI } from "./decision-fixture.mjs";
+import { execFileSync } from "node:child_process";
 import { guardNetwork } from "./network-guard.mjs";
+import { decisionUI } from "./decision-fixture.mjs";
 import { SwarmHost } from "../extensions/swarm/host.mjs";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createCurrentSwarmExtension } from "../extensions/swarm/extension.mjs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 
 async function fixture(t, { policy = true, entries = [], root, hold = false } = {}) {
 	guardNetwork(t);
@@ -62,7 +64,7 @@ async function fixture(t, { policy = true, entries = [], root, hold = false } = 
 	assert.equal(createCurrentSwarmExtension()(pi), undefined);
 	const event = (name, data = {}) => handlers.get(name)?.(data, ctx);
 	t.after(() => event("session_shutdown"));
-	return { ctx, source, calls, packets, answers, entries, event, auth: () => auth,
+	return { ctx, source, calls, packets, answers, entries, event, events, notices, auth: () => auth,
 		select(id) { ctx.model = source.getModel(model.provider, id); }, thinking(value) { thinking = value; },
 		command: args => command.handler(args, ctx), status: async () => { await command.handler("status", ctx); return notices.at(-1).startsWith("{") ? JSON.parse(notices.at(-1)) : { status: "unattached" }; } };
 }
@@ -214,4 +216,82 @@ test("normal entry reload restore stays paused and fork cannot inherit owner lin
 	await fork.event("session_start", { reason: "fork" });
 	assert.equal(fork.auth(), 0); assert.equal(fork.calls.length, 0);
 	assert.equal((await fork.status()).status, "unattached");
+});
+
+
+function uninitialized(t) {
+	const root = mkdtempSync(join(tmpdir(), "swarm-entry-setup-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	writeFileSync(join(root, "source.txt"), "preserve\n");
+	return root;
+}
+
+test("normal entry obtains setup consent before questions, host binding or model calls", async t => {
+	const root = uninitialized(t); const f = await fixture(t, { root }); f.select("first");
+	const confirmations = []; const questions = [];
+	f.ctx.ui.confirm = async title => { confirmations.push(title); return true; };
+	f.ctx.ui.input = async title => { questions.push(title); return undefined; };
+	await f.command("start goal");
+	assert.equal(confirmations.length, 2);
+	assert.match(questions[0], /how will you check success/);
+	assert.equal(readFileSync(join(root, ".gitignore"), "utf8"), "/.swarms/\n");
+	assert.equal(readFileSync(join(root, "source.txt"), "utf8"), "preserve\n");
+	assert.equal(existsSync(join(root, ".swarms")), false);
+	assert.equal((await f.status()).status, "unattached");
+	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+});
+
+for (const restriction of ["missing-policy", "plan", "no-ui", "decline"]) {
+	test(`normal entry ${restriction} makes no prerequisite changes`, async t => {
+		const root = uninitialized(t);
+		const f = await fixture(t, { root, policy: restriction !== "missing-policy" }); f.select("first");
+		let confirmations = 0; let questions = 0;
+		f.ctx.ui.confirm = async () => { confirmations++; return false; };
+		f.ctx.ui.input = async () => { questions++; return undefined; };
+		if (restriction === "no-ui") f.ctx.hasUI = false;
+		if (restriction === "plan") {
+			f.events.removeAllListeners("pi-plan:query-mode");
+			f.events.on("pi-plan:query-mode", request => request.respond({ version: 1, instanceId: "restricted", revision: 1,
+				contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "plan", enforcedMode: "plan", runMode: null, pendingChange: false }));
+		}
+		if (restriction === "decline") await f.command("start goal");
+		else await assert.rejects(f.command("start goal"), { code: restriction === "no-ui" ? "UI" : "MODE_DENIED" });
+		assert.equal(confirmations, restriction === "decline" ? 1 : 0);
+		assert.equal(questions, 0); assert.equal(f.calls.length, 0); assert.equal(f.auth(), 0);
+		assert.deepEqual(readdirSync(root), ["source.txt"]);
+	});
+}
+
+for (const cancellation of ["model_select", "thinking_level_select", "pause", "session_before_switch", "owner", "mode"]) {
+	test(`normal entry ${cancellation} during ignore consent prevents the second setup write`, async t => {
+		const root = uninitialized(t); const f = await fixture(t, { root }); f.select("first");
+		let confirmations = 0;
+		f.ctx.ui.confirm = async (_title, _message, { signal }) => {
+			if (++confirmations === 1) return true;
+			if (cancellation === "mode") f.events.emit("pi-plan:mode-changed", { version: 1, instanceId: "entry-policy", revision: 2,
+				contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "plan", enforcedMode: "plan", runMode: null, pendingChange: false });
+			else if (cancellation === "owner") f.ctx.sessionManager.getSessionId = () => "replacement";
+			else if (cancellation === "pause") await f.command("pause");
+			else await f.event(cancellation);
+			if (cancellation !== "owner") assert.equal(signal.aborted, true);
+			return true; // A late approval cannot revive the operation.
+		};
+		if (cancellation === "owner") await assert.rejects(f.command("start goal"), { code: "OWNERSHIP" });
+		else await f.command("start goal");
+		assert.equal(existsSync(join(root, ".git")), true);
+		assert.equal(existsSync(join(root, ".gitignore")), false);
+		assert.equal(existsSync(join(root, ".swarms")), false);
+		assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+	});
+}
+
+test("normal entry setup errors are actionable, sanitized and do not fall through to questions", async t => {
+	const root = uninitialized(t); const f = await fixture(t, { root }); f.select("first");
+	execFileSync("git", ["-C", root, "init", "-q"]);
+	writeFileSync(join(root, ".gitignore"), Buffer.from([0]));
+	f.ctx.ui.input = () => assert.fail("must not ask launch questions");
+	await f.command("start goal");
+	assert.match(f.notices.at(-1), /unsupported data/);
+	assert.ok(!f.notices.at(-1).includes(root));
+	assert.equal(f.calls.length, 0); assert.equal(f.auth(), 0);
 });

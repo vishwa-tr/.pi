@@ -4,9 +4,9 @@ const validText = value => typeof value === "string" && value.trim().length > 0 
 export async function requestLaunchSpecification(ctx, objective, signal, current) {
 	objective = await promptField(ctx, "Swarm objective", "Describe the goal", objective || undefined, false, signal, current);
 	if (objective === undefined) return;
-	const criteria = await promptField(ctx, "Acceptance criteria (one outcome or JSON array)", 'Tests pass, or ["Tests pass", "No regressions"]', undefined, true, signal, current);
+	const criteria = await promptField(ctx, "Acceptance criteria: how will you check success?", 'Example: Tests pass. Enter one success check or a JSON array of checks.', undefined, true, signal, current);
 	if (criteria === undefined) return;
-	const scope = await promptField(ctx, "Scope and exclusions (one description or JSON array)", 'Only src; no deployment, or ["src", "No deployment"]', undefined, true, signal, current);
+	const scope = await promptField(ctx, "Scope and exclusions: what may change, and what must not?", 'Example: Only src and tests; no deployment. Enter text or a JSON array.', undefined, true, signal, current);
 	if (scope === undefined) return;
 	return { objective, criteria, scope };
 }
