@@ -2,17 +2,17 @@
 
 ## Status
 
-This is an **inactive implementation**, not an activated Pi extension. The preferred
-model integration now reuses an explicitly supplied **public Pi ModelRuntime or ModelRegistry**
-and its configured providers/credentials. Offline coverage uses in-memory credentials and scripted providers; one separately
-approved bounded native-model trial is recorded below. No further live trial or activation
-is authorized by this change.
-The default factory still requires explicit injection; legacy callers remain mock-only.
+Swarm is **not globally enabled**. An explicit per-invocation entry now supports normal Pi
+usage through the current public **ModelRegistry**, model and thinking level. The injected
+factories remain available; legacy callers remain mock-only. Offline coverage uses in-memory
+fixture authentication and scripted providers; one separately approved bounded native-model
+trial is recorded below. This preparation performs no further live trial or global activation.
 Historical phases below describe their original boundaries; Phase 14 supersedes the earlier
 requirement to build a custom HTTP/auth stack for production integration. Phase 2's host-authorized workspace adapter performs guarded file
-mutations and shell execution in disposable test repositories. Phase 5 adds an explicitly
-injected extension factory and native UI controls for offline testing. No default entry
-point, package registration, or activation is installed. Phase 6 adds a disposable CLI/PTY
+mutations and shell execution in disposable test repositories. Phase 5 added an explicitly
+injected extension factory and native UI controls for offline testing, without an entry point
+at that stage. The explicit normal entry below now supplements it; package registration and
+global activation remain unchanged. Phase 6 adds a disposable CLI/PTY
 acceptance harness; it does not activate the package. Phase 7 adds a continuously refreshed
 native inspection dashboard to that same explicitly injected mock-only factory. Phase 8
 adds separate real CLI acceptance with the actual production Plan/Safety factories.
@@ -59,7 +59,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **436 passing tests on Pi 1.0.0**. It includes actual local shell execution,
+The current combined suite has **448 passing tests on Pi 1.0.0**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -67,6 +67,66 @@ UI contexts. These are not live-model, interactive-terminal, or power-loss tests
 An opt-in, supervised synthetic exercise is documented in [test/live/README.md](test/live/README.md).
 It requires separate outbound approval and inspection of generated source before executing tests;
 its default invocation is a dry run with no provider calls.
+
+## Explicit normal Pi usage
+
+From your target Git checkout, load the reviewed entry for this invocation only:
+
+```bash
+pi -e <configuration-root>/configs/pi-agent/packages/pi-swarm/extensions/index.ts
+```
+
+No install, package manifest registration or settings change is needed. This does not enable
+Swarm globally. If production Plan and Safety are not already loaded, add their explicit paths
+(do not load a second copy of either):
+
+```bash
+pi -e <configuration-root>/configs/pi-agent/packages/pi-plan/extensions/plan/index.ts \
+   -e <configuration-root>/configs/pi-agent/packages/pi-safety/extensions/safety/index.ts \
+   -e <configuration-root>/configs/pi-agent/packages/pi-swarm/extensions/index.ts
+```
+
+Use a persisted interactive session, an already configured physical chat model (`/model`),
+and the desired `/thinking` level. Plan must be ready and **Off**; missing or conflicting policy
+providers deny execution. The checkout must already exclude `.swarms/` from Git; Swarm does not
+modify ignore rules. It preserves pre-existing work and requires an explicit preservation decision.
+
+- `/swarm start <goal>` captures the **current** model/thinking after criteria/scope input,
+  presents the bounded provider/context agreement and run limits, and starts only after approval.
+  Cancelling the agreement creates no run or model request. Authentication is resolved by Pi only at an
+  admitted request; selecting a model is not certification that its credentials will work.
+- `/swarm`, `/swarm status`, `/swarm pause` and `/swarm stop` inspect or brake work. Load,
+  discovery and inspection never request provider streams, auth resolution or catalog refresh.
+- Main model/thinking changes revoke active approval and pause; workers retain their approved
+  snapshot. Cancellation also fences commands waiting for host preparation or reload restoration:
+  they cannot start a late operation or present a fresh agreement after cancellation.
+  Resume/restart requires fresh agreement to that **original** selection, not an
+  autonomous model switch. To use another selection, stop/settle the old run and start a new
+  persisted owner session/run. Existing runs are not migrated between models.
+- Reload/shutdown closes the old host. The owner link is rediscovered without binding a model;
+  the next explicit control reattaches paused after startup policy providers are ready. Select
+  the saved run's model/thinking before restoring. Forks cannot inherit control. Neither reload,
+  session resume nor ordinary prompts automatically dispatch Swarm work.
+
+Without a selected model, loading and status still work; starting explains that `/model` is
+required. Authorization controls require TUI, not print/JSON/RPC. Approval defaults to a finite
+120-second timeout. Native Pi owns credentials, OAuth and routing; the displayed endpoint is
+informational, not an egress pin. Review outbound context before approving. There is no cost cap,
+OS sandbox, general provider certification or claim of human visual acceptance.
+
+Disable by settling work and omitting the `-e` entry on the next invocation. Preserve run evidence
+and project changes. The enabled-package inventory and settings remain unchanged.
+
+Fresh-loader acceptance (no SDK resolver preload):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 configs/pi-agent/packages/pi-swarm/test/terminal/entry.py
+```
+
+This runs isolated offline CLI sessions: missing-model load/status/reload, then a scripted native
+provider registered through Pi alongside actual Plan/Safety entries, current-model selection,
+cancelled agreement with zero auth/dispatch, approved dirty-work launch and paused reload.
+The other four PTY scenarios remain separate broader policy/workspace regressions.
 
 ## Modules
 
@@ -88,6 +148,7 @@ its default invocation is a dry run with no provider calls.
 | `extensions/swarm/sdk-session.mjs` | Non-discovering SDK factory, explicit branded native/legacy or mock gate, private native JSONL validation and synchronization. |
 | `extensions/swarm/session-tools.mjs`, `specializations.mjs` | Uniform model-visible tool definitions and generated specialist/context prompts. |
 | `extensions/swarm/provider-capability.mjs` | Strict immutable host provider configuration, branded adapter selection and unsupported-transport preflight. |
+| `extensions/index.ts`, `extensions/swarm/native-binding.mjs` | Explicit normal-loader entry and SDK-free native capability bookkeeping. |
 | `extensions/swarm/native-provider.mjs` | Branded public Pi runtime/registry delegation, model snapshot and per-request host admission; native Pi owns auth and transport. |
 | `extensions/swarm/constrained-provider.mjs` | Isolated text Chat Completions request/response adapter with explicit credentials, request fencing and branded transport settlement. |
 | `extensions/swarm/https-transport.mjs` | Explicit host egress authorization, pinned public-IPv4 HTTPS client, separate loopback test policy and actual socket settlement. |
@@ -1125,4 +1186,5 @@ See [trial protocol](test/live/README.md) for explicit approval and source-revie
 - Scope revision, rich/streaming transcript UI, usage aggregation, safe stale-owner recovery, and
   package activation. There is no automatic cleanup, commit, push, or rollback.
 
-Keep this package inactive until those adapters and their lifecycle tests are complete.
+Keep global activation separately gated. Explicit per-invocation usage does not certify the
+deferred capabilities or authorize another live trial.

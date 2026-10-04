@@ -1,5 +1,5 @@
 import { requireCondition as check } from "./errors.mjs";
-import { assertNativeRuntime } from "./native-provider.mjs";
+import { assertNativeRuntime } from "./native-binding.mjs";
 import { isConstrainedRuntime } from "./constrained-provider.mjs";
 
 // These categories describe the complete context, not a promise to filter sensitive text.

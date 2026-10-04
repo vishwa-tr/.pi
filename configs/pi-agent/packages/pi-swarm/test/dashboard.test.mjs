@@ -14,13 +14,16 @@ function fixture() {
 	return { view, options, signal, results, historyReads, tick: () => tick(), snapshot, setSnapshot: next => { snapshot = next; }, clears: () => clears, renders: () => renders };
 }
 
-test("HTTPS approval labels the dashboard honestly without claiming mock-only execution", () => {
+test("dashboard labels HTTPS and unattached selection without claiming mock-only execution", () => {
 	const f = fixture();
 	f.snapshot.run.hostApprovals = [{ provider: { transport: "https-chat-completions" } }];
 	f.tick();
 	assert.match(f.view.render(100).join("\n"), /HTTPS provider/);
 	assert.doesNotMatch(f.view.render(100).join("\n"), /mock only/);
 	assert.match(f.view.body(), /cost: unknown/);
+	f.setSnapshot(undefined); f.tick();
+	assert.match(f.view.render(100).join("\n"), /not selected/);
+	assert.doesNotMatch(f.view.render(100).join("\n"), /mock only/);
 	f.view.dispose();
 });
 

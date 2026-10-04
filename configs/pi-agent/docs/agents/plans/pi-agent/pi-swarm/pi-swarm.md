@@ -1562,3 +1562,66 @@ Native live-provider compatibility,
 usefulness/cost, real OAuth/network cancellation and remote effects, human visual acceptance,
 richer dashboard/activity UX and activation remain separately authorized trial gates. No live
 provider, real credential, external network, install, global activation, commit or push occurred.
+
+### 25. Bounded native trial and reporting repair
+
+The separately authorized synthetic native trial completed core verification: two worker
+identities, one independently reviewed build task, no failed/rejected attempts, and a current
+successful final-check receipt. A subsequent offline rerun of the inspected, unchanged source
+passed all 12 generated tests. This is not authorization for another provider call.
+
+The original harness failed while reporting/closing an already completed controller. The repair
+makes terminal stop idempotent and separates execution, reporting and cleanup failures while
+preserving unsettled ownership. The recorded result was recovered from retained evidence, not
+from another successful live harness run. Baseline `ab3c7cd` contains the repair and supervised
+trial harness; its package suite passes **436** offline tests. See the package README and
+`test/live/README.md` for the bounded scope, source-review requirement and retained limitations.
+
+### 26. Explicit normal Pi entry preparation
+
+Authorized scope: prepare normal interactive usage via an explicit local `pi -e` entry, without
+changing global activation, settings or the enabled-package inventory. No additional live trial,
+real credential access, installation, external network, commit or push is included.
+
+Implemented:
+
+- `extensions/index.ts` registers synchronously through `createCurrentSwarmExtension`. It reads
+  no current model or credentials at load. Launch lazily binds the public `ctx.modelRegistry`,
+  actual current `ctx.model` and `pi.getThinkingLevel()` after criteria/scope input. Cancelled
+  approvals do not cache the prior selection for another launch. Existing mock injection stays
+  supported and default host execution still requires branded native capability or mock inputs.
+- The normal entry reuses bounded human agreements, explicit dirty-work preservation, owner
+  fencing, authoritative Plan Off admission and production Safety. Missing model, non-TUI
+  authorization, missing policy or provider mismatch deny without worker execution. Authentication
+  remains Pi-owned at request time; no availability/auth/catalog refresh is added to inspection.
+- Main model/thinking changes cancel pending controls and pause the old approved run; they do
+  not migrate workers. Context-epoch, cancellation-signal and owner checks after asynchronous
+  setup prevent a cancelled command from starting a late host operation or fresh agreement,
+  including while reload restoration is pending. Seven real-host regressions cover same-turn
+  model/thinking/pause cancellation, restore waits and owner fencing; the full 448-test suite
+  and fresh-loader entry PTY pass after this fix. This was a late-operation race, not an
+  approval bypass. Continuation requires fresh approval of the original pinned selection.
+  Another selection requires a new owner/run after settling the old one. Automatic routing and
+  worker-selected models remain unsupported.
+- Reload/shutdown retires the old host and capability. Native session-start only discovers the
+  owner link; the next explicit command reattaches paused, so startup provider registration order
+  cannot trigger a premature restore failure. No prompt/load/resume/reload auto-dispatch exists.
+  Forks do not inherit control. Existing incomplete-settlement fencing remains unchanged.
+- Fresh CLI acceptance exposed dynamic bare SDK imports bypassing Pi's normal loader aliases.
+  Native construction now uses static public imports; SDK-free capability bookkeeping lives in
+  `native-binding.mjs`. No resolver preload, installed dependency, global loader or private SDK
+  import is needed for the explicit entry; the 155 SDK-free foundation tests remain intact.
+
+Verification on installed Pi 1.0.0: **448 Swarm tests**, **155 foundation**, **66 Plan/Safety**,
+**four cleanup regressions**, and the four existing PTYs pass. The new `test/terminal/entry.py`
+adds two real isolated CLI sessions with the entry explicitly loaded and **no SDK resolver
+preload**: missing-model discovery/status/reload, then production Plan/Safety plus a public
+scripted native provider with in-memory fixture authentication. It verifies current-model
+selection, cancel with zero auth/dispatch, approved dirty-work launch, unchanged existing work
+and paused reload without another worker request. Tests do not use a live model or real keys.
+
+The README documents the one-invocation command, optional explicit policy-provider paths,
+model/thinking snapshot, prerequisites, recovery and disable procedure. Global activation,
+broader live compatibility, human visual acceptance, richer UI/usage reporting and all prior
+semantic-scope/remote-cancellation/recovery limitations remain separately gated. Changes remain
+uncommitted for review; this preparation does not supersede those product acceptance gates.
