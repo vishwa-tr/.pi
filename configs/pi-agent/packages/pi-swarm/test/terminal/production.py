@@ -208,8 +208,7 @@ def main(tls=False, native=False):
             if native:
                 terminal.send("2")
                 terminal.expect("active SDK turn")
-                terminal.send("\r")
-                terminal.expect("Native persisted history")
+                terminal.inspect_conversation()
             terminal.send("\x1bg")
             terminal.expect("phase8-approved")
             before = count("worker-start")

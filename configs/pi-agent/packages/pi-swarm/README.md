@@ -45,8 +45,8 @@ uses an already-installed Pi SDK; it never installs dependencies or contacts liv
 
 Requires Node 22.19+, Git, and a local Unix filesystem that supports the synchronization
 and no-follow operations used by the storage layer. The complete suite also requires the
-installed Pi SDK/CLI **1.0.0 or newer** (only 1.0.0 is verified; later releases require
-revalidation). Pi 1.0 requires Node 22.19+. Older Pi releases are no longer supported by
+installed Pi SDK/CLI **1.0.0 or newer** (1.0.0 is the original verified baseline;
+1.0.1 also passes the current suite and dashboard/normal-entry PTY checks). Pi 1.0 requires Node 22.19+. Older Pi releases are no longer supported by
 this package; historical phase results below describe their original verification. The test bootstrap resolves public package exports;
 set `PI_SDK_DIR` if automatic discovery does not locate the installation. No install fallback
 is provided. `npm run test:foundation` runs the non-SDK tests separately.
@@ -62,7 +62,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **508 passing tests on Pi 1.0.0**. It includes actual local shell execution,
+The current combined suite has **525 passing tests on Pi 1.0.1**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -174,6 +174,64 @@ worktree roots, concurrent user edits, same-path root replacement during either 
 ambient Git routing, and policy/owner/model cancellation without later writes.
 These are automated offline checks, not human visual sign-off.
 
+## Dashboard keys and conversations
+
+`/swarm` is a focused, read-only inspection overlay, refreshed every 500 ms. Opening it
+never wakes workers or resolves authentication. The existing pause/stop and approval gates
+still own execution. Safety requests dismiss inspection before opening their decision UI.
+
+| Key | Action |
+|---|---|
+| `1`–`6`, `Tab`, `h` / `l` | Choose pane, next pane, previous / next pane |
+| `j` / `k`, arrows | Select workers; otherwise scroll text |
+| `Enter` on a worker, `c` | Open selected worker's conversation |
+| `gg` / `G`, Home / End | First / last page |
+| Ctrl-u / Ctrl-d, PageUp / PageDown | Half page / full page |
+| `/`, Enter | Local literal, case-insensitive conversation search; one match per source line |
+| `n` / `N` | Next / previous matching line, wrapping at either end |
+| `f` | Toggle conversation follow-tail; manual scrolling disables it |
+| `?` | Scrollable contextual help |
+| `q` / Escape | Back from conversation/help; otherwise close without pausing |
+| `p` / `s` | Pause / stop (outside search/help) |
+| `r` / `R` | Approved resume / restart when eligible |
+| `C` | Reconcile through existing approval flow (formerly lowercase `c`) |
+
+Search owns typed/pasted text: action letters cannot brake or approve while entering a
+query. Escape cancels the draft; submitting an empty query clears search. Ctrl-c keeps Pi's
+global behavior. Approval dialogs retain Left/Right + Enter and the read-to-end gate;
+conversation keys do not approve decisions.
+
+Conversation entries show roles, timestamps, text, thinking, tool arguments/results,
+system section/tool updates, compaction checkpoints and context edits. Earlier entries remain
+reachable; there is no arbitrary history-retention cap. This is persisted history, not token
+streaming: in-flight output can lag until the native session writes it. Scrolled position and
+worker identity survive refresh; follow-tail is opt-in. Terminal/bidi controls are visibly
+escaped before theme styling. Full text remains wrapped and paged at 60×24 and 80×24.
+
+Native response token counters are shown only when present; mock/legacy placeholders are
+not usage measurements. Run totals remain unaggregated and cost unknown. Provider replay
+metadata, private host/session header fields, opaque tool details and raw provider diagnostics
+are not dumped into this viewer. Images have a media-type placeholder, not binary rendering.
+Custom extension-state entries remain visible as markers without exposing their private data.
+No raw-record toggle is provided. Task/review and claims panes retain evidence and settlement
+information; a candidate or pending report is not completion.
+
+Limitations: histories/layout are materialized in memory; very large-history performance,
+IME editing, mouse and human visual acceptance are not certified. Search supports text,
+backspace and paste, not a full editor. Resize can reflow the current line position. Search
+and inspection are entirely local, without model or network calls.
+
+**After source updates, fully restart Pi.** `/reload` tears down the old interaction and
+restores paused ownership, but native ESM modules may remain cached in the process; it is
+not a guarantee that edited source code is reloaded.
+
+Offline verification on Pi 1.0.1: **525 Swarm tests**, **68 Plan/Safety tests**,
+**four PTY cleanup tests**, and all five CLI scenarios pass. Normal entry was verified
+through both file and package loading. The actual CLI exercises search-input isolation, conversation/back navigation and
+focused End/Home help paging. Existing safety exclusion and reload tests remain intact;
+TLS retains exactly **17 requests** and native registry acceptance **19 dispatches**. These
+are scripted-provider checks, not a new live-model trial or human visual sign-off.
+
 ## Modules
 
 | Module | Responsibility |
@@ -200,7 +258,7 @@ These are automated offline checks, not human visual sign-off.
 | `extensions/swarm/https-transport.mjs` | Explicit host egress authorization, pinned public-IPv4 HTTPS client, separate loopback test policy and actual socket settlement. |
 | `extensions/swarm/extension.mjs`, `ui.mjs`, `decision.mjs` | Opt-in factory, bounded cancellable native decision packets, commands and lifecycle hooks. |
 | `extensions/swarm/launch-setup.mjs`, `launch-input.mjs` | Explicitly consented Git/runtime-exclusion prerequisites, optional objective input and editable objective-referencing defaults, before host binding. |
-| `extensions/swarm/dashboard.mjs` | Refreshing, paged, read-only native dashboard; actions return to the existing host controls. |
+| `extensions/swarm/dashboard.mjs`, `transcript.mjs` | Focused, refreshing, read-only dashboard and semantic transcript/search; actions return to existing host controls. |
 | `test/` | Foundation, host recovery, and offline real-SDK/factory integration tests. |
 
 ## Host API and trust boundary
@@ -569,6 +627,9 @@ network-backed operation, crash/power-loss recovery, or stale-lock takeover is e
 Phase 7 below adds dashboard acceptance; usage aggregation remains deferred.
 
 ## Phase 7 mock-only live dashboard
+
+This section records the original Phase 7 baseline; the current overlay, conversation and
+key behavior supersedes it as described in [Dashboard keys and conversations](#dashboard-keys-and-conversations).
 
 `/swarm` or `/swarm dashboard` opens a native `ctx.ui.custom` inspection view. It refreshes
 host snapshots every 500 ms while open; it does not create a host, grant approval, wake a
@@ -1180,8 +1241,10 @@ no settings were normalized or files staged.
 
 This is offline scripted-provider acceptance of the native SDK path, **not a live-provider
 trial, HTTP compatibility test, human visual sign-off or viewport/pixel test**. Dashboard
-coverage here is section/Enter navigation, not all keys: installed Pi's global transcript
-scroll handling can intercept End/PageUp in the non-overlay dashboard. Native stream
+coverage at that phase was section/Enter navigation, not all keys: installed Pi's global
+transcript scroll handling could intercept End/PageUp in the old non-overlay dashboard.
+The current focused overlay fixes that input ownership and adds real CLI search/help and
+End/Home navigation checks. Native stream
 settlement does not certify network/socket/OAuth cancellation or remote rollback. Real provider
 compatibility/usefulness/cost, richer UI, human acceptance and activation remain separately gated.
 No external network, real credentials, installation, global activation, commit or push is included.

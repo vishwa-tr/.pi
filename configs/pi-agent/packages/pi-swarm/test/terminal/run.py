@@ -75,6 +75,28 @@ class Terminal:
         self.send("\x1b")
         time.sleep(0.2)
 
+    def inspect_conversation(self):
+        """Exercise the real focused overlay without granting execution authority."""
+        self.send("c")
+        self.expect("Native persisted history")
+        self.send("/")
+        self.expect("SEARCH")
+        self.send("psC")  # Search text must not invoke pause, stop or reconciliation.
+        self.send("\r")
+        self.expect("0 matches")
+        self.send("?")
+        self.expect("NAVIGATION")
+        self.send("\x1b[F")  # End belongs to the overlay, not Pi's transcript.
+        self.expect("Inspection never starts")
+        self.send("\x1b[H")
+        self.expect("NAVIGATION")
+        self.send("?")
+        time.sleep(0.1)
+        self.send("q")
+        self.expect("Workers")
+        self.send("\r")
+        self.expect("Native persisted history")
+
     def line(self, text):
         self.send(text)
         time.sleep(0.1)
@@ -227,8 +249,7 @@ def main():
             terminal.expect("Recorded active time:")  # host ticks repaint without keyboard input
             terminal.send("2")
             terminal.expect("active SDK turn")
-            terminal.send("\r")
-            terminal.expect("Native persisted history")
+            terminal.inspect_conversation()
             terminal.send("p")
             wait_event("worker-abort")
             time.sleep(0.3)
