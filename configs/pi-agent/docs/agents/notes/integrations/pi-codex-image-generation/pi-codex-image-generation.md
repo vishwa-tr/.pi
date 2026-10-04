@@ -13,7 +13,7 @@ The installed Codex CLI reports `image_generation` as a stable enabled feature. 
 - completed `imageGeneration` items containing `status`, base64 `result`, optional `revisedPrompt`, and optional `savedPath`;
 - ordinary `item/started`, `item/completed`, and `turn/completed` lifecycle notifications.
 
-Pi extensions can register an LLM-callable tool with `pi.registerTool()`/`defineTool()`, return combined text and `ImageContent`, stream partial progress through `onUpdate`, honor the supplied abort signal, and serialize file mutations with `withFileMutationQueue()`.
+Pi extensions can register an LLM-callable tool with `pi.registerTool()`/`defineTool()`, separate model-visible `content` from renderer/state `details`, stream partial progress through `onUpdate`, honor the supplied abort signal, and serialize file mutations with `withFileMutationQueue()`. This tool returns text-only content with generated/edited, saved path, MIME type, byte length, and status. Full metadata and revised prompts remain in `details`. Interactive TUI calls also retain preview bytes there for `renderResult`; headless calls omit preview bytes. Visual inspection by the model requires an explicit `read` of the saved image.
 
 ## Design
 
@@ -49,7 +49,9 @@ Output parents must already exist. Paths are lexically and realpath-confined to 
 
 ## Verification scope
 
-Automated tests cover registration, schemas, generate/edit requests, capability and authentication failures, inherited configuration/instruction refusal, item allowlisting, thread/turn mismatches, malformed image data, input limits and formats, cancellation/timeout cleanup, clean-home authentication bridging, output confinement, symlink refusal, overwrite behavior, atomic writes, and inline image results.
+Automated tests cover registration, schemas, generate/edit requests, capability and authentication failures, inherited configuration/instruction refusal, item allowlisting, thread/turn mismatches, malformed image data, input limits and formats, cancellation/timeout cleanup, clean-home authentication bridging, output confinement, symlink refusal, overwrite behavior, atomic writes, text-only generation/edit results across TUI/print/JSON/RPC modes, TUI-only previews (including serialized results, image-display controls, and progress/error handling), and explicit saved-file reads with Pi's built-in image reader.
+
+Current offline tests do not authorize or perform live generation/edit requests. The live checks below are historical verification of the original integration; their inline model-visible result behavior has since been replaced by the text-only contract above.
 
 Verification completed with Codex 0.146.0:
 

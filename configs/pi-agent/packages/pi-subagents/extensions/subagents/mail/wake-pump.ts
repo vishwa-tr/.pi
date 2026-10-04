@@ -1,78 +1,136 @@
-/**
- * mail/wake-pump.ts — the main-mail auto-wake policy. PURE of Pi: no
- * ExtensionAPI, no fs, no SDK — just the state machine and an injected port.
- *
- * The rules it encodes:
- *   - Mail is delivered to the host ONLY while it is idle; mid-turn mail waits for
- *     the turn boundary (mail never interrupts a running turn).
- *   - Draining flips the host to non-idle BEFORE injecting, so the turn started by
- *     the injection cannot re-enter the pump for the same mail.
- *   - Mail is committed (consumed) only AFTER inject() returned — i.e. after the
- *     SDK accepted the message synchronously (pi.sendMessage returns void). If the
- *     SDK's internally-floated delivery later fails, the mail is already consumed:
- *     accepted-synchronously is the durability boundary, not appended-to-transcript.
- *   - After shutdown nothing is ever drained or injected, so pending mail survives
- *     for the next session (at-least-once).
- */
-
-/** What the pump needs from the world. index.ts binds these to core + pi. */
-export interface WakePumpPort {
-	/**
-	 * Compose a digest from pending main mail WITHOUT consuming it, plus a commit()
-	 * that consumes it. Null when there is no pending mail.
-	 */
-	takeDigest(): { digest: string; commit: () => void } | null;
-	/** Hand the digest to the host (starts a turn when idle). Must not throw. */
-	inject(digest: string): void;
+/** Idle mail coalescing and persisted-transcript acknowledgement, independent of Pi. */
+export interface WakeDigest {
+	digest: string;
+	envelopeIds: string[];
+	begin(): void;
+	commit(): void;
 }
 
+export interface WakePumpPort {
+	/** Reconcile previously persisted deliveries before taking a fresh snapshot. */
+	takeDigest(): WakeDigest | null;
+	/** Cheap pending check; must not compose or consume a snapshot. */
+	hasMail(): boolean;
+	isIdle(): boolean;
+	/** Void acceptance is NOT acknowledgement. */
+	inject(digest: string, envelopeIds: string[]): void;
+	isPersisted(envelopeIds: string[]): boolean;
+}
+
+export interface WakeClock {
+	setTimeout(callback: () => void, milliseconds: number): unknown;
+	clearTimeout(timer: unknown): void;
+}
+
+const clock: WakeClock = {
+	setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
+	clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
+
 export interface WakePump {
-	/** The user typed: the host is (about to be) busy. */
 	onInput(): void;
-	/** A host turn is starting: no longer idle. */
 	onBeforeAgentStart(): void;
-	/** The host settled: it is idle now — drain anything pending. */
 	onSettled(): void;
-	/** Mail may have arrived (a subagent reported/retired): drain if idle. */
 	onMailArrived(): void;
-	/** Session teardown: never drain or inject again. */
+	/** Call after message persistence, never from message_end itself. */
+	onPersistence(): void;
 	shutdown(): void;
-	/** Test/introspection: is the host currently considered idle? */
 	readonly hostIdle: boolean;
 }
 
-export function createWakePump(port: WakePumpPort): WakePump {
+export function createWakePump(port: WakePumpPort, timers: WakeClock = clock): WakePump {
 	let hostIdle = false;
 	let stopped = false;
+	let timer: unknown;
+	let inFlight: WakeDigest | null = null;
 
-	const pump = (): void => {
-		if (!hostIdle || stopped) return;
-		const drained = port.takeDigest();
-		if (!drained) return;
-		// Flip BEFORE injecting: the injected turn is not idle, and a re-entrant
-		// pump() (via a nested settle/event during injection) must not drain again.
-		hostIdle = false;
-		port.inject(drained.digest);
-		drained.commit();
+	const cancelTimer = (): void => {
+		if (timer !== undefined) timers.clearTimeout(timer);
+		timer = undefined;
 	};
-
+	const acknowledge = (): boolean => {
+		try {
+			if (!inFlight || !port.isPersisted(inFlight.envelopeIds)) return false;
+			inFlight.commit();
+			inFlight = null;
+			return true;
+		} catch {
+			return false; // failed inspection/commit is not an acknowledgement
+		}
+	};
+	const schedule = (): void => {
+		if (stopped || !hostIdle || inFlight || timer !== undefined) return;
+		try {
+			if (!port.hasMail()) return;
+		} catch {
+			return;
+		}
+		// First-event deadline: subsequent completions cannot postpone this wake.
+		timer = timers.setTimeout(() => {
+			timer = undefined;
+			if (stopped || !hostIdle || inFlight) return;
+			try {
+				if (!port.isIdle()) return;
+				// Snapshot at fire, not at the first event: all completions in the window join.
+				const snapshot = port.takeDigest();
+				if (!snapshot) return;
+				inFlight = snapshot;
+				hostIdle = false;
+				snapshot.begin();
+				port.inject(snapshot.digest, snapshot.envelopeIds);
+				acknowledge();
+			} catch {
+				// A synchronous error may occur after persistence. Never duplicate that mail.
+				acknowledge();
+				inFlight = null;
+				hostIdle = true; // the next attempt still rechecks the actual host state
+				// Preserve pending mail; retry on the next lifecycle/mail event, not a hot loop.
+			}
+		}, 300);
+	};
+	const busy = (): void => {
+		cancelTimer();
+		hostIdle = false;
+	};
 	return {
-		onInput: () => {
-			hostIdle = false;
-		},
-		onBeforeAgentStart: () => {
-			hostIdle = false;
+		onInput: busy,
+		onBeforeAgentStart: busy,
+		onPersistence: () => {
+			if (!stopped) acknowledge();
 		},
 		onSettled: () => {
+			if (stopped) return;
 			hostIdle = true;
-			pump();
+			if (inFlight && !acknowledge()) {
+				// The run failed/interrupted before append. Keep mail and wait for another event.
+				inFlight = null;
+				return;
+			}
+			schedule();
 		},
-		onMailArrived: pump,
+		onMailArrived: schedule,
 		shutdown: () => {
 			stopped = true;
+			cancelTimer();
 		},
 		get hostIdle() {
 			return hostIdle;
 		},
 	};
+}
+
+/** Custom-message details are durable proof, unlike sendMessage's void return. */
+export function persistedMailIds(entries: readonly unknown[], customType: string): Set<string> {
+	const ids = new Set<string>();
+	for (const raw of entries) {
+		if (raw === null || typeof raw !== "object") continue;
+		const entry = raw as { type?: string; customType?: string; details?: { envelopeIds?: unknown } };
+		if (entry.type !== "custom_message" || entry.customType !== customType) continue;
+		const values = entry.details?.envelopeIds;
+		if (!Array.isArray(values)) continue;
+		for (const id of values) {
+			if (typeof id === "string") ids.add(id);
+		}
+	}
+	return ids;
 }

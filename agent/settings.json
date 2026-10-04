@@ -1,8 +1,8 @@
 {
   "defaultProvider": "openai-codex",
-  "defaultModel": "gpt6-astra",
-  "defaultThinkingLevel": "low",
-  "theme": "void-agent-one-dark",
+  "defaultModel": "gpt-6.1-sol",
+  "defaultThinkingLevel": "medium",
+  "theme": "void-agent-gruvbox",
   "packages": [
     "./configs/pi-agent/packages/pi-teams",
     "./configs/pi-agent/packages/pi-subagents",
@@ -17,7 +17,6 @@
     "./configs/pi-agent/packages/pi-codex-usage",
     "./configs/pi-agent/packages/pi-codex-web-search",
     "./configs/pi-agent/packages/pi-codex-image-generation",
-    "./configs/pi-agent/packages/pi-mcp-client",
     "./configs/pi-agent/packages/pi-commit",
     "./configs/pi-agent/packages/pi-session-name",
     "./configs/pi-agent/packages/pi-run-guard",
@@ -39,5 +38,6 @@
   ],
   "skills": [
     "./skills"
-  ]
+  ],
+  "lastChangelogVersion": "0.85.1"
 }

@@ -62,7 +62,7 @@ export interface SpawnOptions {
 	label?: string;
 	/** Default: "persistent" for typed spawns, "oneshot" for ad-hoc. */
 	lifetime?: Lifetime;
-	/** Optional first task — spawn + assign in one call (its envelope id is the await anchor). */
+	/** First task — required and non-empty for oneshots; optional for persistent get-or-create. Its envelope id is the await anchor. */
 	task?: string;
 	/** Session defaults for fields the def leaves unset. */
 	inherit?: InheritedDefaults;
@@ -204,9 +204,9 @@ export interface SubagentRuntime {
 	/**
 	 * Get-or-create on `<type>/<id>`: existing persistent agents wake with memory
 	 * intact. Enforces the lifetime rules (oneshots are auto-named; persistent
-	 * ad-hoc requires an explicit id). With a `task`, the turn runs
-	 * asynchronously — spawn returns once the agent is registered and
-	 * queued/running.
+	 * ad-hoc requires an explicit id; every oneshot requires a non-empty task).
+	 * With a `task`, the turn runs asynchronously — spawn returns once the agent
+	 * is registered and queued/running.
 	 */
 	spawn(options: SpawnOptions): Promise<SpawnResult>;
 

@@ -50,7 +50,8 @@ export function createSubagentTools(address: string, port: SubagentMailPort): To
 				...(params.final !== undefined ? { final: params.final } : {}),
 				...(params.data !== undefined ? { data: params.data } : {}),
 			});
-			return jsonResult({ reported: true, final: params.final === true, envelopeId: outcome.envelopeId });
+			if (!outcome.delivered) throw new Error(`Report not delivered (${outcome.disposition}): ${outcome.bounceReason ?? "unknown reason"}`);
+			return jsonResult({ reported: true, final: params.final === true, envelopeId: outcome.envelopeId }, params.final === true);
 		},
 	};
 

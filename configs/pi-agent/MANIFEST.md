@@ -1,6 +1,6 @@
 # Pi configuration manifest
 
-Pi packages live under `packages/<name>/` and are enabled through portable relative paths in root `settings.json` and mirrored `agent/settings.json`. The tracked `agent/` compatibility shims expose the same activation surface from Pi's effective global agent directory when the repository is cloned as `~/.pi`; when cloned directly to `~/.pi/agent`, the root files are active and the nested shims are dormant.
+Pi packages live under `packages/<name>/` and are enabled through portable paths in `agent/settings.json`, relative to the effective agent directory. Clone the whole repository to `~/.pi`; the `agent/` resource shims expose its packages and shared resources. MCP uses Pi's built-in support (Pi 0.99.0 or later), not a local package. See the root README's MCP migration instructions before reusing an existing server configuration.
 
 ## Enabled extensions
 
@@ -17,7 +17,6 @@ Pi packages live under `packages/<name>/` and are enabled through portable relat
 | `pi-codex-usage` | Shortest available Codex rate-limit status and all-window `/codex-usage` details |
 | `pi-codex-web-search` | LLM-callable `web_search` backed by an isolated ephemeral Codex app-server turn and ChatGPT login |
 | `pi-codex-image-generation` | LLM-callable `image_generation` backed by an isolated ephemeral Codex image-generation turn and ChatGPT login |
-| `pi-mcp-client` | Local stdio MCP client with machine-local multi-server config, namespaced tools, confirmation gates, and progressive discovery |
 | `void-agent` | Bundled Void Agent theme family and presentation extension, plus a pre-trust guard that prevents the portable global `.pi` tree from loading again as project config through a bind-mount/path alias and suppresses the resulting misleading warning. Ships palettes `void-agent` (default) plus `void-agent-{gruvbox,tokyo-night,nord,one-dark,catppuccin,kanagawa}` (identical role-map, colors only) — Pi's native picker owns selection/persistence; the default is seeded once on first run, never re-forced. Prompt field, working indicator (random accent spinners incl. blinking star pulse, `label… (elapsed · ↓ tokens)` with run-cumulative counts, three-line full-width black↔prompt-gray background block with theme-green Matrix rain and a random per-run animation: breathe/aurora/comet/shimmer; persistent `/matrix` and `/working-animation` controls), and tool-turn separators without replacing tool definitions, status lines, or widgets |
 | `pi-commit` | `/commit [--dry-run]` grouped Git review, lazy model-generated descriptions, and path-scoped commits |
 | `pi-git-status` | CWD and rich Git status producer for the shared status row |
@@ -33,7 +32,7 @@ Pi packages live under `packages/<name>/` and are enabled through portable relat
 | `pi-session-name` | Session naming commands |
 | `pi-show-files` | LLM-callable `show_files` curated file browser |
 | `pi-status-line` | Shared above-editor row plus dynamic two-line footer layout |
-| `pi-subagents` | **Subagents** — labeled background fan-out workers (`/subagents`): seven `subagent_*` tools, typed or ad-hoc spawns, persistent or oneshot lifetimes, parallel under a configurable cap, join by `subagent_await` or idle auto-wake. `subagent_spawn` requires an LLM-authored display label; the above-editor tree shows that label plus live tool count, cumulative tokens, context fill, and current tool. Strict hub-and-spoke (no peer mail, no nesting); pi-safety-gated tool calls (`subagents:confirm-request`); narrow-width metric preservation; `alt+a` stop brake; no footer segment. Runs alongside `pi-teams`. Plan: `configs/pi-agent/docs/agents/plans/pi-agent/pi-subagents/pi-subagents.md`. |
+| `pi-subagents` | **Subagents** — labeled background fan-out workers (`/subagents`): seven `subagent_*` tools, typed or ad-hoc spawns, persistent or oneshot lifetimes, parallel under a configurable cap, join by `subagent_await` or idle auto-wake. `subagent_spawn` requires an LLM-authored display label, and oneshots require a non-empty initial task; explicit awaits reject unknown assignment anchors. The above-editor tree shows each label plus live tool count, cumulative tokens, context fill, and current tool. Strict hub-and-spoke (no peer mail, no nesting); pi-safety-gated tool calls (`subagents:confirm-request`); narrow-width metric preservation; `alt+a` stop brake; no footer segment. Runs alongside `pi-teams`. Plan: `configs/pi-agent/docs/agents/plans/pi-agent/pi-subagents/pi-subagents.md`. |
 | `pi-timers` | Main-agent-only `manage_timers` tool for up to five in-process recurring wake-ups with unlimited recurrence by default and optional finite run limits, plus a live countdown tree, `Alt+R` cancellation picker, `/timers` status/cancel command, busy-tick coalescing, and shutdown cleanup |
 | `pi-todo` | LLM-callable `todo_write` Claude Code-style task list: above-editor checklist widget under a simple always-on `󰝖 Todos · n/m` title (shown working or idle) with bottom padding and active-item truncation windowing, `Alt+O` expand/collapse/hide cycle (the only user control — no slash command), and restore-on-resume |
 | `pi-tool-monitor` | Plain active-tool status producer and `/tools` |
@@ -41,7 +40,7 @@ Pi packages live under `packages/<name>/` and are enabled through portable relat
 
 ## Theme and keybindings
 
-The active theme is `void-agent-one-dark`, bundled at `packages/void-agent/themes/void-agent-one-dark.json` and selected by root `settings.json` plus `agent/settings.json`.
+The active theme is selected by `agent/settings.json` from the bundled themes under `packages/void-agent/themes/`.
 
 Keybindings are stored at root `keybindings.json` and mirrored in `agent/keybindings.json`. `Shift+Tab` is reserved for Plan mode, thinking-level cycling uses `Alt+T`, and forward model cycling uses `Alt+M`.
 

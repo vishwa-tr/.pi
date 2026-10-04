@@ -185,6 +185,53 @@ test("trusted-tool policy is provenance-aware and mode-specific", () => {
 	assert.equal(isTrustedTool(wrongScope, trustedOwners), false);
 });
 
+test("relative package specs use resolved provenance for activation and execution", () => {
+	const tools = trustedTools.map((tool) => {
+		if (tool.sourceInfo.source === "builtin") return tool;
+		const packageName = tool.sourceInfo.source.split("/").at(-1);
+		return {
+			...tool,
+			sourceInfo: {
+				...tool.sourceInfo,
+				source: `./configs/pi-agent/packages/${packageName}`,
+				baseDir: tool.sourceInfo.source,
+			},
+		};
+	});
+	const baseline = ["read", "bash", "ask_user", "show_files", "todo_write"];
+	for (const mode of ["discuss", "plan", "quick", "plan"] as const) {
+		assert.deepEqual(
+			restrictedModeTools(mode, baseline, tools, trustedOwners),
+			restrictedModeTools(mode, baseline, trustedTools, trustedOwners),
+		);
+		for (const tool of tools) {
+			assert.equal(
+				isToolAllowedInMode(mode, tool, trustedOwners),
+				isToolAllowedInMode(mode, trustedTools.find((item) => item.name === tool.name), trustedOwners),
+				`${mode}: ${tool.name}`,
+			);
+		}
+	}
+	assert.ok(restrictedModeTools("plan", [], tools, trustedOwners).includes(SAVE_PLAN_TOOL));
+});
+
+test("resolved package provenance still rejects mismatched owners and scopes", () => {
+	const saved = packageTool(SAVE_PLAN_TOOL, "pi-plan", "extensions/plan/index.ts");
+	const sourceInfo = { ...saved.sourceInfo, baseDir: saved.sourceInfo.source };
+	for (const changed of [
+		{ baseDir: "/other/packages/pi-plan" },
+		{ path: "/other/packages/pi-plan/extensions/plan/index.ts" },
+		{ scope: "project" },
+		{ scope: "temporary" },
+		{ origin: "top-level" },
+	]) {
+		const tool = { ...saved, sourceInfo: { ...sourceInfo, ...changed } };
+		assert.equal(isTrustedTool(tool, trustedOwners), false);
+		assert.equal(isToolAllowedInMode("plan", tool, trustedOwners), false);
+		assert.deepEqual(restrictedModeTools("plan", [], [tool], trustedOwners), []);
+	}
+});
+
 test("state parsing supports all modes, Plan child scope, and legacy booleans", () => {
 	assert.deepEqual(
 		parseAgentModeState({

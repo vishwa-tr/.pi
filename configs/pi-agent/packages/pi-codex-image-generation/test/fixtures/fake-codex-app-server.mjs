@@ -5,7 +5,7 @@ import readline from "node:readline";
 const mode = process.env.FAKE_CODEX_MODE || "success";
 const requestLog = process.env.FAKE_REQUEST_LOG;
 const childPidFile = process.env.FAKE_CHILD_PID_FILE;
-const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2mNoAAAAASUVORK5CYII=";
+const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/5ncLrgAAAABJRU5ErkJggg==";
 const threadId = "thread-1";
 const turnId = "turn-1";
 

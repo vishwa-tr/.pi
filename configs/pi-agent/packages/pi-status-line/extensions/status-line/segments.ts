@@ -77,9 +77,9 @@ function collectUsage(ctx: ExtensionContext) {
 }
 
 function contextColor(percent: number): "dim" | "success" | "warning" | "error" {
-	if (percent > 90) return "error";
-	if (percent > 70) return "warning";
-	if (percent > 50) return "success";
+	if (percent > 70) return "error";
+	if (percent > 50) return "warning";
+	if (percent > 30) return "success";
 	return "dim";
 }
 

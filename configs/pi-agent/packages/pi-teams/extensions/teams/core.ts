@@ -9,7 +9,8 @@ import type { CreateAgentSessionServicesOptions, ModelRegistry, SettingsManager 
 import { collectResultNote, validateAgainstSchema } from "./mail/collect.ts";
 import { composeWakeDigest, type DigestItem } from "./mail/digest.ts";
 import { parseAddress } from "./mail/envelope.ts";
-import { markDone, peekCollectRequest, pendingCount, readPending, takeCollectRequest } from "./mail/mailbox.ts";
+import { beginDelivery, markDone, peekCollectRequest, pendingCount, readPending, takeCollectRequest } from "./mail/mailbox.ts";
+import type { WakeDigest } from "./mail/wake-pump.ts";
 import { makeHopsGuard } from "./rails/hops.ts";
 import type { ConfirmFn } from "./sandbox/safety-bridge.ts";
 import { InProcessRuntime } from "./runtime/in-process.ts";
@@ -71,13 +72,12 @@ export interface SubagentsCore {
 	/**
 	 * Compose a wake digest from the main mailbox WITHOUT consuming it, plus a
 	 * `commit()` that marks the drained envelopes done and clears fulfilled collect
-	 * requests. The caller commits only AFTER handing the wake to the SDK — which
-	 * accepts synchronously (pi.sendMessage returns void), so a throwing injection
-	 * can't lose main mail; a later async delivery failure inside the SDK can.
+	 * requests. Commit only after transcript acknowledgement. Persisted IDs
+	 * reconcile deliveries interrupted before commit.
 	 * Collect results are validated against their request schema (findings #9/#10).
 	 * Returns null when there is no pending main mail.
 	 */
-	takeMainMailDigest(): { digest: string; commit: () => void } | null;
+	takeMainMailDigest(persistedIds?: ReadonlySet<string>): WakeDigest | null;
 	/** Unprocessed envelopes in a subagent's mailbox (picker badge). */
 	agentUnreadCount(address: string): number;
 	/** Retired agents still on disk in .archive (D13). */
@@ -151,11 +151,21 @@ export function createCore(options: CoreOptions): SubagentsCore {
 		retire: (to) => runtime.retire(to),
 		onEvent: (listener) => runtime.onEvent(listener),
 		mainUnreadCount: () => pendingCount(options.layout.mainMailboxDir),
-		takeMainMailDigest(): { digest: string; commit: () => void } | null {
+		takeMainMailDigest(persistedIds = new Set<string>()): WakeDigest | null {
 			const box = options.layout.mainMailboxDir;
-			const pending = readPending(box);
+			const allPending = readPending(box);
+			const commitItems = (items: typeof allPending): void => {
+				for (const p of items) {
+					if (p.envelope.type === "report" && p.envelope.correlationId &&
+						peekCollectRequest(box, p.envelope.correlationId, p.envelope.from) !== undefined) {
+						takeCollectRequest(box, p.envelope.correlationId);
+					}
+					markDone(box, p.envelope.id);
+				}
+			};
+			commitItems(allPending.filter((p) => persistedIds.has(p.envelope.id)));
+			const pending = allPending.filter((p) => !persistedIds.has(p.envelope.id));
 			if (pending.length === 0) return null;
-			const collectToClear: string[] = [];
 			const items: DigestItem[] = pending.map((p) => {
 				const item: DigestItem = { envelope: p.envelope, redelivered: p.redelivered };
 				if (p.envelope.type === "report" && p.envelope.correlationId) {
@@ -163,17 +173,16 @@ export function createCore(options: CoreOptions): SubagentsCore {
 					const schema = peekCollectRequest(box, p.envelope.correlationId, p.envelope.from);
 					if (schema !== undefined) {
 						item.note = collectResultNote(validateAgainstSchema(p.envelope.payload.data, schema));
-						collectToClear.push(p.envelope.correlationId);
 					}
 				}
 				return item;
 			});
-			const digest = composeWakeDigest({ items, questionLookup: () => undefined });
-			const commit = (): void => {
-				for (const correlationId of collectToClear) takeCollectRequest(box, correlationId);
-				for (const p of pending) markDone(box, p.envelope.id);
+			return {
+				digest: composeWakeDigest({ items, questionLookup: () => undefined }),
+				envelopeIds: pending.map((p) => p.envelope.id),
+				begin: () => { for (const p of pending) beginDelivery(box, p.envelope.id); },
+				commit: () => commitItems(pending),
 			};
-			return { digest, commit };
 		},
 		agentUnreadCount: (address) => {
 			const to = parseAddress(address);

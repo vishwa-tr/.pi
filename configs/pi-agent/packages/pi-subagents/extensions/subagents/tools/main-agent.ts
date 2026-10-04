@@ -38,7 +38,7 @@ const SpawnParams = Type.Object({
 		Type.String({ description: "Type definition name from global or project subagents; exclusive with prompt." }),
 	),
 	prompt: Type.Optional(
-		Type.String({ description: "Ad-hoc role prompt; exclusive with type." }),
+		Type.String({ description: "Ad-hoc role prompt; exclusive with type. This defines the role, not the initial task." }),
 	),
 	id: Type.Optional(
 		Type.String({ description: "Instance id. Required for persistent ad-hoc agents; omit for oneshots. Typed persistent agents default to main." }),
@@ -54,7 +54,9 @@ const SpawnParams = Type.Object({
 				"persistent keeps named memory across follow-ups and resume; oneshot auto-retires after its report. Defaults: typed→persistent, ad-hoc→oneshot.",
 		}),
 	),
-	task: Type.Optional(Type.String({ description: "Initial background task; taskEnvelopeId is its await anchor." })),
+	task: Type.Optional(
+		Type.String({ minLength: 1, description: "Initial background task; required for oneshots. taskEnvelopeId is its await anchor." }),
+	),
 	model: Type.Optional(Type.String({ description: "Ad-hoc only: provider/model override." })),
 	thinking: Type.Optional(
 		Type.Union(THINKING_LEVELS.map((level) => Type.Literal(level)), { description: "Ad-hoc only: thinking override." }),
@@ -71,9 +73,10 @@ export function createSpawnTool(getCore: GetCore): ToolDefinition<typeof SpawnPa
 		label: "Spawn subagent",
 		description:
 			"Spawn a typed or ad-hoc background subagent. Persistent addresses are get-or-create and keep memory; oneshots " +
-			"auto-retire. Results arrive asynchronously; await them or keep working. Subagents cannot coordinate with peers.",
+			"require a task and auto-retire. Results arrive asynchronously; await them or keep working. Subagents cannot coordinate with peers.",
 		promptGuidelines: [
 			"Always give subagent_spawn a concise, task-specific label so the user sees a meaningful name in the subagent widget.",
+			"Always include a non-empty task for oneshot spawns; an ad-hoc prompt defines the role and never substitutes for the task.",
 		],
 		parameters: SpawnParams,
 		prepareArguments(args): SpawnInput {

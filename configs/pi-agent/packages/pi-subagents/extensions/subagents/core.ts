@@ -8,7 +8,8 @@ import type { CreateAgentSessionServicesOptions, ModelRegistry, SettingsManager 
 import { createHash } from "node:crypto";
 import { composeWakeDigest, type DigestItem } from "./mail/digest.ts";
 import { parseAddress, terminalTaskAnchors } from "./mail/envelope.ts";
-import { markDone, pendingCount, readPending } from "./mail/mailbox.ts";
+import { beginDelivery, markDone, pendingCount, readPending } from "./mail/mailbox.ts";
+import type { WakeDigest } from "./mail/wake-pump.ts";
 import { closeAllFor, closeOpenTask } from "./store/open-tasks.ts";
 import type { ConfirmFn } from "./sandbox/safety-bridge.ts";
 import { InProcessRuntime } from "./runtime/in-process.ts";
@@ -71,12 +72,11 @@ export interface SubagentsCore {
 	/**
 	 * Compose a wake digest from the main mailbox WITHOUT consuming it, plus a
 	 * `commit()` that marks the drained envelopes done and closes the open tasks
-	 * completed by final reports / fatal errors. The caller commits only AFTER
-	 * handing the wake to the SDK — which accepts synchronously (pi.sendMessage
-	 * returns void), so a throwing injection can't lose main mail.
+	 * completed by final reports / fatal errors. Commit only after transcript
+	 * acknowledgement. Persisted IDs reconcile deliveries interrupted before commit.
 	 * Returns null when there is no pending main mail.
 	 */
-	takeMainMailDigest(): { digest: string; commit: () => void } | null;
+	takeMainMailDigest(persistedIds?: ReadonlySet<string>): WakeDigest | null;
 	/** Unprocessed envelopes in a subagent's mailbox (picker badge). */
 	agentUnreadCount(address: string): number;
 	/** Retired agents still on disk in .archive. */
@@ -140,31 +140,37 @@ export function createCore(options: CoreOptions): SubagentsCore {
 		retire: (to) => runtime.retire(to),
 		onEvent: (listener) => runtime.onEvent(listener),
 		mainUnreadCount: () => pendingCount(options.layout.mainMailboxDir),
-		takeMainMailDigest(): { digest: string; commit: () => void } | null {
+		takeMainMailDigest(persistedIds = new Set<string>()): WakeDigest | null {
 			const box = options.layout.mainMailboxDir;
-			const pending = readPending(box);
-			if (pending.length === 0) return null;
-			const items: DigestItem[] = pending.map((p) => ({ envelope: p.envelope, redelivered: p.redelivered }));
-			const digest = composeWakeDigest({ items });
-			const commit = (): void => {
+			const allPending = readPending(box);
+			const commitItems = (pending: typeof allPending): void => {
 				for (const p of pending) {
-					markDone(box, p.envelope.id);
-					// A consumed final report/error closes only the exact task snapshot
-					// persisted on that terminal envelope.
+					// Close only the terminal envelope's task snapshot before moving mail:
+					// a failed index write leaves the envelope available for reconciliation.
 					const from = parseAddress(p.envelope.from);
-					if (from?.kind !== "agent") continue;
 					const terminal =
 						(p.envelope.type === "report" && p.envelope.payload.final === true) || p.envelope.type === "error";
-					if (!terminal) continue;
-					const anchors = terminalTaskAnchors(p.envelope);
-					if (anchors.kind === "anchors") {
-						for (const anchorId of anchors.anchors) closeOpenTask(options.layout.openTasksFile, anchorId);
-					} else {
-						closeAllFor(options.layout.openTasksFile, p.envelope.from); // legacy unscoped error
+					if (from?.kind === "agent" && terminal) {
+						const anchors = terminalTaskAnchors(p.envelope);
+						if (anchors.kind === "anchors") {
+							for (const anchorId of anchors.anchors) closeOpenTask(options.layout.openTasksFile, anchorId);
+						} else {
+							closeAllFor(options.layout.openTasksFile, p.envelope.from); // legacy unscoped error
+						}
 					}
+					markDone(box, p.envelope.id);
 				}
 			};
-			return { digest, commit };
+			commitItems(allPending.filter((p) => persistedIds.has(p.envelope.id)));
+			const pending = allPending.filter((p) => !persistedIds.has(p.envelope.id));
+			if (pending.length === 0) return null;
+			const items: DigestItem[] = pending.map((p) => ({ envelope: p.envelope, redelivered: p.redelivered }));
+			return {
+				digest: composeWakeDigest({ items }),
+				envelopeIds: pending.map((p) => p.envelope.id),
+				begin: () => { for (const p of pending) beginDelivery(box, p.envelope.id); },
+				commit: () => commitItems(pending),
+			};
 		},
 		agentUnreadCount: (address) => {
 			const to = parseAddress(address);

@@ -27,9 +27,15 @@ No separate OpenAI API key is required.
 - `inputImages` is optional and accepts up to four PNG, JPEG, WebP, or GIF files.
 - `overwrite` defaults to `false`; symbolic-link outputs are never replaced.
 
-The request is validated before network use. The result is saved atomically through a descriptor-anchored parent directory and returned to Pi as an inline image preview. On Windows, a bundled Python helper runs locally under WSL and performs the same handle-relative validation and commit without receiving the prompt or any source image.
+The request is validated before network use. The result is saved atomically through a descriptor-anchored parent directory. Successful tool content is text only: generated/edited, saved path, MIME type, byte length, and completion status. Revised prompts and complete result metadata remain in `details`, not model-visible content.
+
+Interactive TUI calls retain an immediate inline preview through the result renderer (when image display is enabled and the terminal supports it). Preview bytes are stored only in TUI result `details`, so they can be rendered again after session reload without rereading a changed file. Headless/print/JSON/RPC calls return the same text metadata without preview bytes. The preview does not give the model visual access: explicitly use `read` on the saved path when visual inspection is needed. Reading an image remains an intentional way to attach it to model context.
+
+On Windows, a bundled Python helper runs locally under WSL and performs the same handle-relative validation and commit without receiving the prompt or any source image.
 
 ## Privacy and isolation
+
+Use this tool only after an explicit user request authorizes that specific generation or edit. Send only the minimum necessary prompt and source images; never include secrets, credentials, unrelated files, or unrelated conversation context.
 
 Each call sends the explicit prompt, static image-worker instructions, and any listed input images to OpenAI through the user's Codex login. The extension does not place Pi's conversation, system prompt, repository contents, output path, credential values, or unrelated files in model input or logs.
 

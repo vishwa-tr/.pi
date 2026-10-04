@@ -48,6 +48,18 @@ completed, accent in-progress, normal text pending).
 
   System-prompt guidance also keeps the completed final list visible with the final
   report instead of immediately clearing it.
+
+  The widget is the only surface that draws the list. An accepted call renders no
+  result body under the tool row — the call line already carries the done-count and
+  the active item — so the checklist is never on screen twice and scrollback does
+  not fill with stale copies. Rejected calls still render their message.
+- **Finished checklists** — when every item is completed the list is no longer
+  tracking anything. It stays visible with the final report, then the runtime
+  drops it when the next user message is delivered (`message_end`), including
+  queued follow-ups. Retries and custom extension wakes do not clear it. This is the one
+  deterministic removal: nothing is lost, because nothing was outstanding. Lists
+  with unfinished work never go this way — telling a follow-up from a pivot needs
+  the model, and that stays the semantic decision below.
 - **Task/topic pivots** — before each model call, an ephemeral lower-trust context
   message exposes every current checklist identity so the model can distinguish a
   continuation from a clear move to different work, including after compaction. The
@@ -72,7 +84,8 @@ completed, accent in-progress, normal text pending).
   `… +n more · alt+o` marker rows.
 - **Resume and branches** — on `session_start` and `session_tree`, the list is rebuilt
   from the most recent successful `todo_write` result on the active branch. Rejected
-  calls and abandoned branches cannot become live state, while `/reload`, resume,
+  calls and abandoned branches cannot become live state. Later user messages retire
+  completed snapshots during replay too, so cleared lists cannot reappear. `/reload`, resume,
   fork/clone, and tree navigation retain the correct snapshot without extra files.
 
 ## Layout

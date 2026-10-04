@@ -1,6 +1,6 @@
 /**
  * Phase-5 auto-wake e2e: the wake pump policy (idle gating, flip-before-inject,
- * commit-after-accept, shutdown), the REAL WAKE_DELIVERY shape exported by
+ * persisted acknowledgement, shutdown), the REAL WAKE_DELIVERY shape exported by
  * index.ts, per-finish wakes through a real core, and digest-commit closing
  * open tasks on final reports / fatal errors.
  *
@@ -11,46 +11,13 @@ import { join } from "node:path";
 import { EXT, jiti } from "./env.mjs";
 import { makeWorld, test, summary, until } from "./harness.mjs";
 
-const { createWakePump } = await jiti.import(join(EXT, "mail/wake-pump.ts"));
 const { WAKE_DELIVERY } = await jiti.import(join(EXT, "index.ts"));
 const { readPending, writeEnvelope } = await jiti.import(join(EXT, "mail/mailbox.ts"));
 const { makeEnvelope } = await jiti.import(join(EXT, "mail/envelope.ts"));
 const { readOpenTasks, recordOpenTask } = await jiti.import(join(EXT, "store/open-tasks.ts"));
 
-console.log("wake pump (pure policy):");
-await test("mail arriving mid-turn waits for settle; drained exactly once", () => {
-	const injected = [];
-	let commits = 0;
-	let queue = null;
-	const pump = createWakePump({
-		takeDigest: () => (queue ? { digest: queue, commit: () => { commits++; queue = null; } } : null),
-		inject: (digest) => injected.push(digest),
-	});
-	pump.onBeforeAgentStart(); // host busy
-	queue = "digest-1";
-	pump.onMailArrived();
-	assert.equal(injected.length, 0, "mid-turn mail not injected");
-	pump.onSettled();
-	assert.deepEqual(injected, ["digest-1"]);
-	assert.equal(commits, 1, "committed after inject");
-	pump.onMailArrived();
-	assert.equal(injected.length, 1, "the injected turn is not idle — no re-drain");
-});
-await test("shutdown stops all draining; user input flips busy", () => {
-	const injected = [];
-	let queue = "digest-2";
-	const pump = createWakePump({ takeDigest: () => (queue ? { digest: queue, commit: () => { queue = null; } } : null), inject: (d) => injected.push(d) });
-	pump.onSettled();
-	assert.deepEqual(injected, ["digest-2"]);
-	queue = "digest-3";
-	pump.onInput();
-	pump.onMailArrived();
-	assert.equal(injected.length, 1, "typing user = busy host");
-	pump.shutdown();
-	pump.onSettled();
-	assert.equal(injected.length, 1, "nothing after shutdown — mail survives for next session");
-	assert.equal(queue, "digest-3", "uncommitted");
-});
+await import("./wake-policy.mjs");
+await import("./lifecycle-runtime.mjs");
 
 console.log("wake delivery shape:");
 await test("index.ts injects with followUp + triggerTurn (the idle auto-wake)", () => {

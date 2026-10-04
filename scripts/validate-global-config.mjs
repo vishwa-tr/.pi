@@ -1,21 +1,16 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync, spawnSync } from "node:child_process";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, lstatSync, readFileSync, readlinkSync, readdirSync } from "node:fs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
 const notes = [];
 
-const EXPECTED_PACKAGE_COUNT = 32;
-const EXPECTED_SKILL_COUNT = 31;
-const EXPECTED_PROVIDER = "openai-codex";
-const EXPECTED_MODEL = "gpt-5.6-sol";
-const EXPECTED_THINKING_LEVEL = "high";
-const EXPECTED_THEME = "void-agent-one-dark";
-const ROOT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
+const EXPECTED_PACKAGE_COUNT = 31;
+const EXPECTED_SKILL_COUNT = 28;
 const AGENT_PACKAGE_PREFIX = "./configs/pi-agent/packages/";
 
 function fail(message) {
@@ -47,7 +42,7 @@ function sameJson(a, b) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix, checkPackageFiles = true) {
+function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix) {
   if (!Array.isArray(settings.packages)) {
     fail(`${settingsRelPath} packages must be an array`);
     return;
@@ -70,7 +65,6 @@ function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix, 
     if (packagePath.includes("_archive") || packagePath.toLowerCase().includes("/archive/")) {
       fail(`${settingsRelPath} active package points into an archive: ${packagePath}`);
     }
-    if (!checkPackageFiles) continue;
     const absolutePackage = resolve(baseDir, packagePath);
     let stat;
     try {
@@ -100,55 +94,39 @@ function validatePackageList(settings, settingsRelPath, baseDir, packagePrefix, 
   }
 }
 
-function validateSettingsFile({ relativePath, baseDir, allowedKeys, packagePrefix, expectedSkills, checkPackageFiles = true }) {
+function validateSettingsFile({ relativePath, baseDir, allowedKeys, optionalKeys = [], packagePrefix, expectedSkills }) {
   const settings = readJson(join(root, relativePath));
   if (!settings) return undefined;
   const keys = Object.keys(settings).sort();
-  if (!sameJson(keys, [...allowedKeys].sort())) {
-    fail(`${relativePath} must contain only ${allowedKeys.map((key) => JSON.stringify(key)).join(", ")}; found: ${keys.join(", ")}`);
+  const acceptedKeys = new Set([...allowedKeys, ...optionalKeys]);
+  const unknownKeys = keys.filter((key) => !acceptedKeys.has(key));
+  const missingKeys = allowedKeys.filter((key) => !Object.hasOwn(settings, key));
+  if (unknownKeys.length > 0) {
+    fail(`${relativePath} contains unsupported setting keys: ${unknownKeys.join(", ")}`);
   }
-  if (settings.defaultProvider !== EXPECTED_PROVIDER) {
-    fail(`${relativePath} default provider must be ${EXPECTED_PROVIDER}; found: ${JSON.stringify(settings.defaultProvider)}`);
+  if (missingKeys.length > 0) {
+    fail(`${relativePath} is missing required setting keys: ${missingKeys.join(", ")}`);
   }
-  if (settings.defaultModel !== EXPECTED_MODEL) {
-    fail(`${relativePath} default model must be ${EXPECTED_MODEL}; found: ${JSON.stringify(settings.defaultModel)}`);
-  }
-  if (settings.defaultThinkingLevel !== EXPECTED_THINKING_LEVEL) {
-    fail(`${relativePath} default thinking level must be ${EXPECTED_THINKING_LEVEL}; found: ${JSON.stringify(settings.defaultThinkingLevel)}`);
-  }
-  if (settings.theme !== EXPECTED_THEME) {
-    fail(`${relativePath} theme must be ${EXPECTED_THEME}; found: ${JSON.stringify(settings.theme)}`);
+  for (const preference of ["defaultProvider", "defaultModel", "defaultThinkingLevel", "theme"]) {
+    if (settings[preference] !== undefined && typeof settings[preference] !== "string") {
+      fail(`${relativePath} ${preference} must be a string when present; found: ${JSON.stringify(settings[preference])}`);
+    }
   }
   if (expectedSkills !== undefined && !sameJson(settings.skills, expectedSkills)) {
     fail(`${relativePath} skills must be ${JSON.stringify(expectedSkills)}; found: ${JSON.stringify(settings.skills)}`);
   }
-  validatePackageList(settings, relativePath, baseDir, packagePrefix, checkPackageFiles);
+  validatePackageList(settings, relativePath, baseDir, packagePrefix);
   return settings;
 }
 
-const rootSettings = validateSettingsFile({
-  relativePath: "settings.json",
-  baseDir: root,
-  allowedKeys: ["defaultModel", "defaultProvider", "defaultThinkingLevel", "packages", "theme"],
-  packagePrefix: ROOT_PACKAGE_PREFIX,
-});
-// The agent/ shim is active when the repository is checked out one level above
-// Pi's effective agent dir (repo at ~/.pi, live config at ~/.pi/agent). When the
-// repository is checked out directly as ~/.pi/agent, these nested shims are
-// dormant; validate their JSON shape but not the intentionally out-of-layout
-// symlink targets.
-const agentShimActive = existsSync(join(root, "agent", "configs", "pi-agent", "packages"));
 const agentSettings = validateSettingsFile({
   relativePath: "agent/settings.json",
   baseDir: join(root, "agent"),
   allowedKeys: ["defaultModel", "defaultProvider", "defaultThinkingLevel", "packages", "skills", "theme"],
+  optionalKeys: ["lastChangelogVersion"],
   packagePrefix: AGENT_PACKAGE_PREFIX,
   expectedSkills: ["./skills"],
-  checkPackageFiles: agentShimActive,
 });
-if (rootSettings && agentSettings && !sameJson(rootSettings.packages, agentSettings.packages)) {
-  fail("agent/settings.json packages must mirror root settings.json packages");
-}
 
 function validateKeybindings(relativePath) {
   const keybindings = readJson(join(root, relativePath));
@@ -265,7 +243,7 @@ const issueMaintenanceEvalItems = issueMaintenanceEvals?.evals;
 if (!Array.isArray(issueMaintenanceEvalItems)) {
   fail("github-issue-maintenance evals must be an array");
 } else {
-  const expectedEvalIds = Array.from({ length: 18 }, (_, index) => index + 1);
+  const expectedEvalIds = Array.from({ length: 30 }, (_, index) => index + 1);
   const actualEvalIds = issueMaintenanceEvalItems.map((item) => item?.id);
   if (!sameJson(actualEvalIds, expectedEvalIds)) {
     fail(`github-issue-maintenance eval IDs must be ${expectedEvalIds.join(", ")}`);
@@ -278,77 +256,85 @@ if (!Array.isArray(issueMaintenanceEvalItems)) {
     }
   }
 }
-const issueMaintenanceSkill = readFileSync(join(root, "skills", "github-issue-maintenance", "SKILL.md"), "utf8");
-for (const requiredText of [
+// The portable workflow owns policy; Pi-specific lifecycle details live in its adapter.
+requireGuidance("skills/github-issue-maintenance/SKILL.md", [
   "Do not create an `issue-maintainer` subagent",
-  "within the current owning main Pi session",
-  "subagent_spawn",
-  "subagent_send",
-  "subagent_await",
-  "subagent_retire",
-  "ownerScopeId",
-  "<issue-team-id>",
-  "whatever model the user selected",
-  "automatic retirement after verified issue closure",
-  "Never reuse a retired epoch ID",
-  "canonical base-10 `1..9999999999`",
-  "canonical base-10 `0..9999999999`",
-  "repository ID is at most 226 characters",
-  "issue-team ID at most 250 characters",
-  "Establish specialists only after the main agent owns a durable claim",
-  "Reuse the same fix-issue pair across every pass",
-  "later verified reopen is the next epoch's start delimiter",
+  "Without an explicit run request, do not create claims or ledgers",
+  "[Pi runtime adapter](references/pi-runtime.md)",
+  "persistent, issue-scoped worker/reviewer instances, independent review",
+  "explicit true/false gates",
+  "separate worker publication assignment",
+  "Do not bypass review to publish",
+  "Never replay history to promote a rejected claim",
+  "Require a dedicated isolated worktree for each fix-issue epoch",
+  "Include the resolved base branch/ref in the brief",
+  "A later reopen starts a new epoch",
   "partial-retirement",
-  "do not establish any next-epoch pair",
+  "both retirements and roster absence are verified",
+  "keep private paths, session IDs, team bindings, and ledgers out of GitHub text",
+]);
+requireGuidance("skills/github-issue-maintenance/references/pi-runtime.md", [
+  "subagent_status", "subagent_spawn", "subagent_send", "subagent_await", "subagent_retire",
+  "ownerScopeId",
+  "<repo-id>-i<issue-number>-e<epoch-index>",
+  "canonical decimal issue number `1..9999999999` and epoch index `0..9999999999`",
+  "repository ID is at most 226 characters and the team ID at most 250",
+  "Never guess the index after history/state loss or reuse a retired ID",
+  "Bindings must include the host",
+  "Only after verified ownership of a durable claim",
+  "require exact host/repository/issue/epoch/team/scope equality",
+  "both recorded addresses in the roster",
+  "Await the exact `{to, anchorId}`",
+  "`error`: stop and report failure",
+  "`retired`: the persistent specialist disappeared",
+  "A completed final `waiting`/`blocked` report with a question consumes that anchor",
+  "Execute only under the run's authorized `after-verified-closure` policy",
+  "partial-retirement",
+  "absence alone is not proof",
+  "Until then, do not create a next-epoch pair",
+]);
+requireGuidance("configs/pi-agent/docs/agents/notes/pi-agent/main-agent-issue-maintenance/main-agent-issue-maintenance.md", [
+  "[Maintenance workflow](../../../../../../../skills/github-issue-maintenance/SKILL.md)",
+  "[Pi runtime adapter](../../../../../../../skills/github-issue-maintenance/references/pi-runtime.md)",
+  "[Evaluation scenarios](../../../../../../../skills/github-issue-maintenance/evals/evals.json)",
   "Review cannot be bypassed",
-  "commits, pushes, and PR publication must each be explicit",
-  "never in public GitHub text",
-  "status: \"error\"",
-  "status: \"retired\"",
-]) {
-  if (!issueMaintenanceSkill.includes(requiredText)) {
-    fail(`github-issue-maintenance is missing required orchestration guidance: ${requiredText}`);
-  }
-}
-const issueMaintenanceNote = readFileSync(join(root, "configs", "pi-agent", "docs", "agents", "notes", "pi-agent", "main-agent-issue-maintenance", "main-agent-issue-maintenance.md"), "utf8");
-const issueMaintenanceEvalText = JSON.stringify(issueMaintenanceEvals);
-for (const [source, content] of [["skill", issueMaintenanceSkill], ["note", issueMaintenanceNote], ["evals", issueMaintenanceEvalText]]) {
-  if (content.includes("gpt-5.3-codex-spark")) {
-    fail(`github-issue-maintenance ${source} must not pin or recommend a main-agent model`);
-  }
-}
-const modelsSection = issueMaintenanceSkill.match(/## Models\n\n([\s\S]*?)\n\n## Required inputs and authorization/)?.[1];
-const specialistModelsMarker = "The specialist definitions pin their own models:";
-const expectedMainModelPolicy = "The main agent uses whatever model the user selected for the current Pi session. This skill does not check, recommend, pin, or switch the main model.";
-const mainModelPolicy = modelsSection?.split(specialistModelsMarker)[0].trim();
-if (mainModelPolicy !== expectedMainModelPolicy) {
-  fail("github-issue-maintenance main-model policy must be exactly model-neutral");
-}
-const mainModelRow = issueMaintenanceNote.match(/^\| Main coordinator \| ([^|]+) \|$/m)?.[1].trim();
-if (mainModelRow !== "Whatever model the user selected for the active Pi session." || mainModelRow.includes("/")) {
-  fail("main-agent issue maintenance note must leave the main model user-selected");
-}
-const expectedModelEval = "Uses whatever model the user selected for the main Pi session without checking or recommending one; worker pins openai-codex/gpt-5.6-sol and reviewer pins openai-codex/gpt-5.6-terra.";
-if (issueMaintenanceEvalItems?.find((item) => item?.id === 10)?.expected_output !== expectedModelEval) {
-  fail("github-issue-maintenance model eval must enforce a model-neutral main agent");
-}
+]);
+requireGuidance("skills/pi-plan-mode/SKILL.md", ["name: pi-plan-mode", "disable-model-invocation: true"]);
+requireGuidance("configs/pi-agent/packages/pi-plan/extensions/plan/index.ts", [
+  'const PLAN_SKILL_NAME = "pi-plan-mode";',
+]);
+
 const criticalEvalClauses = new Map([
-  [1, ["active main agent", "only for a durably claimed fix-issue epoch"]],
-  [3, ["does not create, wake, or reserve worker/reviewer addresses"]],
-  [4, ["-i<issue>-e<epoch>", "never reuses a retired epoch ID"]],
-  [5, ["repository, issue, epoch, team ID, addresses, and ownerScopeId"]],
-  [6, ["Refuses review bypass", "separate worker assignment"]],
-  [7, ["226-character repository ID", "250-character issue-team ID", "canonical decimal bounds"]],
-  [8, ["without a durable claim", "creates no issue worker/reviewer pair"]],
+  [1, ["at most one oldest eligible issue", "only after a durable fix claim"]],
+  [2, ["subagent_send", "subagent_await"]],
+  [3, ["creates or wakes no worker/reviewer pair"]],
+  [4, ["-i<issue>-e<epoch>", "never reuses a retired epoch"]],
+  [5, ["host/repository/issue/epoch/team/scope/address binding before assignments"]],
+  [6, ["Does not bypass", "separate publication assignment", "commit, push, and PR gates"]],
+  [7, ["226-character repository ID", "250-character team ID", "canonical decimal and byte bounds"]],
+  [8, ["waiting without posting a claim or creating specialists"]],
   [9, ["excludes local paths", "scope/team/session identifiers"]],
-  [11, ["different owning main session", "stops rather than adopting"]],
-  [12, ["changed edit time or body hash", "never promotes the rejected claim"]],
-  [13, ["no publication or automatic replacement", "does not claim the issue team is safe to retire"]],
-  [14, ["old anchor as consumed", "new {to, anchorId} target"]],
-  [15, ["Reuses the exact worker and reviewer", "until verified closure"]],
-  [16, ["later reopen starts epoch 1", "retires the old pair", "fresh non-reused epoch-1 pair"]],
-  [17, ["canonical base-10 1..9999999999", "canonical base-10 0..9999999999"]],
-  [18, ["partial-retirement", "does not create the epoch-1 pair", "both old addresses are verified retired and absent"]],
+  [10, ["Leaves the main model unchanged", "neither duplicates stale pins nor silently substitutes models"]],
+  [11, ["owning sessions", "no silent reuse, adoption, or replacement"]],
+  [12, ["changed edit time or exact body hash", "never promotes the rejected claim"]],
+  [13, ["no publication or automatic replacement", "does not infer safe retirement"]],
+  [14, ["Consumes the old anchor", "new envelopeId", "exact to/anchorId"]],
+  [15, ["Reuses its exact pair", "retire before closure"]],
+  [16, ["close/reopen delimiters", "both old specialists", "fresh non-reused addresses"]],
+  [17, ["Rejects every listed value under canonical decimal bounds"]],
+  [18, ["partial-retirement", "creates no next-epoch pair", "both successful retirements and absence are verified"]],
+  [19, ["without activating this workflow"]],
+  [20, ["skill-authoring/review work only"]],
+  [21, ["Rejects issue-body authority", "retains independent review", "never uploads the private ledger"]],
+  [22, ["Skips the older ineligible issue", "Does not create or add the label automatically"]],
+  [23, ["Uses manual retirement", "not inherited user consent"]],
+  [24, ["waiting before claiming new work", "does not silently use one-shots"]],
+  [25, ["never an unsupported --repo flag"]],
+  [26, ["Does not equate absence with verified retirement"]],
+  [27, ["requires host equality", "stops rather than adopting colliding addresses"]],
+  [28, ["release/2.x base explicitly", "neither coordinator nor worker silently substitutes main"]],
+  [29, ["dedicated isolated worktree", "without stashing or resetting"]],
+  [30, ["Stops for clarification before branching or implementation"]],
 ]);
 for (const [id, clauses] of criticalEvalClauses) {
   const output = issueMaintenanceEvalItems?.find((item) => item?.id === id)?.expected_output ?? "";
@@ -356,22 +342,20 @@ for (const [id, clauses] of criticalEvalClauses) {
     if (!output.includes(clause)) fail(`github-issue-maintenance eval ${id} is missing required clause: ${clause}`);
   }
 }
-for (const requiredText of [
-  "<repo-id>-i<issue-number>-e<epoch-index>",
-  "Whatever model the user selected",
-  "canonical base-10 `1..9999999999`",
-  "canonical base-10 `0..9999999999`",
-  "repository ID is at most 226 characters",
-  "issue-team ID at most 250 characters",
-  "close and reopen both occurred between passes",
-  "partial-retirement",
-  "creates no next-epoch pair",
-  "fresh pair",
-]) {
-  if (!issueMaintenanceNote.includes(requiredText)) {
-    fail(`main-agent issue maintenance note is missing: ${requiredText}`);
+
+function requireGuidance(relativePath, clauses) {
+  let content;
+  try {
+    content = readFileSync(join(root, relativePath), "utf8").replace(/\s+/g, " ");
+  } catch (error) {
+    fail(`cannot read required guidance ${relativePath}: ${error.message}`);
+    return;
+  }
+  for (const clause of clauses) {
+    if (!content.includes(clause)) fail(`${relativePath} is missing required guidance: ${clause}`);
   }
 }
+
 const delegatedReviewPaths = [
   join(root, "procedures", "reviews", "delegated-review-results", "delegated-review-results.md"),
   join(root, "configs", "pi-agent", "docs", "agents", "procedures", "reviews", "delegated-review-results", "delegated-review-results.md"),
@@ -514,6 +498,10 @@ const forbiddenExact = new Set([
   "auth.json",
   "oauth.json",
   "models.json",
+  "mcp.json",
+  "mcp-auth.json",
+  "mcp.log",
+  "mcp.log.1",
   "models-store.json",
   "trust.json",
   "safety.json",
@@ -538,8 +526,26 @@ for (const path of tracked) {
   else if (ignored.status !== 1) fail(`could not evaluate ignore policy for tracked path: ${path}`);
 }
 
+const agentInstructionPath = "agent/AGENTS.md";
+const expectedAgentInstructions = [
+  "# Global Agent Instructions",
+  "",
+  "Read `../AGENTS.md`, resolved relative to this file's directory, for the authoritative",
+  "global instructions. Do not resolve this path relative to the current working directory.",
+  "",
+].join("\n");
+try {
+  const instructionFile = join(root, agentInstructionPath);
+  if (!lstatSync(instructionFile).isFile()) {
+    fail(`${agentInstructionPath} must be a regular instruction pointer file`);
+  } else if (readFileSync(instructionFile, "utf8").replace(/\r\n/g, "\n") !== expectedAgentInstructions) {
+    fail(`${agentInstructionPath} must contain only the canonical instruction pointer`);
+  }
+} catch (error) {
+  fail(`cannot inspect instruction pointer: ${error.message}`);
+}
+
 const allowedSymlinks = new Map([
-  ["agent/AGENTS.md", "../AGENTS.md"],
   ["agent/configs", "../configs"],
   ["agent/skills", "../skills"],
   ["agent/subagents", "../subagents"],
@@ -551,12 +557,14 @@ try {
     .filter((line) => line.startsWith("120000 "));
   for (const entry of linkedEntries) {
     const path = entry.split(/\s+/).at(-1);
+    // Validate the working-tree pointer above while its type change is still unstaged.
+    if (path === agentInstructionPath) continue;
     const expectedTarget = allowedSymlinks.get(path);
     if (!expectedTarget) {
       fail(`tracked symlink is not an approved agent-dir shim: ${entry}`);
       continue;
     }
-    const actualTarget = readlinkSync(join(root, path));
+    const actualTarget = readlinkSync(join(root, path)).replaceAll("\\", "/");
     if (actualTarget !== expectedTarget) {
       fail(`${path} must point to ${expectedTarget}; found ${actualTarget}`);
     }
@@ -575,6 +583,10 @@ for (const ignoredPath of [
   "auth.json",
   "oauth.json",
   "models.json",
+  "mcp.json",
+  "mcp-auth.json",
+  "mcp.log",
+  "mcp.log.1",
   "sessions/probe.jsonl",
   "trust.json",
   "models-store.json",
@@ -590,6 +602,10 @@ for (const ignoredPath of [
   "agent/auth.json",
   "agent/oauth.json",
   "agent/models.json",
+  "agent/mcp.json",
+  "agent/mcp-auth.json",
+  "agent/mcp.log",
+  "agent/mcp.log.1",
   "agent/sessions/probe.jsonl",
   "agent/trust.json",
   "agent/models-store.json",
@@ -610,7 +626,6 @@ for (const ignoredPath of [
   if (result.status !== 0) fail(`expected ignored path is not covered: ${ignoredPath}`);
 }
 
-notes.push(`${rootSettings?.packages?.length ?? 0} root package paths`);
 notes.push(`${agentSettings?.packages?.length ?? 0} agent-dir package paths`);
 notes.push(`${skillFiles.length} global skills`);
 notes.push(`${expectedDefinitions.length} shared subagent/team definitions`);

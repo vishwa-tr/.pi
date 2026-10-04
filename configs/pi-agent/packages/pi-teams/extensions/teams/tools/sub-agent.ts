@@ -65,8 +65,8 @@ export function createSubagentTools(address: string, port: SubagentMailPort, opt
 				text: params.text,
 				...(params.correlationId !== undefined ? { correlationId: params.correlationId } : {}),
 			});
-			if (!outcome.delivered && outcome.disposition === "bounced") return errorResult(`Message bounced: ${outcome.bounceReason}`);
-			return jsonResult({ sent: true, envelopeId: outcome.envelopeId, disposition: outcome.disposition });
+			if (!outcome.delivered) throw new Error(`Message not delivered (${outcome.disposition}): ${outcome.bounceReason ?? "unknown reason"}`);
+			return jsonResult({ sent: true, envelopeId: outcome.envelopeId, disposition: outcome.disposition }, params.expectReply === true);
 		},
 	};
 
@@ -87,7 +87,8 @@ export function createSubagentTools(address: string, port: SubagentMailPort, opt
 				...(params.data !== undefined ? { data: params.data } : {}),
 				...(params.correlationId !== undefined ? { correlationId: params.correlationId } : {}),
 			});
-			return jsonResult({ reported: true, final: params.final === true, envelopeId: outcome.envelopeId });
+			if (!outcome.delivered) throw new Error(`Report not delivered (${outcome.disposition}): ${outcome.bounceReason ?? "unknown reason"}`);
+			return jsonResult({ reported: true, final: params.final === true, envelopeId: outcome.envelopeId }, params.final === true);
 		},
 	};
 
@@ -98,7 +99,8 @@ export function createSubagentTools(address: string, port: SubagentMailPort, opt
 		parameters: AskParams,
 		async execute(_id, params) {
 			const outcome = port.sendFromAgent(address, { to: "main", type: "question", text: params.text });
-			return jsonResult({ asked: true, envelopeId: outcome.envelopeId, note: "End your turn now — you'll be woken with the answer." });
+			if (!outcome.delivered) throw new Error(`Question not delivered (${outcome.disposition}): ${outcome.bounceReason ?? "unknown reason"}`);
+			return jsonResult({ asked: true, envelopeId: outcome.envelopeId, note: "You'll be woken with the answer." }, true);
 		},
 	};
 
