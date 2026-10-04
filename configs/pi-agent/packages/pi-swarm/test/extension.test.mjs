@@ -1,15 +1,15 @@
 import test from "node:test";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { matchesKey } from "@earendil-works/pi-tui";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { createSwarmExtension } from "../extensions/swarm/extension.mjs";
-import { SwarmController } from "../extensions/swarm/core.mjs";
-import { createMockRuntime } from "./sdk-env.mjs";
 import { repository } from "./helpers.mjs";
+import { createMockRuntime } from "./sdk-env.mjs";
+import { matchesKey } from "@earendil-works/pi-tui";
 import { decisionUI } from "./decision-fixture.mjs";
+import { SwarmController } from "../extensions/swarm/core.mjs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { SwarmDecision } from "../extensions/swarm/decision.mjs";
+import { createSwarmExtension } from "../extensions/swarm/extension.mjs";
 
 function dashboardUI(f) {
 	let view;
@@ -89,6 +89,101 @@ test("editable agreement and explicit preservation launch a real mock SDK planne
 	await reloaded.command("restart");
 	assert.equal((await reloaded.status()).cycle, 2);
 	await reloaded.event("session_shutdown");
+});
+
+for (const field of ["criteria", "scope"]) {
+	for (const [label, invalid] of Object.entries({ empty: "", whitespace: "  ", malformed: '["private-input",', object: '{}', scalar: '"text"', null: 'null', number: '12', boolean: 'true', emptyArray: '[]', mixed: '["ok", 1]', blank: '[" "]', long: JSON.stringify(["x".repeat(32769)]) })) {
+		test(`${field} ${label} re-prompts, then cancellation preserves zero effects`, async t => {
+			const f = await fixture(t);
+			if (field === "scope") f.responses.input.push("Tests pass");
+			f.responses.input.push(invalid, "Valid description");
+			f.responses.select.push("Cancel");
+			await assert.rejects(f.command("start goal"), { code: "AUTHORITY" });
+			assert.equal(f.notices.filter(n => n.level === "warning").length, 1);
+			assert.equal(f.notices.some(n => /private-input|SyntaxError|Unexpected/.test(n.text)), false);
+			assert.equal(existsSync(join(f.root, ".swarms")), false);
+			assert.equal(f.entries.length, 0);
+			assert.equal(f.mock.calls.length, 0);
+			await f.event("session_shutdown");
+		});
+	}
+}
+
+for (const invalid of ["", "  ", "x".repeat(32769)]) {
+	test(`invalid objective of length ${invalid.length} can recover and Escape without binding an owner`, async t => {
+		const f = await fixture(t);
+		f.responses.input.push(invalid, "Valid goal", () => undefined);
+		await f.command("start");
+		assert.equal(f.notices.length, 1);
+		assert.equal(f.entries.length, 0);
+		assert.equal(f.mock.calls.length, 0);
+		assert.equal(existsSync(join(f.root, ".swarms")), false);
+		f.ctx.sessionManager.getSessionId = () => "other";
+		await f.command("status"); // Input cancellation must not claim ownership.
+		await f.event("session_shutdown");
+	});
+}
+
+for (const action of ["pause", "stop", "session_before_tree", "session_shutdown", "session-change"]) {
+	test(`${action} fences a late answer during input re-prompt`, async t => {
+		const f = await fixture(t); const shown = deferred(); const answer = deferred();
+		f.responses.input.push("", (_title, _placeholder, options) => { shown.resolve(options.signal); return answer.promise; });
+		const launch = f.command("start goal"); const signal = await shown.promise;
+		if (action === "session-change") f.ctx.sessionManager.getSessionId = () => "other";
+		else if (action.startsWith("session_")) await f.event(action);
+		else await f.command(action);
+		if (action !== "session-change") assert.equal(signal.aborted, true);
+		answer.resolve("Late valid answer"); await launch;
+		assert.equal(f.prompts.length, 2);
+		assert.equal(f.entries.length, 0);
+		assert.equal(f.mock.calls.length, 0);
+		assert.equal(existsSync(join(f.root, ".swarms")), false);
+		await f.event("session_shutdown");
+	});
+}
+
+test("plain text launch preserves one criterion and one scope description", async t => {
+	const f = await fixture(t);
+	f.responses.input.push("Tests pass, no regressions", "Only src; no deployment");
+	await f.command("start goal");
+	const packet = f.prompts.find(p => p.kind === "select").args[0];
+	assert.match(packet, /"criteria": \[\s*"Tests pass, no regressions"\s*\]/);
+	assert.match(packet, /"scope": \[\s*"Only src; no deployment"\s*\]/);
+	await f.event("session_shutdown");
+});
+
+test("Escape from invalid criteria re-prompt produces no error or owner binding", async t => {
+	const f = await fixture(t);
+	f.responses.input.push("", () => undefined);
+	await f.command("start goal");
+	assert.deepEqual(f.notices.map(n => n.level), ["warning"]);
+	f.ctx.sessionManager.getSessionId = () => "other";
+	await f.command("status");
+	assert.equal(f.entries.length, 0);
+	assert.equal(f.mock.calls.length, 0);
+	assert.equal(existsSync(join(f.root, ".swarms")), false);
+	await f.event("session_shutdown");
+});
+
+test("malformed agreement edit retains original and permits a corrected edit", async t => {
+	const f = await fixture(t);
+	f.responses.input.push("Result", "src", '[', '"Corrected goal"');
+	f.responses.select.push("Edit agreement", "objective", "Edit agreement", "objective", "Approve");
+	await f.command("start goal");
+	assert.equal((await f.status()).objective, "Corrected goal");
+	assert.ok(f.notices.some(n => n.text === "Invalid JSON; agreement unchanged"));
+	await f.event("session_shutdown");
+});
+
+test("invalid agreement value reports sanitized input guidance without throwing", async t => {
+	const f = await fixture(t);
+	f.responses.input.push("Result", "src", '[]');
+	f.responses.select.push("Edit agreement", "objective", "Approve");
+	await f.command("start goal");
+	assert.match(f.notices.at(-1).text, /Invalid Swarm input/);
+	assert.equal(f.mock.calls.length, 0);
+	assert.equal(existsSync(join(f.root, ".swarms")), false);
+	await f.event("session_shutdown");
 });
 
 for (const stage of ["approval", "preservation", "criteria", "scope"]) {

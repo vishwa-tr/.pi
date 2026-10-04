@@ -62,7 +62,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **448 passing tests on Pi 1.0.0**. It includes actual local shell execution,
+The current combined suite has **484 passing tests on Pi 1.0.0**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -93,6 +93,12 @@ modify ignore rules. It preserves pre-existing work and requires an explicit pre
 
 - `/swarm start <goal>` captures the **current** model/thinking after criteria/scope input,
   presents the bounded provider/context agreement and run limits, and starts only after approval.
+  Enter one plain-text criterion (for example `Tests pass`) and one scope description
+  (for example `Only src; no deployment`), or JSON string arrays for multiple entries:
+  `["Tests pass", "No regressions"]` and `["src", "No deployment"]`. Examples are
+  placeholders, not defaults. Blank or invalid entries re-prompt; Escape cancels. Each
+  objective or list entry must be non-empty and at most 32768 characters. JSON arrays
+  retain their entries; malformed JSON is never silently treated as plain text.
   Cancelling the agreement creates no run or model request. Authentication is resolved by Pi only at an
   admitted request; selecting a model is not certification that its credentials will work.
 - `/swarm`, `/swarm status`, `/swarm pause` and `/swarm stop` inspect or brake work. Load,
@@ -420,11 +426,13 @@ runner seam for disposable mock tests. Runner injection is never a command or mo
 When explicitly injected, `/swarm` now opens the phase-7 dashboard described below.
 The phase-5 commands remain available:
 
-- `start <goal>`: enter acceptance criteria and scope/exclusions as JSON string arrays;
-  inspect the complete agreement; optionally edit each field using JSON input; then approve.
+- `start <goal>`: enter acceptance criteria and scope/exclusions as plain text (one entry)
+  or JSON string arrays; inspect the complete agreement; optionally edit each field using
+  JSON input; then approve. Blank/invalid launch fields re-prompt and Escape cancels before
+  host preparation. Malformed JSON edits leave the agreement unchanged for another edit.
   Dirty work requires a separate **Preserve existing work** choice. A real mock SDK planner
-  investigates the approved goal without a second planning approval. Invalid input fails
-  without automatic retry; fields are not semantically clarified by a live model.
+  investigates the approved goal without a second planning approval; fields are not
+  semantically clarified by a live model.
 - `status`: inspect run/cycle, tasks, specialists, active/queued work, claims, limits,
   unresolved execution, and errors. Usage is explicitly not aggregated and cost is unknown.
 - `pause` / `stop`: cancel pending launch/continuation approval and new dispatch, then wait

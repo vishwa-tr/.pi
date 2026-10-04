@@ -4,6 +4,7 @@ import { showDashboard } from "./dashboard.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { requestUserApproval, statusText } from "./ui.mjs";
 import { createNativeRuntime } from "./native-provider.mjs";
+import { requestLaunchSpecification } from "./launch-input.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
 
 const LINK = "swarm-run-v1";
@@ -148,15 +149,11 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					let activeHost;
 					if (selected === "start") {
 						if (resolveSelection) check(ctx.model, "MODEL", "Select a physical chat model with /model before starting Swarm");
-						const objective = rest.join(" ") || await ctx.ui.input("Swarm objective", "Describe the goal", { signal: pending.signal });
-						if (pending.signal.aborted || !objective) return;
-						const criteria = await ctx.ui.input("Acceptance criteria as a JSON string array", '["Required observable outcome"]', { signal: pending.signal });
-						if (pending.signal.aborted || criteria === undefined) return;
-						const scope = await ctx.ui.input("Scope and exclusions as a JSON string array", '["Allowed work", "Excluded work"]', { signal: pending.signal });
-						if (pending.signal.aborted || scope === undefined) return;
+						const specification = await requestLaunchSpecification(ctx, rest.join(" "), pending.signal, current);
+						if (!current() || !specification) return;
 						activeHost = await ensureHost(ctx);
 						if (!current()) return;
-						await activeHost.launch({ workspace: ctx.cwd, runId: randomUUID(), specification: { objective, criteria: JSON.parse(criteria), scope: JSON.parse(scope) } });
+						await activeHost.launch({ workspace: ctx.cwd, runId: randomUUID(), specification });
 						remember(ctx);
 						if (pending.signal.aborted || retired) return;
 						await activeHost.recruit({ id: "planner", specialization: "Objective decomposition and coordination", brief: "Investigate the approved objective, create criterion-linked tasks, and recruit only useful independent specialists within limits.", reason: "Initial investigation and decomposition of the user-approved objective" });
@@ -179,6 +176,10 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					} else check(false, "INPUT", "Use start, status, pause, stop, restore <run-id>, resume, restart, or reconcile");
 					if (!retired) notify(ctx, statusText(activeHost.snapshot()));
 				} catch (error) {
+					if (error.code === "INPUT") {
+						if (current()) notify(ctx, "Invalid Swarm input. Check the command and agreement fields, then try again. No automatic retry or rollback.", "warning");
+						return;
+					}
 					if (!retired) notify(ctx, `Swarm control failed (${error.code ?? "INPUT"}). No automatic retry or rollback. Inspect status before continuing.`, "error");
 					throw error;
 				} finally {
