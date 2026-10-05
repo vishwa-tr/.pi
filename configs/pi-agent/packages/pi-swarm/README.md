@@ -62,7 +62,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **525 passing tests on Pi 1.0.1**. It includes actual local shell execution,
+The current combined suite has **527 passing tests on Pi 1.0.1**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -198,8 +198,15 @@ still own execution. Safety requests dismiss inspection before opening their dec
 
 Search owns typed/pasted text: action letters cannot brake or approve while entering a
 query. Escape cancels the draft; submitting an empty query clears search. Ctrl-c keeps Pi's
-global behavior. Approval dialogs retain Left/Right + Enter and the read-to-end gate;
-conversation keys do not approve decisions.
+global behavior. Approval dialogs start in **Details** with **Cancel** selected. **Tab** or
+**Shift+Tab** switches between Details and the vertical **Actions** list. **j/k** or
+**Up/Down** scrolls Details or selects Actions, stopping at either end. **Enter** only
+confirms in Actions; **Escape** cancels from either area. In Details, **PageUp/PageDown**,
+**Home/End** and **gg/G** navigate the packet. Every non-cancel action retains the
+read-to-end gate; typing action letters or pasting text never approves a decision.
+Global shortcuts still take precedence: with Pi Plan enabled, **Shift+Tab** cycles mode
+instead of switching areas and can cancel approval on restriction. Use **Tab** to switch
+areas in that configuration; the component also accepts Shift+Tab when delivered.
 
 Conversation entries show roles, timestamps, text, thinking, tool arguments/results,
 system section/tool updates, compaction checkpoints and context edits. Earlier entries remain
@@ -225,7 +232,7 @@ and inspection are entirely local, without model or network calls.
 restores paused ownership, but native ESM modules may remain cached in the process; it is
 not a guarantee that edited source code is reloaded.
 
-Offline verification on Pi 1.0.1: **525 Swarm tests**, **68 Plan/Safety tests**,
+Offline verification on Pi 1.0.1: **527 Swarm tests**, **68 Plan/Safety tests**,
 **four PTY cleanup tests**, and all five CLI scenarios pass. Normal entry was verified
 through both file and package loading. The actual CLI exercises search-input isolation, conversation/back navigation and
 focused End/Home help paging. Existing safety exclusion and reload tests remain intact;
@@ -1069,10 +1076,13 @@ Objective, criteria, scope, limits, model/tools/instructions, exact provider end
 outbound-data declaration, dirty paths, unresolved operation/turn IDs, and written evidence
 remain accessible. Terminal controls and bidi controls are visibly escaped before styling.
 
-- **Up/Down**, **PageUp/PageDown**, **Home/End** read the packet. A persistent line-range
-  indicator shows the current position; reach the end before selecting a decision.
-- **Left/Right** selects an action; **Enter** confirms it. **Cancel** is always the default,
-  and **Escape** cancels anywhere. Typing or pasted text never selects or approves an action.
+- **Details** starts focused. **j/k**, **Up/Down**, **PageUp/PageDown**, **Home/End** and
+  **gg/G** read the packet. A persistent line-range indicator shows the current position;
+  reach the end before confirming a non-cancel decision.
+- **Tab/Shift+Tab** switches Details / Actions. In the vertical **Actions** list, **j/k** or
+  **Up/Down** selects an action and **Enter** confirms it. Enter in Details does nothing.
+  **Cancel** is always the default, and **Escape** cancels anywhere. Action letters and
+  pasted text never approve an action.
   Reaching the end is a navigation gate, not proof that a person understood the agreement.
 - Launch editing remains an explicitly selected field followed by native JSON input, then
   a fresh complete agreement. The immutable host provider binding is not an editable field.

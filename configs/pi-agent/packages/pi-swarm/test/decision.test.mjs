@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
-import { SwarmDecision, showDecision } from "../extensions/swarm/decision.mjs";
 import { requestUserApproval } from "../extensions/swarm/ui.mjs";
+import { SwarmDecision, showDecision } from "../extensions/swarm/decision.mjs";
 
 function fixture(body, columns = 80, rows = 24) {
 	const abort = new AbortController();
@@ -12,7 +12,7 @@ function fixture(body, columns = 80, rows = 24) {
 		tui, theme: { fg: (_, text) => text }, keybindings: { matches: (data, action) => action === "tui.select.cancel" && matchesKey(data, "escape") }, done: value => results.push(value) });
 	const render = () => {
 		const lines = component.render(columns);
-		assert.ok(lines.length <= rows - 4);
+		assert.ok(lines.length <= tui.terminal.rows - 4);
 		for (const line of lines) assert.ok(visibleWidth(line) <= columns, JSON.stringify(line));
 		assert.match(lines.join("\n"), /Esc: Cancel/);
 		assert.equal(lines.at(-1), `${component.selected === 2 ? ">" : " "} Approve`);
@@ -64,20 +64,57 @@ test("typing, paste and default Enter never authorize; unread selected approval 
 	const f = fixture("critical\n".repeat(100)); f.render();
 	for (const key of ["a", "y", "Approve", "\x1b[200~Approve\r\x1b[201~"]) f.component.handleInput(key);
 	assert.deepEqual(f.results, []);
-	f.component.handleInput("\x1b[C"); f.component.handleInput("\x1b[C"); f.component.handleInput("\r");
+	f.component.handleInput("\r"); assert.deepEqual(f.results, []);
+	f.component.handleInput("\t");
+	f.component.handleInput("j"); f.component.handleInput("j"); f.component.handleInput("\r");
 	assert.deepEqual(f.results, []);
-	f.component.handleInput("\x1b[F"); f.render(); f.component.handleInput("\r");
+	f.component.handleInput("\t"); f.component.handleInput("\x1b[F"); f.render();
+	f.component.handleInput("\r"); assert.deepEqual(f.results, []);
+	f.component.handleInput("\t"); f.component.handleInput("\r");
 	assert.deepEqual(f.results, ["Approve"]);
 	f.component.handleInput("\r"); assert.equal(f.results.length, 1);
 	const safe = fixture("complete packet"); safe.render(); safe.component.handleInput("\r");
+	assert.deepEqual(safe.results, []);
+	safe.component.handleInput("\t"); safe.component.handleInput("\r");
 	assert.deepEqual(safe.results, ["Cancel"]);
+});
+
+test("focus wraps with Tab and Shift+Tab; vertical actions clamp and ignore unrelated keys", () => {
+	const f = fixture("line\n".repeat(100)); f.render();
+	assert.match(f.render(), /Details \[focused\]/);
+	f.component.handleInput("j"); f.render(); assert.equal(f.component.offset, 1);
+	f.component.handleInput("\x1b[Z"); assert.equal(f.component.focus, "actions");
+	assert.match(f.render(), /Actions \[focused\]/);
+	for (const key of ["k", "k"]) f.component.handleInput(key);
+	assert.equal(f.component.selected, 0);
+	for (const key of ["j", "\x1b[B", "j"]) f.component.handleInput(key);
+	assert.equal(f.component.selected, 2); assert.equal(f.component.offset, 1);
+	for (const key of ["a", "y", "p", "s", "r", "R", "C", "G", "g", "\x1b[C", "\x1b[D", "\x1b[F", "\x1b[200~\tjj\r\x1b[201~"]) f.component.handleInput(key);
+	assert.equal(f.component.selected, 2); assert.equal(f.component.offset, 1);
+	assert.deepEqual(f.results, []);
+	f.component.handleInput("\x1b[Z"); assert.equal(f.component.focus, "details");
+	f.component.handleInput("G"); f.render(); assert.ok(f.component.readToEnd);
+	f.component.handleInput("g"); f.component.handleInput("g"); f.render(); assert.equal(f.component.offset, 0);
+	f.component.handleInput("\t"); f.component.handleInput("\t"); assert.equal(f.component.focus, "details");
+	f.component.handleInput("\x1b"); assert.deepEqual(f.results, [undefined]);
+});
+
+test("unread Cancel remains available and height resize resets the read gate", () => {
+	const f = fixture("line\n".repeat(100)); f.render();
+	f.component.handleInput("\t"); f.component.handleInput("\r"); assert.deepEqual(f.results, ["Cancel"]);
+	const resized = fixture("line\n".repeat(100)); resized.render();
+	resized.component.handleInput("G"); resized.render(); assert.ok(resized.component.readToEnd);
+	resized.component.handleInput("gg"); // Pasted multi-key input is not navigation.
+	resized.component.handleInput("\x1b[H"); resized.render();
+	resized.tui.terminal.rows = 30; resized.render(); assert.equal(resized.component.readToEnd, false);
+	resized.component.dispose();
 });
 
 test("resize invalidates layout and blocks decision in an unusably small terminal", () => {
 	const f = fixture("界".repeat(3000)); f.component.render(100); f.component.handleInput("\x1b[F"); f.component.render(100);
 	assert.ok(f.component.readToEnd);
 	f.component.offset = 0; f.component.render(60); assert.equal(f.component.readToEnd, false);
-	f.component.handleInput("\x1b[C"); f.component.handleInput("\x1b[C");
+	f.component.handleInput("\t"); f.component.handleInput("j"); f.component.handleInput("j");
 	f.tui.terminal.rows = 10;
 	assert.ok(f.component.render(20).every(line => visibleWidth(line) <= 20));
 	f.component.handleInput("\r"); assert.deepEqual(f.results, []);
@@ -101,7 +138,7 @@ for (const stage of ["before mount", "while reading", "after end", "timeout"]) {
 			if (stage === "timeout") setTimeout(() => abort.abort(), 1); else abort.abort();
 		}
 		assert.equal(await result, undefined);
-		component?.handleInput("\x1b[C"); component?.handleInput("\r");
+		component?.handleInput("\t"); component?.handleInput("j"); component?.handleInput("\r");
 		assert.equal(listeners, 0);
 	});
 }
@@ -114,7 +151,7 @@ test("real approval components serialize dirty-work and exact-ID/evidence attest
 		custom: factory => new Promise(resolve => {
 			assert.equal(active++, 0);
 			const c = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_, text) => text }, { matches: () => false }, value => { active--; resolve(value); });
-			packets.push(c.body); c.render(60); c.handleInput("\x1b[F"); c.render(60); c.handleInput("\x1b[C"); c.handleInput("\r");
+			packets.push(c.body); c.render(60); c.handleInput("\x1b[F"); c.render(60); c.handleInput("\t"); c.handleInput("\x1b[B"); c.handleInput("\r");
 		}),
 	} };
 	const result = await requestUserApproval(ctx, { action: "reconcile", specification: { objective: "Goal" }, changes: { paths: ["dirty.txt"] }, recovery: { operations: [{ id: "exact-operation" }], turns: [{ id: "exact-turn" }] }, requiresExistingWorkDecision: true, signal });

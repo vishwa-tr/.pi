@@ -111,8 +111,10 @@ class Terminal:
     def decision(self, steps=1):
         """Read every page of the bounded packet, then explicitly select an action."""
         self.read_decision()
+        self.send("\t")
+        time.sleep(0.05)
         for _ in range(steps):
-            self.send("\x1b[C")
+            self.send("\x1b[B")
             time.sleep(0.05)
         self.send("\r")
 
