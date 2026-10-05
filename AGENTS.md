@@ -214,7 +214,7 @@ project subagent definitions use `.pi/subagents/<type>.md`, and executable saved
 
 Order JavaScript/React imports by shape, not alphabetically and not by module type:
 
-1. Wrapped multi-line import blocks go at the very top. Sort the members inside each block alphabetically.
+1. Wrapped multi-line import blocks go at the very top. Sort the member lines inside each block by character length, from shortest to longest.
 2. Single-line imports follow, ordered roughly from the shortest line to the longest, so the header reads as a ramp.
 3. The `React` import is usually the longest line, so it ends up at the bottom.
 
@@ -222,9 +222,9 @@ Example:
 
 ```js
 import {
-    NOTIFY_ALERT_ACHIEVEMENT,
-    NOTIFY_ALERT_FEEDBACK,
     NOTIFY_CHANNEL,
+    NOTIFY_ALERT_FEEDBACK,
+    NOTIFY_ALERT_ACHIEVEMENT,
 } from "@imanus/shared";
 import { useNetwork } from "./network";
 import { AppState } from "react-native";
