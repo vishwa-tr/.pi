@@ -59,12 +59,13 @@ async function fixture(t, { policy = true, entries = [], root, hold = false } = 
 	const ctx = { cwd: root ?? repository(t), mode: "tui", hasUI: true, model: undefined,
 		modelRegistry: new ModelRegistry(source), sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries },
 		ui: { custom: decisionUI(dialog), input: dialog("input"), notify: text => notices.push(text) } };
-	const pi = { events, on: (name, fn) => handlers.set(name, fn), registerCommand: (name, value) => { assert.equal(name, "swarm"); command = value; },
+	const tools = new Map(); const messages = [];
+	const pi = { registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events, on: (name, fn) => handlers.set(name, fn), registerCommand: (name, value) => { assert.equal(name, "swarm"); command = value; },
 		getThinkingLevel: () => thinking, appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
 	assert.equal(createCurrentSwarmExtension()(pi), undefined);
 	const event = (name, data = {}) => handlers.get(name)?.(data, ctx);
 	t.after(() => event("session_shutdown"));
-	return { ctx, source, calls, packets, answers, entries, event, events, notices, auth: () => auth,
+	return { tools, messages, ctx, source, calls, packets, answers, entries, event, events, notices, auth: () => auth,
 		select(id) { ctx.model = source.getModel(model.provider, id); }, thinking(value) { thinking = value; },
 		command: args => command.handler(args, ctx), status: async () => { await command.handler("status", ctx); return notices.at(-1).startsWith("{") ? JSON.parse(notices.at(-1)) : { status: "unattached" }; } };
 }
@@ -73,6 +74,90 @@ async function until(predicate) {
 	for (let i = 0; i < 1000; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); }
 	assert.fail("Worker did not settle");
 }
+
+test("main tools are registered without auth; status and history listing stay inert", async t => {
+	const f = await fixture(t);
+	assert.deepEqual([...f.tools.keys()], ["swarm_start", "swarm_status", "swarm_control", "swarm_history"]);
+	for (const name of ["swarm_status", "swarm_history", "swarm_status"]) {
+		const result = await f.tools.get(name).execute("call", {}, undefined, undefined, f.ctx);
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details.status, "unattached");
+	}
+	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+});
+
+test("main start returns while native worker streams and status remains callable; stop settles", async t => {
+	const f = await fixture(t, { hold: true }); f.select("first");
+	const call = (name, args) => f.tools.get(name).execute("call", args, undefined, undefined, f.ctx);
+	const launched = await call("swarm_start", { objective: "Approved fixture goal" });
+	assert.equal(launched.details.status, "running");
+	await until(() => f.calls.length === 1);
+	assert.equal((await call("swarm_status", {})).details.status, "running");
+	const auth = f.auth();
+	const history = await call("swarm_history", { workerId: "planner", limit: 1 });
+	assert.equal(history.details.persistedOnly, true);
+	assert.ok(history.details.entries.length <= 1);
+	assert.equal(f.auth(), auth);
+	assert.equal(f.messages.filter(item => item.message.content.includes("approved launch started")).length, 1);
+	assert.ok(f.messages.every(item => item.options.triggerTurn === false));
+	const stopped = await call("swarm_control", { action: "stop" });
+	assert.equal(stopped.details.status, "stopped");
+	assert.equal(stopped.details.unsettled.turns, 0);
+	assert.equal(f.calls.length, 1);
+});
+
+for (const refusal of ["cancel", "no-ui", "signal", "mode", "model"]) {
+	test(`main start ${refusal} never treats tool call as approval`, async t => {
+		const f = await fixture(t); f.select("first");
+		const signal = new AbortController();
+		if (refusal === "cancel") f.answers.push("Cancel");
+		if (refusal === "no-ui") { f.ctx.mode = "json"; f.ctx.hasUI = false; }
+		if (refusal === "signal") signal.abort();
+		if (refusal === "mode" || refusal === "model") {
+			f.ctx.ui.custom = decisionUI(() => async () => {
+				if (refusal === "model") { f.select("second"); await f.event("model_select"); }
+				else f.events.emit("pi-plan:mode-changed", { version: 1, instanceId: "entry-policy", revision: 2,
+					contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "plan", enforcedMode: "plan", runMode: null, pendingChange: false });
+				return "Approve";
+			});
+		}
+		await f.tools.get("swarm_start").execute("call", { objective: "Never approved" }, signal.signal, undefined, f.ctx);
+		assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+		assert.equal(f.messages.length, 0);
+	});
+}
+
+test("explicit continuation restores chat observation if another extension cancels navigation", async t => {
+	const f = await fixture(t, { hold: true }); f.select("first");
+	await f.command("start Fixture"); await until(() => f.calls.length === 1);
+	assert.deepEqual(await f.event("session_before_switch"), { cancel: false });
+	// Simulate a later before-switch handler veto: this same session stays active.
+	await f.command("resume"); await until(() => f.calls.length === 2);
+	await until(() => f.messages.some(item => item.message.content.includes("approved continuation started")));
+	await f.command("stop");
+});
+
+test("user stop interrupts a main tool waiting for approval without deadlocking", async t => {
+	const f = await fixture(t); f.select("first");
+	let shown = false; let release;
+	const answer = new Promise(resolve => { release = resolve; });
+	f.ctx.ui.custom = decisionUI(() => async () => { shown = true; return answer; });
+	const call = f.tools.get("swarm_start").execute("call", { objective: "Fixture" }, undefined, undefined, f.ctx);
+	await until(() => shown);
+	await f.command("stop");
+	release("Approve"); await call;
+	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+});
+
+test("main tool cancellation aborts pending approval and cannot launch from a late answer", async t => {
+	const f = await fixture(t); f.select("first");
+	const signal = new AbortController(); let shown = false; let release;
+	const answer = new Promise(resolve => { release = resolve; });
+	f.ctx.ui.custom = decisionUI(() => async () => { shown = true; return answer; });
+	const call = f.tools.get("swarm_start").execute("call", { objective: "Fixture" }, signal.signal, undefined, f.ctx);
+	await until(() => shown); signal.abort(); release("Approve"); await call;
+	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+});
 
 test("normal entry registers synchronously without model, auth, provider dispatch or discovery", async t => {
 	const f = await fixture(t);

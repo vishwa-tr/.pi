@@ -25,6 +25,8 @@ function freeze(value) {
 
 /** Host-only approval orchestration; provider execution requires explicit capability injection. */
 export class SwarmHost {
+	#listeners = new Set();
+	#unsubscribe;
 	#events;
 	#sessionId;
 	#ask;
@@ -78,6 +80,18 @@ export class SwarmHost {
 
 	snapshot() {
 		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, pendingApproval: Boolean(this.#pending) || this.#pendingSafety > 0, errors: [...this.#errors] };
+	}
+
+	/** Observation conveys no owner or worker capability. */
+	subscribe(listener) {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
+	}
+
+	#publish(type) {
+		for (const listener of this.#listeners) {
+			try { listener(type); } catch { /* Presentation cannot affect admission or settlement. */ }
+		}
 	}
 
 	/** Detached inspection only; no session construction, dispatch, or owner capabilities. */
@@ -165,6 +179,7 @@ export class SwarmHost {
 		const grant = this.#mode.capture();
 		const pending = new AbortController();
 		this.#pending = pending;
+		this.#publish("approval.pending");
 		const signal = AbortSignal.any([pending.signal, grant.signal, this.#lifetime.signal]);
 		const deadline = performance.now() + this.#approvalTimeout;
 		let timer;
@@ -198,6 +213,7 @@ export class SwarmHost {
 			clearTimeout(timer);
 			signal.removeEventListener("abort", abort);
 			if (this.#pending === pending) this.#pending = undefined;
+			this.#publish("approval.finished");
 		}
 	}
 
@@ -207,6 +223,8 @@ export class SwarmHost {
 	}
 
 	async #wire() {
+		this.#unsubscribe?.();
+		this.#unsubscribe = this.#controller.subscribe(event => this.#publish(event.type));
 		const recorded = this.#controller.snapshot().hostApprovals.at(-1)?.provider;
 		const configured = this.#providerCapability ? providerDescriptor(this.#providerCapability) : undefined;
 		check(!recorded || (configured && specificationFingerprint(recorded) === specificationFingerprint(configured)),
@@ -223,11 +241,12 @@ export class SwarmHost {
 			else value.path = resolve(this.#location.workspace, request.paths[0]);
 			let result;
 			this.#pendingSafety++;
+			this.#publish("approval.pending");
 			try {
 				await this.#beforePrompt();
 				this.#assertAdmission();
 				result = await requestSafety({ events: this.#events, request: value, signal, timeoutMs: this.#safetyTimeout });
-			} finally { this.#pendingSafety--; }
+			} finally { this.#pendingSafety--; this.#publish("approval.finished"); }
 			this.#assertAdmission();
 			check(this.#permit === permit && !signal.aborted, "HOST_DENIED", "Approval belongs to an expired host admission");
 			return result.approved === true;
@@ -288,6 +307,7 @@ export class SwarmHost {
 		await this.#wire();
 		this.#assertOperation(operation);
 		this.#mode.assert(grant.token);
+		this.#publish("run.restored");
 		return this.snapshot(); // Restoring does not grant execution authority.
 	}
 
@@ -378,6 +398,8 @@ export class SwarmHost {
 			await this.#controller?.close();
 			this.#lifetime.abort();
 			this.#mode.dispose();
+			this.#unsubscribe?.();
+			this.#listeners.clear();
 		})().finally(() => { this.#closing = undefined; });
 		return this.#closing;
 	}

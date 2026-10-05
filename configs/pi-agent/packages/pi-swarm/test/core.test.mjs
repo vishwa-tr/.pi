@@ -37,6 +37,27 @@ async function pause(c) {
 	await c.system("run.settle");
 }
 
+test("durable observers are read-only, isolated from commits and removable", async t => {
+	const { c } = await fixture(t);
+	const events = [];
+	const unsubscribe = c.subscribe(event => {
+		assert.equal(c.snapshot().revision, event.revision);
+		assert.deepEqual(Object.keys(event).sort(), ["revision", "type"]);
+		assert.ok(Object.isFrozen(event));
+		events.push(event);
+		throw new Error("Presentation failed");
+	});
+	await c.owner("run.resume", { reconciled: true });
+	assert.equal(events.length, 1);
+	await assert.rejects(c.close(), { code: "UNSETTLED" });
+	await createTask(c, "task1");
+	assert.equal(events.length, 2, "failed close must retain observation of the still-owned run");
+	unsubscribe();
+	await pause(c);
+	assert.equal(events.length, 2);
+	await c.close();
+});
+
 test("durable model-free workflow releases ownership only after settlement", async t => {
 	const { c, root } = await fixture(t);
 	await c.owner("run.resume", { reconciled: true });

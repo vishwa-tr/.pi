@@ -1,11 +1,13 @@
 import { SwarmHost } from "./host.mjs";
 import { randomUUID } from "node:crypto";
 import { ModeGate } from "./host-gates.mjs";
+import { createProgress } from "./progress.mjs";
 import { showDashboard } from "./dashboard.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { requestUserApproval, statusText } from "./ui.mjs";
 import { createNativeRuntime } from "./native-provider.mjs";
 import { prepareLaunchCheckout } from "./launch-setup.mjs";
+import { registerMainTools, swarmSummary } from "./main-tools.mjs";
 import { requestLaunchSpecification } from "./launch-input.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
 
@@ -46,6 +48,8 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		let restoreLink;
 		let restoring;
 		let contextEpoch = 0;
+		const progressContext = () => !retired && context && (!owner || owner === context.sessionManager.getSessionId()) ? context : undefined;
+		let progress = createProgress(pi, progressContext);
 		const cancel = () => { contextEpoch++; command?.abort(); };
 		const notify = (ctx, text, level = "info") => { if (ctx.hasUI) ctx.ui.notify(text, level); };
 		const contextGuard = (ctx, signal) => {
@@ -60,6 +64,12 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			check(!owner || owner === sessionId, "OWNERSHIP", "Another session owns this host");
 			owner = sessionId;
 			context = ctx;
+			// Another extension may veto navigation after our before-switch handler.
+			// A later explicit control must then regain observation of this same owner.
+			if (progress.disposed) {
+				progress = createProgress(pi, progressContext);
+				if (host) progress.bind(host);
+			}
 			const current = contextGuard(ctx);
 			// Cancelled input/approval must not cache a startup model for the next launch.
 			if (resolveSelection && host && !host.snapshot().run) {
@@ -73,6 +83,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				host = new SwarmHost({ events: pi.events, sessionId, codingTools, instructions, runner, tickIntervalMs, approvalTimeoutMs, ...selection,
 					requestApproval: request => requestUserApproval(context, request),
 					beforePrompt: async () => { if (viewing) { cancel(); await dashboard; } } });
+				progress.bind(host);
 			}
 			return host;
 		};
@@ -109,9 +120,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		// Yield the inspection view before a worker's native safety dialog is presented.
 		pi.on("ui_prompt_start", event => { if (viewing && event.kind !== "custom") cancel(); });
 
-		pi.registerCommand("swarm", {
-			description: "Swarm dashboard, launch, status, pause, stop, resume, restart, and reconciliation",
-			handler: async (args, ctx) => {
+		const control = async (args, ctx, signal) => {
 				const [action = "", ...rest] = args.trim().split(/\s+/);
 				check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot control the Swarm host");
 				if (action === "pause" || action === "stop") {
@@ -132,8 +141,11 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				if (action === "status") { notify(ctx, statusText(host?.snapshot())); return; }
 				check(!retired && !command, "BUSY", "Swarm control is busy or this extension instance is retired");
 				check(ctx.mode === "tui" && ctx.hasUI, "UI", "Swarm controls require interactive TUI");
+				check(!signal?.aborted, "CANCELLED", "Swarm request cancelled");
 				const pending = new AbortController();
 				command = pending;
+				const abort = () => { pending.abort(); void brake(ctx).catch(() => {}); };
+				signal?.addEventListener("abort", abort, { once: true });
 				const current = contextGuard(ctx, pending.signal);
 				let setupGate;
 				let setupPhase = false;
@@ -172,6 +184,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 						activeHost = await ensureHost(ctx);
 						if (!current()) return;
 						await activeHost.launch({ workspace: ctx.cwd, runId: randomUUID(), specification });
+						if (current()) progress.launched();
 						remember(ctx);
 						if (pending.signal.aborted || retired) return;
 						await activeHost.recruit({ id: "planner", specialization: "Objective decomposition and coordination", brief: "Investigate the approved objective, create criterion-linked tasks, and recruit only useful independent specialists within limits.", reason: "Initial investigation and decomposition of the user-approved objective" });
@@ -185,6 +198,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 						activeHost = await ensureHost(ctx);
 						if (!current()) return;
 						await activeHost.resume({ restart: selected === "restart" });
+						if (current()) progress.continued();
 						if (!pending.signal.aborted && !retired) for (const worker of activeHost.snapshot().run.workers) activeHost.wake(worker.id);
 					} else if (selected === "reconcile") {
 						activeHost = await ensureHost(ctx);
@@ -207,15 +221,29 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					if (!retired) notify(ctx, `Swarm control failed (${error.code ?? "INPUT"}). No automatic retry or rollback. Inspect status before continuing.`, "error");
 					throw error;
 				} finally {
+					signal?.removeEventListener("abort", abort);
 					setupGate?.dispose();
 					remember(ctx);
 					viewing = false;
 					if (command === pending) command = undefined;
 				}
-			},
+			};
+		pi.registerCommand("swarm", {
+			description: "Swarm dashboard, launch, status, pause, stop, resume, restart, and reconciliation",
+			handler: control,
 		});
+		const inspect = ctx => {
+			check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot inspect the Swarm host");
+			return { ...swarmSummary(host?.snapshot()), restorePending: Boolean(restoreLink) };
+		};
+		registerMainTools(pi, { control, inspect, history: (workerId, ctx) => {
+			inspect(ctx);
+			check(host, "STATE", "No attached Swarm run");
+			return host.history(workerId);
+		} });
 
 		pi.on("session_start", async (event, ctx) => {
+			context = ctx;
 			if (event.reason === "fork" || retired) return;
 			const link = ctx.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === LINK).at(-1)?.data;
 			if (!link || link.ownerSessionId !== ctx.sessionManager.getSessionId()) return;
@@ -234,10 +262,21 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			pi.on(event, async (_event, ctx) => { await brake(ctx); });
 		}
 		for (const event of ["session_before_switch", "session_before_fork", "session_before_tree"]) {
-			pi.on(event, async (_event, ctx) => ({ cancel: !(await brake(ctx)).settled }));
+			pi.on(event, async (_event, ctx) => {
+				const result = await brake(ctx);
+				if (result.settled) progress.dispose();
+				return { cancel: !result.settled };
+			});
 		}
+		pi.on("session_tree", (_event, ctx) => {
+			context = ctx;
+			progress.dispose();
+			progress = createProgress(pi, progressContext);
+			if (host) progress.bind(host);
+		});
 		pi.on("session_shutdown", async (_event, ctx) => {
 			retired = true;
+			progress.dispose();
 			cancel();
 			try { await host?.close(); }
 			catch { notify(ctx, "Swarm shutdown incomplete. Ownership remains fenced; no stale-lock takeover is supported.", "error"); }

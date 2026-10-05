@@ -51,12 +51,13 @@ async function fixture(t, { script = () => ({ text: "Mock planning complete" }),
 	const ctx = { cwd: root, mode: "tui", hasUI: true,
 		sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries },
 		ui: { custom: decisionUI(dialog), input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: (text, level) => notices.push({ text, level }) } };
-	const pi = { events, on: (name, handler) => handlers.set(name, handler), registerCommand: (name, command) => commands.set(name, command), appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
+	const tools = new Map(); const messages = [];
+	const pi = { registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events, on: (name, handler) => handlers.set(name, handler), registerCommand: (name, command) => commands.set(name, command), appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
 	createSwarmExtension({ modelRuntime: mock.modelRuntime, mainModel: mock.model, runner, tickIntervalMs: 0, approvalTimeoutMs })(pi);
 	const command = args => commands.get("swarm").handler(args, ctx);
 	const event = (name, data = {}) => handlers.get(name)(data, ctx);
 	const status = async () => { await command("status"); return JSON.parse(notices.at(-1).text); };
-	return { root, mock, entries, notices, prompts, responses, ctx, command, event, status, events, mode };
+	return { tools, messages, root, mock, entries, notices, prompts, responses, ctx, command, event, status, events, mode };
 }
 
 test("factory is opt-in and rejects absent or live runtimes without registration", () => {

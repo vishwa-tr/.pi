@@ -40,6 +40,22 @@ async function until(predicate) {
 	assert.fail("Timed out waiting for mock request");
 }
 
+test("public custom messages with triggerTurn false persist idle and queue during a turn without model continuation", async t => {
+	const f = await fixture(t, [{ waitForAbort: true }]);
+	const { session } = await f.open();
+	const notice = content => ({ customType: "swarm-progress", content, display: true });
+	await session.sendCustomMessage(notice("Idle observation"), { triggerTurn: false });
+	assert.equal(f.calls.length, 0);
+	assert.ok(session.messages.some(message => message.content === "Idle observation"));
+	const prompt = session.prompt("Hold this fixture turn");
+	await until(() => f.calls.length === 1);
+	await session.sendCustomMessage(notice("During-turn observation"), { triggerTurn: false });
+	assert.equal(session.messages.some(message => message.content === "During-turn observation"), false);
+	await session.abort(); await prompt; await session.waitForIdle();
+	assert.equal(f.calls.length, 1);
+	assert.equal(session.messages.filter(message => message.content === "During-turn observation").length, 1);
+});
+
 test("native session identity persists before first prompt and after idle/reopen", async (t) => {
 	const f = await fixture(t, [{ text: "First answer" }, { text: "Second answer" }]);
 	const first = await f.open();

@@ -62,7 +62,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **527 passing tests on Pi 1.0.1**. It includes actual local shell execution,
+The current combined suite has **544 passing tests on Pi 1.0.1**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -174,6 +174,69 @@ worktree roots, concurrent user edits, same-path root replacement during either 
 ambient Git routing, and policy/owner/model cancellation without later writes.
 These are automated offline checks, not human visual sign-off.
 
+## Main-agent chat controls and updates
+
+Ask the main agent to start a Swarm for an objective, inspect its progress or history,
+or pause/stop it. The native main-agent tools are:
+
+- `swarm_start({ objective })`: the same setup, editable agreement, existing-work consent,
+  owner/model checks, Plan Off and Safety flow as `/swarm start`. A tool call is **not**
+  consent. It returns after approved launch and planner recruitment, not after workers finish;
+  the main agent can answer and inspect status while workers continue.
+- `swarm_status({})`: bounded current progress, task states, active workers, blockers and
+  unsettled counts. Like `/swarm status`, the first explicit inspection after reload can
+  reattach saved ownership **paused**, through the existing model/mode checks. It does not
+  wake workers or resolve authentication.
+- `swarm_control({ action })`: `pause`, `stop`, `resume` or `restart`, through the same
+  command handler. Continuation requires fresh human approval. Brakes stay available while
+  a launch tool awaits approval; cancelling that tool also cancels its pending control.
+  A stopping/pausing result is not settled completion. Reconciliation remains user-only
+  through `/swarm reconcile`.
+- `swarm_history({ workerId?, offset?, limit? })`: without a worker ID, list workers;
+  otherwise read a semantic page of persisted history without constructing an SDK session.
+  Offset is a zero-based entry index; limit is 1–20 (default 10). Results include total
+  entries and the next offset; individual entries are capped at 2,000 characters and marked
+  when truncated. `/swarm` conversations retain the full wrapped entries.
+
+Authorizing tools refuse print/JSON/RPC operation instead of guessing consent. Tools are
+model-only and optional: they add no instruction to delegate unrelated questions. Worker
+sessions retain their isolated tool set; similarly named worker inspection tools do not
+expose main-agent controls. Status includes at most 50 tasks and 512 objective characters,
+with truncation flags and counts over the complete board. Status omits host/session metadata,
+private provider fields, raw diagnostics and execution receipts. History uses the existing
+semantic allowlist, excluding opaque tool details and provider replay/error fields. Objective,
+task and history text remains **untrusted data**, not instructions or authorization; this is
+not a general secret scanner for worker-authored text.
+
+After actual approved launch, one **Swarm extension update** appears in normal chat.
+Further updates report significant run transitions, recorded task completion, blocker-count
+changes and approval requests. Bursts coalesce over 750 ms; unchanged status, host ticks and
+worker message/turn endings do not produce notices or imply completion. Pending approval
+notices wait until the native dialog finishes so chat rendering cannot take its focus.
+Only durable Swarm state establishes completion; notices do not claim that the main agent
+personally verified the work.
+
+Updates use public `pi.sendMessage` with `triggerTurn: false`: they are persisted custom
+messages, visible in chat and available as context to subsequent normal model requests.
+During a main-agent turn, Pi queues them until the turn's results are recorded; idle updates
+append without starting a turn. **No automatic summary/model call, polling loop, or worker
+instruction-triggered action is added.** Ask the main agent for synthesis when wanted.
+Subscriptions and pending notification timers are fenced/removed on navigation and teardown;
+reload/restoration does not replay old progress notices or automatically resume execution.
+There is no persistent widget or Todo integration. The existing dashboard stays on-demand
+and never opens automatically.
+
+Offline coverage includes registered main-tool discovery through both normal CLI entry forms,
+actual tool execution against scripted native workers, prompt return while workers stream,
+caller/user cancellation, mode/model revocation, inert status/history, bounded/redacted results,
+coalesced terminal notices and public SDK idle/busy message delivery without another model call.
+This is not a new live-provider trial or human visual sign-off. The delivery/schema contract
+was checked against installed Pi 1.0.1 public declarations and its
+[extension](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md),
+[SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md) and
+[message-type](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/message-types.md)
+documentation; upstream links may change.
+
 ## Dashboard keys and conversations
 
 `/swarm` is a focused, read-only inspection overlay, refreshed every 500 ms. Opening it
@@ -232,7 +295,7 @@ and inspection are entirely local, without model or network calls.
 restores paused ownership, but native ESM modules may remain cached in the process; it is
 not a guarantee that edited source code is reloaded.
 
-Offline verification on Pi 1.0.1: **527 Swarm tests**, **68 Plan/Safety tests**,
+Offline verification on Pi 1.0.1: **544 Swarm tests**, **68 Plan/Safety tests**,
 **four PTY cleanup tests**, and all five CLI scenarios pass. Normal entry was verified
 through both file and package loading. The actual CLI exercises search-input isolation, conversation/back navigation and
 focused End/Home help paging. Existing safety exclusion and reload tests remain intact;
@@ -264,6 +327,7 @@ are scripted-provider checks, not a new live-model trial or human visual sign-of
 | `extensions/swarm/constrained-provider.mjs` | Isolated text Chat Completions request/response adapter with explicit credentials, request fencing and branded transport settlement. |
 | `extensions/swarm/https-transport.mjs` | Explicit host egress authorization, pinned public-IPv4 HTTPS client, separate loopback test policy and actual socket settlement. |
 | `extensions/swarm/extension.mjs`, `ui.mjs`, `decision.mjs` | Opt-in factory, bounded cancellable native decision packets, commands and lifecycle hooks. |
+| `extensions/swarm/main-tools.mjs`, `progress.mjs` | Main-agent chat tools, bounded semantic observations and event-driven non-waking chat updates; no widget. |
 | `extensions/swarm/launch-setup.mjs`, `launch-input.mjs` | Explicitly consented Git/runtime-exclusion prerequisites, optional objective input and editable objective-referencing defaults, before host binding. |
 | `extensions/swarm/dashboard.mjs`, `transcript.mjs` | Focused, refreshing, read-only dashboard and semantic transcript/search; actions return to existing host controls. |
 | `test/` | Foundation, host recovery, and offline real-SDK/factory integration tests. |

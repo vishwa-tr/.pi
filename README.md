@@ -127,8 +127,9 @@ root `skills/` is the canonical global skill library.
 - **Teams and merging:** `pi-teams` adds persistent team agents and optional peer
   messaging. `pi-merge` synthesizes selected session branches into a new session
   while leaving source branches intact.
-- **Swarm:** `pi-swarm` provides `/swarm start <goal>` and `/swarm` inspection
-  using native Pi workers with the current model/thinking snapshot. Launch and
+- **Swarm:** `pi-swarm` provides main-agent chat start/status/control/history tools,
+  event-driven chat updates without automatic model turns, `/swarm start <goal>` and
+  on-demand `/swarm` inspection using native Pi workers with the current model/thinking snapshot. Launch and
   continuation require explicit user approval; Plan must be ready and Off, and
   Safety gates worker commands. Use `/swarm pause` or `/swarm stop` to brake work.
   Load, reload, session resume, and ordinary prompts never automatically dispatch

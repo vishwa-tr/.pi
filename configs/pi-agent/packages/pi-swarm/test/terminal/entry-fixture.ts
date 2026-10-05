@@ -29,7 +29,13 @@ export default function (pi) {
 		auth: { apiKey: { name: "Fixture", check: async () => ({ type: "api_key" }),
 			resolve: async () => { record({ type: "auth" }); return { auth: { apiKey: "memory-only-fixture" } }; } } },
 		api: { stream, streamSimple: stream } }));
-	pi.on("session_start", (_event, ctx) => { record({ type: "ready" }); ctx.ui.notify("Entry fixture ready", "info"); });
+	pi.on("session_start", (_event, ctx) => {
+		const names = pi.getAllTools().map(tool => tool.name);
+		const expected = ["swarm_start", "swarm_status", "swarm_control", "swarm_history"];
+		if (!expected.every(name => names.filter(item => item === name).length === 1)) throw new Error("Swarm main tool discovery failed");
+		record({ type: "ready", tools: expected });
+		ctx.ui.notify("Entry fixture ready", "info");
+	});
 	pi.registerCommand("fixture-model", { handler: async (_args, ctx) => {
 		await pi.setModel(ctx.modelRegistry.find("entry-fixture", "second"));
 		ctx.ui.notify("Entry model changed", "info");

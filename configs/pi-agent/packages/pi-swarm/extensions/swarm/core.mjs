@@ -83,6 +83,7 @@ export class SwarmController {
 		}
 	}
 
+	#listeners = new Set();
 	#state = null;
 	#journal;
 	#lease;
@@ -100,6 +101,12 @@ export class SwarmController {
 	}
 
 	snapshot() { return structuredClone(this.#state); }
+
+	/** Read-only observers run after durable publication; failures cannot reject a commit. */
+	subscribe(listener) {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
+	}
 
 	/** Trusted workspace adapters recheck this immediately before side effects. */
 	assertOwned() {
@@ -140,7 +147,12 @@ export class SwarmController {
 			this.#executionAbort = new AbortController();
 			expired.abort(new Error("Execution context changed"));
 		}
-		return this.#remember(event);
+		const receipt = this.#remember(event);
+		for (const listener of this.#listeners) {
+			try { listener(Object.freeze({ type: event.type, revision: next.revision })); }
+			catch { /* Observation cannot change durable execution. */ }
+		}
+		return receipt;
 	}
 
 	owner(type, payload = {}, options = {}) { return this.#dispatch("owner", type, payload, options); }
@@ -208,12 +220,13 @@ export class SwarmController {
 
 	async close() {
 		await this.#queue;
-		if (this.#closed) return;
+		if (this.#closed) { this.#listeners.clear(); return; }
 		requireCondition(!this.#fault, "FAULT", "Persistence/ownership uncertain; preserve fencing for recovery");
 		requireCondition(this.#state && ["paused", ...TERMINAL].includes(this.#state.status), "UNSETTLED", "Pause/stop and settle execution before closing");
 		requireCondition(!this.#state.tasks.some(task => task.assignment), "UNSETTLED", "Assignments remain unsettled");
 		requireCondition(!this.#state.workspace?.operations.length, "UNSETTLED", "Workspace operations remain unsettled");
 		requireCondition(!this.#state.sessions?.turns.length, "UNSETTLED", "Session turns remain unsettled");
 		this.#release(this.#state.status === "paused");
+		this.#listeners.clear();
 	}
 }

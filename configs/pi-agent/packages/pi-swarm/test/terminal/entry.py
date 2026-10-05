@@ -34,7 +34,8 @@ def main(scripted=False, package_root=False):
         command = [shutil.which("node"), str(Path(pi).resolve()), "--no-extensions",
                    "-e", str(entry),
                    "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
-                   "--no-approve", "--no-tools"]
+                   "--no-approve"]
+        command += ["--tools", "swarm_start,swarm_status,swarm_control,swarm_history"] if scripted else ["--no-tools"]
         if scripted:
             packages = HERE.parent.parent.parent
             command += ["-e", str(HERE / "entry-fixture.ts"),
