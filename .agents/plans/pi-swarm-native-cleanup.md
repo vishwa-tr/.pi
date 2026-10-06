@@ -26,7 +26,7 @@ as phases land; when one is off, find the code by its name.
 Update this checklist as each phase lands. Put the commit SHA after the box, as it
 appears on `refactor/pi-swarm-native` (after the rebase, not the worktree SHA).
 
-- [ ] Phase 0 — target the managed Pi installation, and a Linux baseline (0A done — `b585765`; 0B pending)
+- [x] Phase 0 — target the managed Pi installation, and a Linux baseline — 0A `b585765`, 0B recorded in the baseline table
 - [x] Phase 1 — delete the custom HTTPS transport — `7ba5819`
 - [ ] Phase 2 — native session files
 - [ ] Phase 3 — plain model runtime
@@ -84,20 +84,26 @@ appears on `refactor/pi-swarm-native` (after the rebase, not the worktree SHA).
 **Running the tests**
 
 Tests run against the **managed Pi installation**, the one Pi's own installer sets
-up (Phase 0 explains the layout). Until Phase 0 lands, point `PI_SDK_DIR` at it by
-hand:
-
-```bash
-cd configs/pi-agent/packages/pi-swarm
-PI_SDK_DIR="$HOME/.pi/agent/install/releases/$(cat ~/.pi/agent/install/current-version)/node_modules/@earendil-works/pi-coding-agent" npm test
-```
-
-After Phase 0, a plain `npm test` finds the managed install on its own, and
+up (Phase 0 explains the layout). A plain `npm test` finds it on its own;
 `PI_SDK_DIR` is only an override.
 
-On Windows, the suite has 170 known failures from POSIX-only code (see Phase 0).
-Until Phase 4 fixes them, a phase's Windows check is: **the set of failing test
-names is the baseline set minus the deleted tests, with nothing new.** Get the
+**Linux is the check that counts.** From Git Bash on Windows, run the suite inside
+WSL against a worktree's current state, including uncommitted and untracked files:
+
+```bash
+.agents/scripts/swarm-wsl-test.sh [--pty] [<worktree>]
+```
+
+It clones the worktree's commit into `~/swarm-runs/<worktree-name>` inside WSL,
+applies the uncommitted diff, runs `npm test`, and with `--pty` also runs
+`run.py`, `production.py` and `native.py`. It prints the totals and every failing
+test name, and exits 0 only if everything passed. Everything inside WSL runs with
+a Linux-only `PATH`. A phase is green on Linux when the only failure is a known
+flake from the Phase 0 table.
+
+On Windows, the suite has known failures from POSIX-only code (see Phase 0). Until
+Phase 4 fixes them, a phase's Windows check is: **the set of failing test names is
+the previous baseline set minus the deleted tests, with nothing new.** Get the
 names with:
 
 ```bash
@@ -224,7 +230,8 @@ there is no way to tell whether a change broke something.
 | Platform | Tests | Pass | Fail | Notes |
 |---|---|---|---|---|
 | Windows 11, Node 24.17, managed Pi 1.0.4 | 572 | 402 | 170 | 168 unique failing names; all POSIX-only causes |
-| Linux | — | — | — | |
+| Linux (WSL Ubuntu 24.04), Node 22.23.3, managed Pi 1.0.4, at `bdb43b5` | 523 | 522 | 1 | Only failure: "mode, ctime, and inode changes invalidate file fingerprints" (`workspace-files.test.mjs`), a **known flake**: it passed 3 of 5 reruns. A same-content rewrite doesn't always change `ctime` within WSL's timestamp granularity. Phase 4 removes the guarded file IO it covers. PTY `run.py`, `production.py`, `native.py`: all pass. |
+| Windows 11 after Phase 0A, at `b585765` | 523 | 360 | 163 | 161 unique failing names, all POSIX-only; this is the Windows baseline for later phases |
 
 **Done when** `npm test` and the PTY harness find the managed install with no
 environment variables on both platforms, the resolver tests pass, and Linux is
