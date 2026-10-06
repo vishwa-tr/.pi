@@ -2,8 +2,10 @@ import test from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { dependencyRoot, findPiPackage, systemPromptText } from "./runtime.mjs";
+import { createPiJiti, dependencyRoot, findPiPackage, systemPromptText } from "./runtime.mjs";
 
 function fakeSdk(path) {
   mkdirSync(join(path, "dist"), { recursive: true });
@@ -42,4 +44,16 @@ test("dependency lookup handles both nested and hoisted packages", (t) => {
 test("provider fixtures retain structured system-prompt sections", () => {
   assert.equal(systemPromptText({ systemPrompt: "legacy" }), "legacy");
   assert.equal(systemPromptText({ messages: [{ role: "system", content: "base", sections: { identity: "worker", absent: null } }] }), "base\nworker");
+});
+
+test("test loaders resolve the public subpaths used by extensions", async () => {
+  const register = fileURLToPath(new URL("./register.mjs", import.meta.url));
+  const result = spawnSync(process.execPath, ["--import", register, "--input-type=module", "-e",
+    'await import("@earendil-works/pi-ai/compat"); await import("typebox/value"); await import("typebox/compile");'],
+    { encoding: "utf8", timeout: 30_000 });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  const jiti = await createPiJiti(import.meta.url);
+  const module = await jiti.import(fileURLToPath(new URL("../packages/pi-commit/extensions/commit/describe.ts", import.meta.url)));
+  assert.ok(Object.keys(module).length > 0, "commit description module imports through the same aliases");
 });

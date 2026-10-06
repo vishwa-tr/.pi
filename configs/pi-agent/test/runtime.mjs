@@ -34,11 +34,15 @@ export function dependencyRoot(name, sdkDir = findPiPackage()) {
 export function sdkAliases(sdkDir = findPiPackage()) {
   const require = createRequire(join(sdkDir, "package.json"));
   const ai = dependencyRoot("@earendil-works/pi-ai", sdkDir);
+  const aiEntry = join(ai, "dist", existsSync(join(ai, "dist", "compat.js")) ? "compat.js" : "index.js");
   return {
     "@earendil-works/pi-coding-agent": join(sdkDir, "dist", "index.js"),
     "@earendil-works/pi-agent-core": join(dependencyRoot("@earendil-works/pi-agent-core", sdkDir), "dist", "index.js"),
     "@earendil-works/pi-tui": join(dependencyRoot("@earendil-works/pi-tui", sdkDir), "dist", "index.js"),
-    "@earendil-works/pi-ai": join(ai, "dist", existsSync(join(ai, "dist", "compat.js")) ? "compat.js" : "index.js"),
+    "@earendil-works/pi-ai/compat": aiEntry,
+    "@earendil-works/pi-ai": aiEntry,
+    "typebox/compile": require.resolve("typebox/compile"),
+    "typebox/value": require.resolve("typebox/value"),
     typebox: require.resolve("typebox"),
   };
 }
