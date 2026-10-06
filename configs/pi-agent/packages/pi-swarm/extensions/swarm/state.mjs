@@ -1,4 +1,5 @@
 import { validId } from "./store/files.mjs";
+import { recipientId } from "./messaging.mjs";
 import { requireCondition } from "./errors.mjs";
 import { validateApproval } from "./approval-state.mjs";
 import { SESSION_FIELDS, reduceSession, requireSessionIdle, requireWorkerTurn } from "./session-state.mjs";
@@ -109,7 +110,7 @@ export function reduceEvent(previous, event) {
 	requireCondition(event.version === 1 && Object.hasOwn(FIELDS, event.type), "INPUT", "Unsupported event version/type");
 	id(event.operationId); text(event.actor, "actor"); integer(event.expectedRevision, "revision");
 	integer(event.cycle, "cycle", 1); integer(event.generation, "generation"); integer(event.atMs, "timestamp");
-	exactKeys(event.payload, FIELDS[event.type]);
+	exactKeys(event.payload, event.type === "message.send" && event.payload && Object.hasOwn(event.payload, "topic") ? [...FIELDS[event.type], "topic"] : FIELDS[event.type]);
 	if (previous === null) return create(event);
 
 	requireCondition(event.type !== "run.create", "STATE", "Run already exists");
@@ -357,11 +358,15 @@ export function reduceEvent(previous, event) {
 			task.pending = null;
 			break;
 		}
-		case "message.send":
+		case "message.send": {
 			text(p.text, "message");
-			if (p.to !== "owner") workerById(state, p.to);
-			state.messages.push({ id: event.operationId, from: event.actor, to: p.to, text: p.text, cycle: state.cycle, generation: state.generation });
+			const to = recipientId(p.to, state.workers);
+			if (p.topic !== undefined) requireCondition(typeof p.topic === "string" && p.topic.trim().length > 0 && p.topic.length <= 128, "INPUT", "Invalid topic");
+			requireCondition(to !== "@board" || p.topic !== undefined, "INPUT", "Board messages require a topic");
+			if (!["owner", "@board"].includes(to)) workerById(state, to);
+			state.messages.push({ id: event.operationId, from: event.actor, to, text: p.text, cycle: state.cycle, generation: state.generation, ...(p.topic !== undefined ? { topic: p.topic.trim() } : {}) });
 			break;
+		}
 		default:
 			if (Object.hasOwn(SESSION_FIELDS, event.type)) reduceSession(state, event);
 			else reduceWorkspace(state, event);

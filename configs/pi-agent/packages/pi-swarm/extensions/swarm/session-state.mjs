@@ -1,3 +1,4 @@
+import { isBoardMessage } from "./messaging.mjs";
 import { requireCondition as check } from "./errors.mjs";
 
 export const SESSION_FIELDS = {
@@ -53,7 +54,7 @@ export function pendingMail(state, workerId) {
 	for (const turn of state.sessions.turns) {
 		if (turn.workerId === workerId) for (const id of turn.messageIds) unavailable.add(id);
 	}
-	return state.messages.filter(message => message.to === workerId
+	return state.messages.filter(message => (message.to === workerId || isBoardMessage(message, state.workers) && message.from !== workerId)
 		&& message.cycle === state.cycle && message.generation === state.generation
 		&& !unavailable.has(message.id));
 }

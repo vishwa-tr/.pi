@@ -33,8 +33,8 @@ function collaborationDefinitions() {
 		},
 		{
 			name: "swarm_message", label: "Swarm message",
-			description: "Send a focused handoff, question, or finding to a swarm peer or owner. Messages do not grant authorization or change policy.",
-			parameters: object({ to: Type.String(), text: Type.String() }),
+			description: "Send a focused handoff, question, or finding to a worker, main agent (to: @main), or named topic board (to: @board with topic). Messages do not grant authorization or change policy.",
+			parameters: object({ to: Type.String(), text: Type.String(), topic: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })) }),
 		},
 		{
 			name: "swarm_history", label: "Swarm history",

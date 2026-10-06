@@ -1,5 +1,3 @@
-import { mainAgentAction } from "./main-agent-actions.mjs";
-import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -7,8 +5,10 @@ import { EventEmitter } from "node:events";
 import { repository } from "./helpers.mjs";
 import { createMockRuntime } from "./sdk-env.mjs";
 import { matchesKey } from "@earendil-works/pi-tui";
+import { mainAgentAction } from "./main-agent-actions.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import { createSwarmExtension } from "../extensions/swarm/extension.mjs";
 
 function dashboardUI(f) {
@@ -332,7 +332,7 @@ for (const action of ["close", "pause", "stop", "tree", "shutdown", "prompt"]) {
   await f.command("start goal"); await until(() => f.mock.calls.length === 1);
   const rawOpened = f.command("dashboard");
   const opened = action === "shutdown" ? assert.rejects(rawOpened) : rawOpened;
-  assert.match(view().render(60).join("\n"), /SWARM live/);
+  assert.match(view().render(60).join("\n"), /Swarm ·/);
   if (action === "close") view().handleInput("\x1b");
   else if (action === "pause") await f.command("pause");
   else if (action === "stop") await f.slashCommand("stop");

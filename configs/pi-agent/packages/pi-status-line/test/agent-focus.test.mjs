@@ -82,3 +82,18 @@ for (const kind of ['subagents', 'teams']) {
   assert.equal(h.focus.indicator(), null);
  });
 }
+
+
+test('explicit roster selection updates the indicator and ignores stale navigation', () => {
+ const h = setup(); const targets = []; h.events.on('agent-focus:focus', value => targets.push(value));
+ h.events.emit('agent-focus:roster', { source: 'swarm', noun: 'swarm agent', agents: [{ id: 'a', name: 'Builder' }, { id: 'b', name: 'Reviewer' }] });
+ h.shortcuts.get('alt+n')(h.ctx);
+ h.events.emit('agent-focus:navigate', { source: 'swarm', id: 'a', action: 'select', targetId: 'missing' });
+ assert.equal(targets.at(-1).id, 'a');
+ h.events.emit('agent-focus:navigate', { source: 'swarm', id: 'a', action: 'select', targetId: 'b' });
+ assert.equal(targets.at(-1).id, 'b'); assert.match(h.focus.indicator().text, /Reviewer/);
+ h.events.emit('agent-focus:navigate', { source: 'swarm', id: 'a', action: 'back' });
+ assert.equal(h.focus.indicator().focused, true);
+ h.events.emit('agent-focus:navigate', { source: 'swarm', id: 'b', action: 'back' });
+ assert.equal(targets.at(-1), null);
+});

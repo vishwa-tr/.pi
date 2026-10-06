@@ -25,7 +25,7 @@ def main(scripted=False, package_root=False):
         command = [shutil.which('node'), str(pi), '--no-extensions', '-e', str(entry), '--no-skills',
                    '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-approve']
         if scripted:
-            command += ['-e', str(HERE / 'entry-fixture.ts'), '--provider', 'entry-fixture', '--model', 'first',
+            command += ['-e', str(HERE.parent.parent.parent / 'pi-status-line/extensions/status-line/index.ts'), '-e', str(HERE / 'entry-fixture.ts'), '--provider', 'entry-fixture', '--model', 'first',
                         '--tools', 'swarm_start,swarm_status,swarm_control,swarm_history']
         else:
             command += ['--no-tools']
@@ -61,8 +61,12 @@ def main(scripted=False, package_root=False):
                 terminal.choose(2); terminal.expect('Preserve and proceed?'); terminal.choose(1)
                 terminal.expect('Fixture main agent returned'); wait_event('dispatch')
                 assert [row['model'] for row in events() if row['type'] == 'dispatch'] == ['second']
+                terminal.send('\x1bn'); terminal.expect('1 Messages  2 Agents  3 Topics / Boards')
+                terminal.send('\t'); terminal.expect('Main agent')
+                terminal.send('\t'); terminal.expect('No topics yet')
+                terminal.send('\x1b'); time.sleep(.1)
                 terminal.line('fixture chat pause'); terminal.expect('Fixture main agent returned'); wait_event('settled')
-                terminal.line('fixture chat view'); terminal.expect('SWARM live / Pi native provider | paused')
+                terminal.line('fixture chat view'); terminal.expect('Swarm · paused')
                 terminal.send('r'); terminal.send('p'); terminal.send('s'); time.sleep(.2)
                 assert sum(row['type'] == 'dispatch' for row in events()) == 1
                 terminal.send('\x1b'); terminal.expect('Fixture main agent returned')

@@ -126,8 +126,9 @@ class Terminal:
         # nor unchanged tail need be emitted. Inspect the bounded native view.
         start = len(self.output)
         self.line("/fixture-swarm dashboard")
-        self.expect(f"SWARM live / {transport} | {expected}")
+        self.expect(f"Swarm · {expected}")
         self.cursor = start
+        self.send("2")
         self.expect("cost: unknown")
         self.send("\x1b")
         time.sleep(0.2)
@@ -135,7 +136,7 @@ class Terminal:
     def inspect_conversation(self):
         """Exercise the real focused overlay without granting execution authority."""
         self.send("c")
-        self.expect("Native persisted history")
+        self.expect("Messages")
         self.send("/")
         self.expect("SEARCH")
         self.send("psC")  # Search text must not invoke pause, stop or reconciliation.
@@ -150,9 +151,9 @@ class Terminal:
         self.send("?")
         time.sleep(0.1)
         self.send("q")
-        self.expect("Workers")
+        self.expect("Agents")
         self.send("\r")
-        self.expect("Native persisted history")
+        self.expect("Messages")
 
     def line(self, text):
         self.send(text)
@@ -306,11 +307,11 @@ def main():
             terminal.expect_status("running")
             wait_event("worker-start")
             terminal.line("/fixture-swarm dashboard")
-            terminal.expect("SWARM live / mock only | running")
-            terminal.expect("Recorded active time:")
-            terminal.expect("Recorded active time:")  # host ticks repaint without keyboard input
+            terminal.expect("Swarm · running")
+            terminal.cursor = terminal.last_expect_start
+            terminal.expect("1 Messages  2 Agents  3 Topics / Boards")
             terminal.send("2")
-            terminal.expect("active SDK turn")
+            terminal.expect("working")
             terminal.inspect_conversation()
             terminal.send("q")
             time.sleep(0.1)
@@ -340,7 +341,7 @@ def main():
             terminal.line("/fixture-light")
             terminal.expect("Fixture light theme selected")
             terminal.line("/fixture-swarm dashboard")
-            terminal.expect("SWARM live / mock only | paused")
+            terminal.expect("Swarm · paused")
             terminal.send("q")
             time.sleep(0.2)
             terminal.line("/fixture-swarm resume")
@@ -352,7 +353,7 @@ def main():
             terminal.choose(1)
             wait_event("worker-start", 3)
             terminal.line("/fixture-swarm dashboard")
-            terminal.expect("SWARM live / mock only | running")
+            terminal.expect("Swarm · running")
             terminal.send("q")
             time.sleep(0.2)
             terminal.line("/swarm stop")

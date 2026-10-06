@@ -1,13 +1,19 @@
 import { Text } from "@earendil-works/pi-tui";
 import { displayText } from "./dashboard.mjs";
+import { messageText } from "./conversations.mjs";
 import { requireCondition as check } from "./errors.mjs";
 
 const json = value => JSON.stringify(value, null, 2);
 
 /** Approval packets are literal text, never Markdown. Always show the full packet,
  * including in the unexpanded transcript; Text wraps at the actual render width. */
-export function registerAgreementRenderer(pi) {
+export function registerSwarmRenderers(pi) {
 	pi.registerMessageRenderer("swarm-agreement", message => new Text(displayText(message.content), 0, 0));
+	pi.registerMessageRenderer("swarm-agent-mail", message => {
+		const messages = Array.isArray(message.details?.messages) ? message.details.messages : [];
+		const text = messageText(messages.map(item => ({ ...item, to: "owner" })));
+		return new Text(displayText(text || "Swarm agent messages"), 0, 0);
+	});
 }
 
 /** Native dialogs only. `present` shows each full packet before its select; native inputs

@@ -10,7 +10,7 @@ function fixture() {
 	const results = []; const historyReads = [];
 	const signal = new AbortController();
 	const keybindings = { matches: (data, action) => matchesKey(data, ({ "tui.select.cancel": "escape", "tui.select.confirm": "enter", "tui.select.up": "up", "tui.select.down": "down", "tui.select.pageUp": "pageUp", "tui.select.pageDown": "pageDown" })[action]) };
-	const options = { source: { snapshot: () => snapshot, history: id => { historyReads.push(id); return Array.from({ length: 130 }, (_, i) => ({ id: String(i), message: { content: `entry-${i}` } })); } }, tui: { terminal: { rows: 24 }, requestRender: () => renders++ }, theme: { fg: (_, text) => text }, keybindings, signal: signal.signal, done: value => results.push(value), schedule: callback => { tick = callback; return 1; }, unschedule: () => clears++ };
+	const options = { source: { snapshot: () => snapshot, history: id => { historyReads.push(id); return Array.from({ length: 130 }, (_, i) => ({ id: String(i), message: { role: "assistant", content: `entry-${i}` } })); } }, tui: { terminal: { rows: 24 }, requestRender: () => renders++ }, theme: { fg: (_, text) => text }, keybindings, signal: signal.signal, done: value => results.push(value), schedule: callback => { tick = callback; return 1; }, unschedule: () => clears++ };
 	const view = new SwarmDashboard(options);
 	return { view, options, signal, results, historyReads, tick: () => tick(), snapshot, setSnapshot: next => { snapshot = next; }, clears: () => clears, renders: () => renders };
 }
@@ -19,11 +19,11 @@ test("dashboard labels native and unattached selection without claiming mock-onl
 	const f = fixture();
 	f.snapshot.run.hostApprovals = [{ provider: { transport: "pi-native" } }];
 	f.tick();
-	assert.match(f.view.render(100).join("\n"), /Pi native provider/);
+	assert.match(f.view.render(100).join("\n"), /1 Messages.*2 Agents.*3 Topics/);
 	assert.doesNotMatch(f.view.render(100).join("\n"), /mock only/);
-	assert.match(f.view.body(), /cost: unknown/);
+	f.view.handleInput("2"); assert.match(f.view.body(), /cost: unknown/);
 	f.setSnapshot(undefined); f.tick();
-	assert.match(f.view.render(100).join("\n"), /not selected/);
+	assert.match(f.view.render(100).join("\n"), /unattached/);
 	assert.doesNotMatch(f.view.render(100).join("\n"), /mock only/);
 	f.view.dispose();
 });
@@ -42,7 +42,7 @@ test("polling refreshes detached inspection, never executes work; dispose is ide
 
 test("worker selection and paged native history have no entry-count cutoff", () => {
 	const f = fixture();
-	f.view.handleInput("2"); assert.match(f.view.render(80).join("\n"), /active SDK turn/);
+	f.view.handleInput("2"); assert.match(f.view.render(80).join("\n"), /working/);
 	f.view.handleInput("\x1b[C"); f.view.handleInput("\r");
 	assert.deepEqual(f.historyReads, ["two"]);
 	f.view.handleInput("\x1b[F");
@@ -73,7 +73,7 @@ test("all sections escape controls and bound Unicode/long strings at narrow widt
 	f.snapshot.run.workers[0].brief = hostile;
 	f.snapshot.run.tasks = [{ id: hostile, status: "blocked" }];
 	f.snapshot.run.messages = [{ text: hostile }];
-	for (const section of "123456") {
+	for (const section of "123") {
 		f.view.handleInput(section);
 		for (const width of [1, 2, 8, 20, 40, 60, 100]) {
 			const lines = f.view.render(width);
@@ -90,7 +90,7 @@ test("all sections escape controls and bound Unicode/long strings at narrow widt
 
 test("read errors remain inspection failures, not stale history or automatic retry actions", () => {
 	const f = fixture(); f.options.source.history = () => { throw new Error("private data"); };
-	f.view.handleInput("6");
+	f.view.handleInput("c");
 	assert.match(f.view.render(80).join("\n"), /Inspection unavailable/);
 	assert.doesNotMatch(f.view.render(80).join("\n"), /private data/);
 	assert.deepEqual(f.results, []); f.view.dispose();
@@ -110,7 +110,7 @@ test("Vim navigation owns rows, panes, half pages and both ends", () => {
 	f.view.handleInput("\t"); assert.equal(f.view.section, 1);
 	f.view.handleInput("j"); assert.equal(f.view.workerId, "two");
 	f.view.handleInput("k"); assert.equal(f.view.workerId, "one");
-	f.view.handleInput("c"); f.view.render(60); assert.equal(f.view.section, 5);
+	f.view.handleInput("c"); f.view.render(60); assert.equal(f.view.section, 0); assert.equal(f.view.isConversation, true);
 	f.view.handleInput("G"); f.view.render(60); assert.ok(f.view.offset > 100);
 	f.view.handleInput("g"); f.view.handleInput("g"); f.view.render(60); assert.equal(f.view.offset, 0);
 	f.view.handleInput("\x04"); assert.equal(f.view.offset, Math.floor(f.view.pageSize / 2));
@@ -218,8 +218,8 @@ for (const [name, replacement, expected] of [
 		f.options.source.history = () => [{ type: "context_edit", targetId: "original", replacement }];
 		f.view.handleInput("c");
 		const text = displayText(f.view.body());
-		assert.match(text, /Context edit → original/);
-		assert.match(text, expected);
+		assert.match(text, /No messages yet/);
+		assert.match(displayText(transcriptText([{ type: "context_edit", targetId: "original", replacement }])), expected);
 		assert.doesNotMatch(text, /SECRET|\x1b|\u202e|No text content/);
 		f.view.render(60);
 		assert.doesNotMatch(f.view.lines.join("\n"), /SECRET|\x1b|\u202e/);
@@ -231,7 +231,7 @@ test("frames remain width and height bounded at supported terminal sizes", () =>
 	const f = fixture();
 	for (const [width, height] of [[60, 24], [80, 24], [100, 40]]) {
 		f.options.tui.terminal.rows = height;
-		for (const section of "123456") {
+		for (const section of "123") {
 			f.view.handleInput(section);
 			const lines = f.view.render(width);
 			assert.ok(lines.length <= height - 4);
@@ -239,4 +239,46 @@ test("frames remain width and height bounded at supported terminal sizes", () =>
 		}
 	}
 	f.view.dispose();
+});
+
+
+test("topics open their messages and the default view shows main and peer conversations", () => {
+	const f = fixture();
+	f.snapshot.run.messages = [
+		{ from: "owner", to: "one", text: "Investigate", topic: "Auth" },
+		{ from: "one", to: "two", text: "Review this", topic: "Auth" },
+		{ from: "two", to: "board", text: "Finding", topic: "Storage" },
+	]; f.tick();
+	assert.match(f.view.body(), /Main agent → one/);
+	assert.match(f.view.body(), /one → two/);
+	f.view.handleInput("3"); assert.match(f.view.body(), /Auth · 2 messages/);
+	f.view.handleInput("\r"); assert.equal(f.view.section, 0);
+	assert.match(f.view.body(), /Investigate/); assert.doesNotMatch(f.view.body(), /Finding/);
+	f.view.handleInput("a"); assert.match(f.view.body(), /Finding/);
+	f.view.dispose();
+});
+
+
+test("the main agent is selectable and opens only its team conversations", () => {
+	const f = fixture();
+	f.snapshot.run.messages = [{ from: "one", to: "owner", text: "Question for main" }, { from: "one", to: "two", text: "Peer-only" }];
+	f.view.handleInput("2"); f.view.handleInput("k");
+	assert.equal(f.view.workerId, "owner");
+	f.view.handleInput("\r");
+	assert.equal(f.view.section, 0); assert.equal(f.view.isConversation, true);
+	assert.match(f.view.body(), /Question for main/); assert.doesNotMatch(f.view.body(), /Peer-only/);
+	assert.deepEqual(f.historyReads, []);
+	f.view.handleInput("q"); assert.equal(f.view.section, 1); f.view.dispose();
+});
+
+test("topic selection survives live insertion and scoped messages return to Topics", () => {
+	const f = fixture();
+	f.snapshot.run.messages = [{ from: "one", to: "owner", text: "Auth discussion", topic: "Auth" }, { from: "two", to: "owner", text: "Storage discussion", topic: "Storage" }];
+	f.tick(); f.view.handleInput("3"); f.view.handleInput("j");
+	assert.equal(f.view.selectedTopic, "Storage");
+	f.snapshot.run.tasks = [{ id: "new", title: "New task", status: "ready" }]; f.tick();
+	assert.equal(f.view.selectedTopic, "Storage");
+	f.view.handleInput("\r"); assert.match(f.view.body(), /Storage discussion/); assert.doesNotMatch(f.view.body(), /Auth discussion/);
+	f.view.handleInput("q"); assert.equal(f.view.section, 2);
+	f.view.handleInput("1"); assert.equal(f.view.topic, undefined); f.view.dispose();
 });

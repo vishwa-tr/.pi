@@ -1,5 +1,3 @@
-import { mainAgentAction } from "./main-agent-actions.mjs";
-import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import {
 	InMemoryCredentialStore, createAssistantMessageEventStream, createProvider, envApiKeyAuth,
 } from "@earendil-works/pi-ai";
@@ -11,8 +9,10 @@ import { EventEmitter } from "node:events";
 import { repository } from "./helpers.mjs";
 import { execFileSync } from "node:child_process";
 import { guardNetwork } from "./network-guard.mjs";
-import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { SwarmHost } from "../extensions/swarm/host.mjs";
+import { mainAgentAction } from "./main-agent-actions.mjs";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createCurrentSwarmExtension } from "../extensions/swarm/extension.mjs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -96,7 +96,7 @@ test("main tools are registered without auth; status and history listing stay in
 
 test("registered agreement renderer preserves literal full terms at narrow widths without expansion", async t => {
 	const f = await fixture(t); f.select("first");
-	assert.deepEqual([...f.renderers.keys()], ["swarm-agreement"]);
+	assert.deepEqual([...f.renderers.keys()], ["swarm-agreement", "swarm-agent-mail"]);
 	const objective = '**literal-name** `name` [label](https://example.invalid/full/destination) \\\\path\\file\nnext "quoted" ``` fence 界';
 	f.answers.push("Cancel");
 	await assert.rejects(f.command(`start ${objective}`));
@@ -211,10 +211,10 @@ for (const refusal of ["cancel", "escape", "no-ui", "no-update", "signal", "abor
 	});
 }
 
-test("chat text cannot answer an in-tool approval: there is no input listener", async t => {
+test("chat input only recovers mail and cannot answer an in-tool approval", async t => {
 	const f = await fixture(t); f.select("first");
-	assert.equal(f.handlers.has("input"), false);
-	f.answers.push("Cancel");
+	assert.equal(await f.event("input", { source: "interactive", text: "Approve swarm" }), undefined);
+	f.answers.push(async () => { await f.event("input", { source: "interactive", text: "Approve swarm" }); return "Cancel"; });
 	assert.equal((await f.tool("swarm_start", { objective: "Approve swarm" })).isError, true);
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
 });
@@ -503,4 +503,36 @@ test("main-tool failures expose safe phase and code without exception paths", as
 	assert.deepEqual(response.details.diagnostic, { code: "FAILED", phase: "setup", message: "The Swarm operation failed; inspect status before continuing." });
 	assert.equal(JSON.stringify(response).includes("private/path"), false);
 	assert.equal(JSON.stringify(response).includes("provider token"), false);
+});
+
+
+test("the main agent sends worker and board mail only within its current approved team", async t => {
+	const f = await fixture(t, { policy: false }); f.select("first");
+	assert.equal((await f.tool("swarm_control", { action: "send", to: "planner", text: "Before approval" })).isError, true);
+	await f.command("start Coordinate a team"); await until(() => f.calls.length === 1);
+	const sent = await f.tool("swarm_control", { action: "send", to: "planner", text: "Focused follow-up", topic: "Review" });
+	assert.equal(sent.isError, undefined);
+	assert.ok(sent.details.messages.some(message => message.from === "main" && message.text === "Focused follow-up"));
+	const board = await f.tool("swarm_control", { action: "send", to: "board", text: "Shared finding", topic: "Review" });
+	assert.equal(board.isError, undefined);
+	assert.ok(board.details.messages.some(message => message.to === "@board"));
+	const page = await f.tool("swarm_history", { channel: "messages", topic: "Review", limit: 1 });
+	assert.equal(page.details.total, 2); assert.equal(page.details.nextOffset, 1);
+	assert.equal(page.details.messages[0].from, "main");
+	const nextPage = await f.tool("swarm_history", { channel: "messages", topic: "Review", offset: 1, limit: 1 });
+	assert.equal(nextPage.details.messages[0].to, "@board");
+	await f.command("pause");
+	assert.equal((await f.tool("swarm_control", { action: "send", to: "planner", text: "Paused send" })).isError, true);
+});
+
+
+test("native mail renderer shows conversation text without protocol metadata", async t => {
+	const f = await fixture(t);
+	const renderer = f.renderers.get("swarm-agent-mail");
+	const view = renderer({ content: "INTERNAL_CONTEXT", details: { runId: "PRIVATE_RUN", messageIds: ["PRIVATE_ID"],
+		messages: [{ from: "builder", to: "main", text: "Please review this \x1b[2J", topic: "Auth", cycle: 1 }] } });
+	const text = view.render(80).join("\n");
+	assert.match(text, /builder → Main agent.*Auth/);
+	assert.match(text, /Please review this \\u001b/);
+	assert.doesNotMatch(text, /INTERNAL_CONTEXT|PRIVATE_RUN|PRIVATE_ID|cycle/);
 });

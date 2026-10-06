@@ -1,6 +1,7 @@
 import { SwarmHost } from "./host.mjs";
 import { randomUUID } from "node:crypto";
 import { ModeGate } from "./host-gates.mjs";
+import { createFocusBridge } from "./focus.mjs";
 import { createProgress } from "./progress.mjs";
 import { prepareLayout } from "./store/layout.mjs";
 import { requireCondition as check } from "./errors.mjs";
@@ -11,7 +12,7 @@ import { requestLaunchSpecification } from "./launch-input.mjs";
 import { registerMainTools, swarmSummary } from "./main-tools.mjs";
 import { inspectLease, releaseStaleLease } from "./store/lease.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
-import { registerAgreementRenderer, requestUserApproval, statusText } from "./ui.mjs";
+import { registerSwarmRenderers, requestUserApproval, statusText } from "./ui.mjs";
 
 const LINK = "swarm-run-v1";
 
@@ -42,8 +43,9 @@ export function createSwarmExtension(options = {}) {
 
 function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off", codingTools, instructions, runner, tickIntervalMs = 1000, approvalTimeoutMs = 120000, providerCapability } = {}, resolveSelection) {
 	return function swarmExtension(pi) {
-		registerAgreementRenderer(pi);
+		registerSwarmRenderers(pi);
 		let host;
+		let focus;
 		let approve;
 		let owner;
 		let context;
@@ -107,6 +109,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					beforePrompt: async () => { if (viewing) { cancel(); await dashboard; } }
 				});
 				progress.bind(host);
+				focus?.dispose();
+				const currentHost = host;
+				focus = createFocusBridge(pi, Object.freeze({ snapshot: () => currentHost.snapshot(), history: id => currentHost.history(id), subscribe: listener => currentHost.subscribe(listener) }), ctx.ui);
 			}
 			return host;
 		};
@@ -141,7 +146,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		};
 
 		// Yield the inspection view before a worker's native safety dialog is presented.
-		pi.on("ui_prompt_start", event => { if (viewing && event.kind !== "custom") cancel(); });
+		pi.on("agent_settled", () => progress.settled());
+		pi.on("input", event => { if (event.source !== "extension") progress.input(); });
+		pi.on("ui_prompt_start", event => { focus?.hide(); if (viewing && event.kind !== "custom") cancel(); });
 
 		// `ask` and `present` belong to the main tool call; the public command only stops.
 		const control = async (args, ctx, signal, ask, present) => {
@@ -264,6 +271,13 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		// One tool call: the human decides in native dialogs inside this owning interactive
 		// session. Tool arguments and chat text never reach the approval answer.
 		const chatControl = async (action, args, ctx, signal, update) => {
+			if (action === "send") {
+				inspect(ctx);
+				check(!signal?.aborted && host?.snapshot().run?.workspaceRoot === ctx.cwd, "OWNERSHIP", "Message context changed");
+				check(host && typeof args.to === "string" && typeof args.text === "string" && args.text.trim(), "INPUT", "A recipient and message are required");
+				await host.send(args.to, args.text, args.topic);
+				return inspect(ctx);
+			}
 			if (["pause", "stop", "status", "view"].includes(action)) { await control(action === "view" ? "dashboard" : action, ctx, signal); return inspect(ctx); }
 			check(!["restore", "reconcile"].includes(action) || args.runId === undefined || /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(args.runId), "INPUT", "Invalid run identifier");
 			check(action !== "restore" || args.runId, "INPUT", "Restore requires a run identifier");
@@ -316,7 +330,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			return { ...swarmSummary(host?.snapshot()), restorePending: Boolean(restoreLink) };
 		};
 		registerMainTools(pi, {
-			control, chatControl, inspect, history: (workerId, ctx) => {
+			control, chatControl, inspect, messages: ctx => { inspect(ctx); return host?.snapshot().run?.messages ?? []; }, history: (workerId, ctx) => {
 				inspect(ctx);
 				check(host, "STATE", "No attached Swarm run");
 				return host.history(workerId);
@@ -357,6 +371,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		});
 		pi.on("session_shutdown", async (_event, ctx) => {
 			retired = true;
+			focus?.dispose();
 			progress.dispose();
 			cancel();
 			try { await host?.close(); }

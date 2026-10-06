@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { validId } from "./store/files.mjs";
 import { SwarmController } from "./core.mjs";
+import { recipientId } from "./messaging.mjs";
 import { SwarmSessions } from "./sessions.mjs";
 import { prepareLayout } from "./store/layout.mjs";
 import { WorkspaceRuntime } from "./workspace.mjs";
@@ -428,6 +429,12 @@ export class SwarmHost {
 			const current = this.#controller.snapshot();
 			return { settled: ["paused", "stopped", "completed", "failed"].includes(current.status) && !current.workspace.operations.length && !current.sessions.turns.length };
 		});
+	}
+
+	send(workerId, text, topic) {
+		this.#assertAdmission();
+		check(recipientId(workerId, this.#controller.snapshot().workers) === "@board" || this.#controller.snapshot().workers.some(worker => worker.id === workerId), "INPUT", "Use a worker or board recipient");
+		return this.#driver.send(workerId, text, topic);
 	}
 
 	wake(workerId, reason) { this.#assertAdmission(); return this.#driver.wake(workerId, reason); }

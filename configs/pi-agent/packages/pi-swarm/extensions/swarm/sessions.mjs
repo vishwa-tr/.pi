@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { recipientId } from "./messaging.mjs";
 import { basename, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { privateDirectory } from "./store/files.mjs";
@@ -161,8 +162,12 @@ export class SwarmSessions {
 				return receipt;
 			}
 			case "swarm_message": {
-				const receipt = await dispatch("message.send", params);
-				if (params.to !== "owner") this.#enqueue(params.to, "New peer message");
+				const to = recipientId(params.to, state.workers);
+				const topic = params.topic ?? state.tasks.find(task => task.assignment?.workerId === entry.workerId)?.id;
+				const receipt = await dispatch("message.send", { ...params, to, ...(topic !== undefined ? { topic } : {}) });
+				if (to === "@board") {
+					for (const worker of state.workers) if (worker.id !== entry.workerId) this.#enqueue(worker.id, "New board message");
+				} else if (to !== "owner") this.#enqueue(to, "New peer message");
 				return receipt;
 			}
 			case "swarm_history": {
@@ -177,9 +182,11 @@ export class SwarmSessions {
 				worker.release(); return { released: true };
 			}
 			case "swarm_report": {
-				currentTask();
+				const task = currentTask();
 				const worker = this.#workspace.worker(entry.workerId);
-				return params.action === "submit" ? worker.submit(params.summary, params.receipts) : worker.review(params.approved, params.summary);
+				const result = await (params.action === "submit" ? worker.submit(params.summary, params.receipts) : worker.review(params.approved, params.summary));
+				await dispatch("message.send", { to: "owner", topic: task.id, text: `${params.action === "submit" ? "Candidate submitted; independent review still required" : "Review recorded; final verification still required"}: ${params.summary}`.slice(0, 32768) });
+				return result;
 			}
 			case "read": currentTask(); return this.#workspace.worker(entry.workerId).read(params.path, call, params);
 			case "write":
@@ -323,9 +330,11 @@ export class SwarmSessions {
 		this.#enqueue(workerId, reason);
 	}
 
-	async send(workerId, text) {
-		await this.#controller.owner("message.send", { to: workerId, text });
-		this.#enqueue(workerId, "New owner message");
+	async send(workerId, text, topic) {
+		const to = recipientId(workerId, this.#controller.snapshot().workers);
+		await this.#controller.owner("message.send", { to, text, ...(topic !== undefined ? { topic } : {}) });
+		if (to === "@board") for (const worker of this.#controller.snapshot().workers) this.#enqueue(worker.id, "New main-agent board message");
+		else this.#enqueue(to, "New main-agent message");
 	}
 
 	async redirect(text) {

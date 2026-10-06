@@ -186,10 +186,10 @@ def main(native=False):
             resume("approved hold")
             wait_count("worker-held", 1)
             terminal.line("/fixture-swarm dashboard")
-            terminal.expect(f"SWARM live / {label} | running")
+            terminal.expect("Swarm · running")
             if native:
                 terminal.send("2")
-                terminal.expect("active SDK turn")
+                terminal.expect("working")
                 terminal.inspect_conversation()
             terminal.send("\x1bg")
             terminal.expect("phase8-approved")

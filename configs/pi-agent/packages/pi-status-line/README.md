@@ -9,10 +9,11 @@ Owns Pi's shared status layout:
 - **Footer line 1** — Plan mode and tool activity left; context and extension statuses right.
 - **Footer line 2** — agent navigation left; session token/cost usage right.
 
-**Alt+N** cycles through available subagents and team agents in a full-screen chat
+**Alt+N** cycles through available subagents, team agents and Swarm agents in a full-screen chat
 view, then back to main. **Escape** returns to main; **PageUp/PageDown** scroll the
 focused transcript. The indicator shows `[N]` at main and `[n/N] Name` when focused.
-Text goes to the selected agent; image attachments are explicitly unsupported.
+Teams and Subagents route text to the selected agent; image attachments are explicitly unsupported.
+Swarm opens a read-only Messages/Agents/Topics view and sends mail through main-agent tools.
 Slash and shell commands return to the main editor for normal submission. Native
 dialogs clear agent focus, and background main-agent work continues. The producers
 remain standalone and coordinate using plain-data events, without package imports.
@@ -95,3 +96,7 @@ Alt+N/Escape and native-dialog cleanup while a scripted main model is streaming.
 It uses disposable offline state and the managed Pi installation, with `PI_SDK_DIR`
 and `PI_BIN` overrides. The terminal harness requires POSIX and the repository
 Swarm test helpers; it does not send requests to a live provider.
+
+Swarm publishes into the same agent cycle. Its focused view has Messages, Agents
+and Topics/Boards tabs; it is read-only and routes control and message requests
+through the main agent. Escape returns to main, and native dialogs clear focus.

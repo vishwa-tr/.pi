@@ -1,10 +1,10 @@
 /**
  * Agent focus switching: the presenter side.
  *
- * Producer extensions (pi-subagents, pi-teams) publish their live agents as plain
+ * Producer extensions (pi-subagents, pi-teams, pi-swarm) publish their live agents as plain
  * data over `pi.events`; this file merges those rosters, owns the cycle key and
  * Esc, and formats the footer indicator. Producers render the focused agent's
- * transcript and route typed messages to it themselves. No package imports
+ * conversation view and choose whether to accept typed mail or stay read-only. No package imports
  * another — each side works, or quietly does nothing, without the other:
  *
  *   agent-focus:roster          producer → presenter  { source, noun, agents: [{ id, name, working }] }
@@ -61,15 +61,22 @@ export function createAgentFocus(pi: ExtensionAPI, requestRender: () => void): A
 	});
 
 	pi.registerShortcut(FOCUS_KEY, {
-		description: "Focus the next subagent or team agent (Esc returns to the main chat)",
+		description: "Focus the next subagent, team agent or swarm agent (Esc returns to the main chat)",
 		handler: (ctx) => { currentContext = ctx; if (ctx.mode === "tui") focusNext(ctx); },
 	});
 
  pi.events.on("agent-focus:navigate", data => {
-  const value = data as { source?: string; id?: string; action?: string } | null;
+  const value = data as { source?: string; id?: string; action?: string; targetId?: string } | null;
   if (!focused || value?.source !== focused.source || value.id !== focused.id) return;
   if (value.action === "back") clearFocus();
   else if (value.action === "next" && currentContext) focusNext(currentContext);
+  else if (value.action === "select" && typeof value.targetId === "string") {
+   const selected = allAgents().find(agent => agent.source === focused!.source && agent.id === value.targetId);
+   if (!selected) return;
+   focused = { source: selected.source, id: selected.id };
+   pi.events.emit(FOCUS_EVENT, { ...focused, position: focusedPosition() + 1, total: allAgents().length });
+   requestRender();
+  }
  });
  pi.on("ui_prompt_start", clearFocus);
  pi.on("session_shutdown", () => { clearFocus(); rosters.clear(); currentContext = undefined; });
@@ -77,7 +84,7 @@ export function createAgentFocus(pi: ExtensionAPI, requestRender: () => void): A
 	function focusNext(ctx: ExtensionContext): void {
 		const agents = allAgents();
 		if (agents.length === 0) {
-			ctx.ui.notify("No subagents or team agents are running.", "info");
+			ctx.ui.notify("No agents are available.", "info");
 			return;
 		}
 		// Past the last agent, the cycle returns to the main chat.

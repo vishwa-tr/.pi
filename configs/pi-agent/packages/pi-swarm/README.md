@@ -102,21 +102,53 @@ These are cooperative controls, not an OS sandbox or protection against outside 
 and commands that deliberately detach processes. Native Bash owns process cancellation;
 unknown custom-runner outcomes require explicit reconciliation and are never replayed.
 
-## Read-only dashboard
+## Conversations and agent navigation
 
-Ask the main agent to open the dashboard (`swarm_control`, action `view`). It displays
-objective, workers, tasks, claims, messages and native histories. It cannot change run state.
-Close it to ask the main agent for changes or to enter `/swarm stop`.
+Swarm uses Pi's existing agent indicator and **Alt+N** navigation when
+`pi-status-line` is loaded. It joins the same cycle as Teams and Subagents.
+**Escape** returns to the main chat. Native dialogs dismiss the focused view;
+main-agent work continues in the background. Ask the main agent to open the view
+(`swarm_control`, action `view`) when the status-line package is not loaded.
 
-- `1`–`6`, Tab or `h`/`l`: select a pane.
-- `j`/`k`, arrows, PageUp/PageDown or Ctrl+U/D: select workers or scroll.
-- Enter on a worker, or `c`: inspect its conversation.
-- `/`, then Enter: literal history search; `n`/`N`: next/previous match; `f`: follow tail.
-- `q` or Escape: return from a conversation or close the dashboard; `?`: help.
+The view has three tabs:
 
-History reads use the live in-memory branch when available, so inspection does not reopen
-or rewrite a live worker session file. Displayed persisted text can lag streaming output.
-Native permission dialogs dismiss the dashboard before opening.
+- **Messages:** conversations between agents and with the main agent. Focused
+  agent views show their peer mail and assistant messages. Tool calls, tool results,
+  reasoning and internal wake/context prompts stay out of the conversation view.
+- **Agents:** the main agent and worker roster, live activity, focus and assigned
+  tasks. Enter opens an agent's messages. Selecting main from the focused agent
+  roster returns to Pi's main chat.
+- **Topics/Boards:** task discussions with their status, plus named conversation
+  topics. Enter filters Messages to that discussion; `q` returns to Topics and
+  `a` shows all messages again. Selection stays on the same topic during live updates.
+
+Use `1`–`3`, Tab, or `h`/`l` to switch tabs; `j`/`k` or arrows select agents and
+boards or scroll messages. PageUp/PageDown scroll, `/` searches literally, `n`/`N`
+move between matches, and `f` follows new messages. `q`/Escape closes or returns
+from an agent conversation. Inspection is read-only; lifecycle controls and message
+sending go through the main agent. `/swarm stop` remains the sole direct command.
+
+The main agent sends mail with `swarm_control { action: "send", to, text, topic? }`.
+Use a worker ID for a direct message, or `to: "@board"` with a topic for a team
+board. Worker `swarm_message` accepts peer IDs, `@main`, or `@board` with a topic.
+Board messages reach peers once each, excluding their sender. `main` and `board`
+remain convenient aliases when no worker has that name; explicit `@` recipients
+always address the coordinator or board and never shadow an existing peer. Worker conversations
+inherit their assigned task as a topic when no topic is supplied. Candidate/review
+reports also reach the main agent with their task topic; they still require independent
+review and final verification before completion. Messages never grant approval.
+
+Messages addressed to main are coalesced into Pi's native message queue and wake it
+while Swarm is running. Progress notices remain passive; pausing/stopping does not
+request another main-agent turn. Mail is acknowledged only after a complete entry
+exists in the main session file. Interrupted deliveries remain available after reload;
+durable mail is not repeated. If delivery was interrupted, the next user input
+or worker event retries the pending mail without using chat text as approval. `swarm_history { channel: "messages", workerId?, topic?,
+offset?, limit? }` reads bounded conversation pages without waking workers. Full
+message text remains available in the user view and run journal.
+
+History inspection reads live in-memory branches when available, so it does not
+reopen or rewrite active worker session files. Loading a view never starts a worker.
 
 ## Storage and recovery
 
