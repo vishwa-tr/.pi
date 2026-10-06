@@ -35,6 +35,7 @@ import {
 import { createTreeWidget, STOP_KEY, type TreeWidgetController } from "./tui/tree-widget.ts";
 import { createPicker, type PickerResult } from "./tui/picker.ts";
 import { createViewer, type ViewerResult } from "./tui/viewer.ts";
+import { createFocusBridge, type FocusBridge } from "./tui/focus.ts";
 
 /**
  * sendMessage options for a main-mail wake injection. BOTH matter and they
@@ -51,6 +52,7 @@ export default function (pi: ExtensionAPI): void {
 	let core: SubagentsCore | null = null;
 	let lease: HostScopeLease | null = null;
 	let tree: TreeWidgetController | null = null;
+	let focus: FocusBridge | null = null;
 	let overlayOpen = false;
 	/** Set when subagents are unavailable this session (non-persisted, or lease held elsewhere). */
 	let unavailableReason: string | null = null;
@@ -247,6 +249,7 @@ export default function (pi: ExtensionAPI): void {
 				tree = createTreeWidget(core, {
 					setWidget: (key, content, opts) => ctx.ui.setWidget(key, content, opts),
 				});
+				focus = createFocusBridge(pi, core, ctx.ui, ctx.cwd);
 			}
 			pump.onSettled(); // resume pending mail; an incoming prompt cancels this deadline
 		} catch (error) {
@@ -260,8 +263,12 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	// Map Pi's lifecycle events onto the wake pump — literal plumbing only.
-	pi.on("input", (_event, ctx) => {
+	pi.on("input", (event, ctx) => {
 		uiCtx = ctx;
+		// While pi-status-line has one of our agents focused, typed text is mail to it.
+		// That starts no main turn, so it must not cancel the wake pump's idle deadline.
+		const routed = focus?.route(event);
+		if (routed) return routed;
 		pump.onInput();
 	});
 	pi.on("before_agent_start", () => pump.onBeforeAgentStart());
@@ -279,6 +286,10 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	async function teardown(): Promise<void> {
+		if (focus) {
+			focus.dispose();
+			focus = null;
+		}
 		if (tree) {
 			tree.dispose();
 			tree = null;

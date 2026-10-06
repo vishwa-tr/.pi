@@ -4,10 +4,11 @@
  * composes the active segments into the four footer sides.
  */
 
+import { visibleWidth } from "@earendil-works/pi-tui";
+import type { AgentIndicator } from "./agent-focus.ts";
+import type { FooterMode, SegmentId } from "./config.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
-import type { FooterMode, SegmentId } from "./config.ts";
 
 type Theme = ExtensionContext["ui"]["theme"];
 
@@ -21,8 +22,6 @@ const ICON_ACTIVITY = ""; // nf-oct-cpu — aggregate token activity
 // composeSides chooses their footer rows.
 export const TOOL_MONITOR_STATUS_KEY = "tool-monitor";
 export const PLAN_MODE_STATUS_KEY = "plan-mode";
-// Subagent status takes line 1-left whenever it is visible.
-export const SUBAGENT_STATUS_KEY = "subagents";
 
 export const GIT_STATUS_KEY = "git-status";
 export const MODEL_THINKING_STATUS_KEY = "model-thinking";
@@ -31,10 +30,10 @@ export const HEADER_STATUS_KEYS = new Set([GIT_STATUS_KEY, MODEL_THINKING_STATUS
 type Slot = "1L" | "1R" | "2L" | "2R";
 const SEGMENT_SLOTS: Record<SegmentId, Slot> = {
 	"plan-mode": "1L",
-	subagents: "1L",
+	subagents: "2L",
 	context: "1R",
 	"extension-statuses": "1R",
-	"tool-monitor": "2L", // composeSides overrides dynamically
+	"tool-monitor": "1L",
 	tokens: "2R",
 	cost: "2R",
 	hourly: "2R",
@@ -129,6 +128,7 @@ export function buildSegmentTexts(
 	ctx: ExtensionContext,
 	theme: Theme,
 	extensionStatuses: ReadonlyMap<string, string>,
+	agents: AgentIndicator | null,
 	mode: FooterMode,
 	separator: string,
 ): Record<SegmentId, string> {
@@ -137,18 +137,16 @@ export function buildSegmentTexts(
 		.filter(([key]) =>
 			key !== TOOL_MONITOR_STATUS_KEY
 			&& key !== PLAN_MODE_STATUS_KEY
-			&& key !== SUBAGENT_STATUS_KEY
 			&& !HEADER_STATUS_KEYS.has(key)
 		)
 		.map(([, value]) => value);
 
 	const planMode = extensionStatuses.get(PLAN_MODE_STATUS_KEY) ?? "";
-	const subagents = extensionStatuses.get(SUBAGENT_STATUS_KEY) ?? "";
 	const toolMonitor = extensionStatuses.get(TOOL_MONITOR_STATUS_KEY) ?? "";
 
 	return {
 		"plan-mode": renderPlanModeStatus(planMode, theme),
-		subagents: subagents ? theme.fg("dim", subagents) : "",
+		subagents: agents ? theme.fg(agents.focused ? "accent" : "dim", agents.text) : "",
 		context: formatContext(ctx, theme, mode),
 		"extension-statuses": joinSegments(otherStatuses, separator),
 		"tool-monitor": toolMonitor ? renderToolMonitorStatus(toolMonitor, theme) : "",
@@ -172,12 +170,9 @@ export interface FooterSides {
 }
 
 export function composeSides(active: SegmentId[], texts: Record<SegmentId, string>, separator: string): FooterSides {
-	const subagentsVisible = active.includes("subagents");
-	const segmentSlot = (id: SegmentId): Slot =>
-		id === "tool-monitor" ? (subagentsVisible ? "2L" : "1L") : SEGMENT_SLOTS[id];
 	const slot = (which: Slot) =>
 		joinSegments(
-			active.filter((id) => segmentSlot(id) === which).map((id) => texts[id]),
+			active.filter((id) => SEGMENT_SLOTS[id] === which).map((id) => texts[id]),
 			separator,
 		);
 	return { l1: slot("1L"), r1: slot("1R"), l2: slot("2L"), r2: slot("2R") };

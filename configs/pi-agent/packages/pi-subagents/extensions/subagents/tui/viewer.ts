@@ -10,18 +10,18 @@
  * of redundant parse work on large sessions — fine for a human-driven overlay.
  */
 
-import { readFileSync } from "node:fs";
 import {
-	AssistantMessageComponent,
-	parseSessionEntries,
 	type Theme,
-	ToolExecutionComponent,
+	parseSessionEntries,
 	UserMessageComponent,
+	ToolExecutionComponent,
+	AssistantMessageComponent,
 } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
-import type { SubagentsCore } from "../core.ts";
-import { flattenTextOnly } from "../session-read.ts";
+import { readFileSync } from "node:fs";
 import { formatTokens } from "./widget.ts";
+import type { SubagentsCore } from "../core.ts";
+import type { TUI } from "@earendil-works/pi-tui";
+import { flattenTextOnly } from "../session-read.ts";
 
 interface Component {
 	render(width: number): string[];
@@ -46,7 +46,7 @@ interface ViewerComponent {
 }
 
 /** Build transcript components from a session file's message entries. */
-function buildComponents(sessionFile: string | null, tui: TUI, cwd: string): Component[] {
+export function buildComponents(sessionFile: string | null, tui: TUI, cwd: string): Component[] {
 	if (!sessionFile) return [];
 	let content: string;
 	try {
@@ -56,7 +56,17 @@ function buildComponents(sessionFile: string | null, tui: TUI, cwd: string): Com
 	}
 	const components: Component[] = [];
 	const toolComponents = new Map<string, ToolExecutionComponent>();
-	for (const raw of parseSessionEntries(content)) {
+	// Follow the active leaf without opening or migrating the live session file.
+ const entries = parseSessionEntries(content);
+ const byId = new Map(entries.filter(entry => "id" in entry).map(entry => [entry.id, entry]));
+ const branch = [];
+ let cursor = entries.at(-1);
+ const seen = new Set<string>();
+ while (cursor && "id" in cursor && !seen.has(cursor.id)) {
+  seen.add(cursor.id); branch.push(cursor);
+  cursor = "parentId" in cursor && cursor.parentId ? byId.get(cursor.parentId) : undefined;
+ }
+ for (const raw of branch.reverse()) {
 		const entry = raw as { type?: string; message?: { role?: string; content?: unknown } };
 		if (entry.type !== "message" || !entry.message) continue;
 		const message = entry.message;
