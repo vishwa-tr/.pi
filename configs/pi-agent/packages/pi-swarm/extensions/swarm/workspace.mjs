@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { WorkspaceFiles } from "./workspace-files.mjs";
+import { inspectCheckout } from "./host-approval.mjs";
 import { codingDefinitions } from "./session-tools.mjs";
 import { WorkspaceScheduler } from "./workspace-scheduler.mjs";
 import { requireCondition as check, SwarmError } from "./errors.mjs";
@@ -11,7 +12,7 @@ const construction = Symbol("trusted workspace runtime");
 
 /** Trusted, model-free host adapter. Never expose controller/system or runner injection to workers. */
 export class WorkspaceRuntime {
-	static async attach(controller, { authorize = async () => false, runner, admission } = {}) {
+	static async attach(controller, { authorize = async () => false, runner, admission, signal } = {}) {
 		check(!attached.has(controller), "OWNERSHIP", "Controller already has workspace coordination");
 		check(typeof authorize === "function" && (runner === undefined || typeof runner === "function"), "INPUT", "Host authorization and execution functions required");
 		controller.assertOwned();
@@ -20,7 +21,12 @@ export class WorkspaceRuntime {
 		const files = new WorkspaceFiles(state.workspaceRoot);
 		attached.add(controller);
 		try {
-			if (!state.workspace) await controller.owner("workspace.enable", { fingerprint: files.snapshot() });
+			if (!state.workspace) {
+				const inspection = await inspectCheckout(state.workspaceRoot, { signal });
+				check(!signal?.aborted, "CANCELLED", "Workspace attachment was cancelled");
+				controller.assertOwned();
+				await controller.owner("workspace.enable", { fingerprint: inspection.fingerprint });
+			}
 			return new WorkspaceRuntime(construction, controller, files, authorize, runner, admission);
 		} catch (error) {
 			attached.delete(controller);
@@ -38,6 +44,7 @@ export class WorkspaceRuntime {
 	#owners = new Map();
 	#reads = new Map();
 	#uncertain = new Map();
+	#observedPaths = new Set();
 
 	constructor(token, controller, files, authorize, runner, admission) {
 		check(token === construction, "AUTHORITY", "Use the trusted attachment API");
@@ -147,8 +154,16 @@ export class WorkspaceRuntime {
 		this.#check(context, signal);
 	}
 
-	async #observe() {
-		const fingerprint = this.#files.snapshot();
+	async #fingerprint(signal, paths = []) {
+		for (const path of paths) this.#observedPaths.add(this.#files.path(path));
+		const inspection = await inspectCheckout(this.#controller.snapshot().workspaceRoot, {
+			signal, additionalPaths: [...this.#observedPaths]
+		});
+		return inspection.fingerprint;
+	}
+
+	async #observe(signal) {
+		const fingerprint = await this.#fingerprint(signal);
 		if (this.#controller.snapshot().workspace.fingerprint !== fingerprint) {
 			await this.#controller.system("workspace.observe", { fingerprint });
 		}
@@ -184,7 +199,8 @@ export class WorkspaceRuntime {
 
 	async #execute(context, kind, paths, command, signal, perform) {
 		this.#check(context, signal);
-		const before = this.#files.snapshot();
+		const before = await this.#fingerprint(signal, paths);
+		this.#check(context, signal);
 		const id = randomUUID();
 		await this.#controller.system("workspace.start", { id, taskId: context.taskId, assignmentId: context.assignmentId, kind, command, paths, before }, { cycle: context.cycle, generation: context.generation });
 		let result;
@@ -202,7 +218,9 @@ export class WorkspaceRuntime {
 		const uncertain = result?.settled !== true;
 		if (uncertain) await this.#holdUncertain(id);
 		let after = null;
-		try { after = this.#files.snapshot(); } catch (error) { failure ??= error; }
+		// Settlement observations cannot inherit an already-aborted execution signal.
+		// This bounded inspection records effects but never authorizes execution.
+		try { after = await this.#fingerprint(undefined, paths); } catch (error) { failure ??= error; }
 		let outcome = uncertain || after === null ? "unknown" : signal.aborted || result.aborted ? "cancelled" : failure || result.exitCode !== null && result.exitCode !== 0 ? "failed" : "succeeded";
 		await this.#controller.system("workspace.finish", { id, after, exitCode: result?.exitCode ?? null, outcome });
 		if (failure) throw failure;
@@ -241,7 +259,7 @@ export class WorkspaceRuntime {
 		const context = this.#context(binding);
 		return this.#scheduler.withExclusive(context.owner, async signal => {
 			this.#check(context, signal);
-			const fingerprint = await this.#observe();
+			const fingerprint = await this.#observe(signal);
 			this.#check(context, signal);
 			await this.#controller.system("workspace.candidate", { taskId: context.taskId, assignmentId: context.assignmentId, fingerprint, receipts }, { cycle: context.cycle, generation: context.generation });
 			this.#check(context, signal);
@@ -253,7 +271,7 @@ export class WorkspaceRuntime {
 		const context = this.#context(binding);
 		return this.#scheduler.withExclusive(context.owner, async signal => {
 			this.#check(context, signal);
-			await this.#observe();
+			await this.#observe(signal);
 			this.#check(context, signal);
 			return this.#controller.worker(context.workerId).dispatch("task.review", { taskId: context.taskId, approved, summary });
 		}, { signal: context.signal });
@@ -274,21 +292,22 @@ export class WorkspaceRuntime {
 	async reconcile({ settled } = {}) {
 		check(settled === true, "AUTHORITY", "Explicit interrupted-execution reconciliation required");
 		this.#scheduler.assertIdle();
-		await this.#controller.owner("workspace.reconcile", { fingerprint: this.#files.snapshot(), settled: true });
+		await this.#controller.owner("workspace.reconcile", { fingerprint: await this.#fingerprint(), settled: true });
 	}
 
 	async finalCheck(command) {
 		this.#admission?.assert();
 		check(typeof command === "string" && command.trim(), "INPUT", "Final verification command required");
 		this.#scheduler.assertIdle();
-		await this.#observe();
+		await this.#observe(this.#admission?.signal());
+		this.#admission?.assert();
 		await this.#controller.system("run.verify");
 		const context = this.#context(null, true);
 		return this.#scheduler.withExclusive(context.owner, async signal => {
 			await this.#permission(context, "final", [], command, signal);
 			const result = await this.#execute(context, "final", [], command, signal, () => this.#runner({ command, cwd: this.#controller.snapshot().workspaceRoot, signal }));
 			this.#check(context, signal);
-			await this.#observe();
+			await this.#observe(signal);
 			this.#check(context, signal);
 			await this.#controller.system("run.complete", { evidence: result.executionId });
 			return result;

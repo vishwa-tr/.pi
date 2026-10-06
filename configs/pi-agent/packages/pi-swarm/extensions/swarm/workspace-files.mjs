@@ -42,9 +42,18 @@ export class WorkspaceFiles {
 		const normalized = this.path(path);
 		return hash(JSON.stringify(capture(join(this.#root, normalized))));
 	}
-	snapshot({ includeGit = true } = {}) {
+	snapshot({ includeGit = true, paths } = {}) {
 		this.#checkRoot();
-		const snapshot = () => hash(JSON.stringify([capture(this.#root, true), includeGit ? gitState(this.#root) : null]));
+		if (paths !== undefined) {
+			check(Array.isArray(paths), "INPUT", "Invalid snapshot file scope");
+			for (const path of paths) {
+				const parts = path.replaceAll("\\", "/").split("/");
+				check(path && !isAbsolute(path) && !parts.some(part => ["..", ".git", ""].includes(part)), "PATH", "Invalid snapshot path");
+			}
+		}
+		const contents = () => paths === undefined ? capture(this.#root, true)
+			: paths.map(path => [path, capture(join(this.#root, path), true)]);
+		const snapshot = () => hash(JSON.stringify([contents(), includeGit ? gitState(this.#root) : null]));
 		const fingerprint = snapshot();
 		check(snapshot() === fingerprint, "STALE", "Workspace changed during snapshot");
 		this.#checkRoot();

@@ -219,6 +219,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					finishedGate.dispose();
 					activeHost = await ensureHost(ctx);
 					if (!current()) return;
+					present?.("Inspecting Swarm workspace before approval. Git checkouts fingerprint tracked and non-ignored files; ignored files remain protected by per-operation checks. Inspection is cancellable and has a 120-second deadline. No worker has started.");
 					await activeHost.launch({ workspace: ctx.cwd, runId: randomUUID(), specification });
 					if (current()) progress.launched();
 					remember(ctx);
@@ -233,6 +234,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				} else if (selected === "resume" || selected === "restart") {
 					activeHost = await ensureHost(ctx);
 					if (!current()) return;
+					present?.("Inspecting Swarm workspace before continuation approval; no new worker execution is authorized. Inspection is cancellable and bounded.");
 					await activeHost.resume({ restart: selected === "restart" });
 					if (current()) progress.continued();
 					if (!pending.signal.aborted && !retired) for (const worker of activeHost.snapshot().run.workers) activeHost.wake(worker.id);

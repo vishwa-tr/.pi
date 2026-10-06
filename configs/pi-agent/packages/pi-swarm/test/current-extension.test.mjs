@@ -100,7 +100,7 @@ test("registered agreement renderer preserves literal full terms at narrow width
 	const objective = '**literal-name** `name` [label](https://example.invalid/full/destination) \\\\path\\file\nnext "quoted" ``` fence 界';
 	f.answers.push("Cancel");
 	await assert.rejects(f.command(`start ${objective}`));
-	const content = f.updates[0];
+	const content = f.updates.find(text => text.startsWith("Swarm approval packet: LAUNCH"));
  const message = { customType: "swarm-agreement", content, display: true };
 	const packet = JSON.parse(content.slice(content.indexOf("{\n"), content.indexOf("\nProvider agreement")));
 	assert.equal(packet.objective, objective);
@@ -155,7 +155,8 @@ test("main start returns while native worker streams and status remains callable
 	});
 	const launched = await call("swarm_start", { objective: "Approved fixture goal" });
 	assert.equal(launched.details.status, "running");
-	assert.match(f.updates[0], /^Swarm approval packet: LAUNCH \(Pi native provider\)/);
+	assert.match(f.updates[0], /^Inspecting Swarm workspace before approval/);
+	assert.match(f.updates[1], /^Swarm approval packet: LAUNCH \(Pi native provider\)/);
 	assert.ok(f.messages.every(item => item.message.customType !== "swarm-agreement"));
 	await until(() => f.calls.length === 1);
 	assert.equal((await call("swarm_status", {})).details.status, "running");
@@ -258,10 +259,10 @@ test("chat launch without Git and continuation ask native dialogs inside each to
 	const launch = { objective: "Fixture \u001b[31m \u202e goal" };
 	assert.equal((await f.tool("swarm_start", launch)).details.status, "running");
 	// Setup consent precedes any setup action and the agreement; each packet precedes its select.
-	assert.deepEqual(order, ["select:LAUNCH (Pi native provider)@1", "select:Preserve and proceed?@2"]);
-	assert.ok(f.updates[0].includes("Fixture \\u001b[31m \\u202e goal"));
+	assert.deepEqual(order, ["select:LAUNCH (Pi native provider)@2", "select:Preserve and proceed?@3"]);
+	assert.ok(f.updates[1].includes("Fixture \\u001b[31m \\u202e goal"));
 	assert.ok(f.updates.every(text => !/[\x1b\u202e]/.test(text)));
-	assert.match(f.updates[1], /user\.txt/);
+	assert.match(f.updates[2], /user\.txt/);
 	await until(() => f.calls.length === 1);
 	assert.equal(readFileSync(join(root, "user.txt"), "utf8"), "Preserve me");
 	assert.equal(readFileSync(join(root, ".gitignore"), "utf8"), "# rules\r\n");
@@ -271,7 +272,7 @@ test("chat launch without Git and continuation ask native dialogs inside each to
 		order.length = 0;
 		const before = f.updates.length;
 		assert.equal((await f.tool("swarm_control", { action })).details.status, "running");
-		assert.deepEqual(order, [`select:${action.toUpperCase()} (Pi native provider)@${before + 1}`, `select:Preserve and proceed?@${before + 2}`, `select:Workspace reconciliation@${before + 2}`]);
+		assert.deepEqual(order, [`select:${action.toUpperCase()} (Pi native provider)@${before + 2}`, `select:Preserve and proceed?@${before + 3}`, `select:Workspace reconciliation@${before + 3}`]);
 		await until(() => f.calls.length === (action === "resume" ? 2 : 3));
 		await f.tool("swarm_control", { action: "pause" });
 	}

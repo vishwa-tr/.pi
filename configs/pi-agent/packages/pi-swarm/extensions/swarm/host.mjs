@@ -209,7 +209,7 @@ export class SwarmHost {
 				mode: this.#mode.current().instanceId === "absent" ? "none installed (runs as Off)" : "pi-plan",
 				confirmations: safety.claimed ? "pi-safety" : "Swarm asks for every edit and command"
 			};
-			const request = Object.freeze({ action, provider, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), requiresExistingWorkDecision: inspection.changes.length > 0, requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
+			const request = Object.freeze({ action, provider, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, requiresExistingWorkDecision: inspection.changes.length > 0, requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
 			const answer = structuredClone(await Promise.race([Promise.resolve().then(() => {
 				check(!signal.aborted, "CANCELLED", "Approval cancelled before presentation");
 				return this.#ask(request);
@@ -234,9 +234,19 @@ export class SwarmHost {
 		}
 	}
 
-	#unchanged(inspection, grant) {
+	async #inspect(workspace, operation) {
+		this.#assertOperation(operation);
+		const signal = AbortSignal.any([operation.cancel.signal, this.#lifetime.signal]);
+		const inspection = await inspectCheckout(workspace, { signal });
+		this.#assertOperation(operation);
+		return inspection;
+	}
+
+	async #unchanged(inspection, grant, operation) {
 		this.#mode.assert(grant.token);
-		check(inspectCheckout(inspection.root).fingerprint === inspection.fingerprint, "STALE", "Workspace changed while approval was pending; inspect and approve again");
+		const current = await this.#inspect(inspection.root, operation);
+		this.#mode.assert(grant.token);
+		check(current.fingerprint === inspection.fingerprint, "STALE", "Workspace changed while approval was pending; inspect and approve again");
 	}
 
 	async #wire() {
@@ -249,6 +259,7 @@ export class SwarmHost {
 		this.#assertProvider(this.#specification().model);
 		const admission = { assert: () => this.#assertAdmission(), signal: () => this.#permit?.signal ?? this.#denied };
 		this.#workspace = await WorkspaceRuntime.attach(this.#controller, {
+			signal: AbortSignal.any([this.#lifetime.signal, ...(this.#operation ? [this.#operation.cancel.signal] : [])]),
 			admission, runner: this.#runner, authorize: async request => {
 				this.#assertAdmission();
 				const permit = this.#permit;
@@ -302,7 +313,7 @@ export class SwarmHost {
 		check(!this.#controller && !this.#pending, "STATE", "Host already owns a run or approval");
 		check(validId(runId), "INPUT", "Invalid run identifier");
 		this.#mode.capture();
-		const inspection = inspectCheckout(workspace);
+		const inspection = await this.#inspect(workspace, operation);
 		const runPath = prepareLayout(inspection.root, runId).runRoot;
 		try { lstatSync(runPath); throw new SwarmError("DUPLICATE", "Run already exists; restore it instead"); }
 		catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -310,17 +321,17 @@ export class SwarmHost {
 		this.#validate(draft, inspection.root, runId);
 		const accepted = await this.#approval("launch", inspection, draft);
 		this.#validate(accepted.specification, inspection.root, runId);
-		this.#unchanged(inspection, accepted.grant);
+		await this.#unchanged(inspection, accepted.grant, operation);
 		this.#location = { workspace: inspection.root, runId, ownerSessionId: this.#sessionId };
 		this.#launchSpecification = accepted.specification;
 		try {
 			this.#controller = await SwarmController.open({ ...this.#location, create: accepted.specification, createOnly: true });
 			this.#assertOperation(operation);
-			this.#unchanged(inspection, accepted.grant);
+			await this.#unchanged(inspection, accepted.grant, operation);
 			await this.#controller.owner("host.approve", { approval: accepted.approval });
 			await this.#wire();
 			this.#assertOperation(operation);
-			this.#unchanged(inspection, accepted.grant);
+			await this.#unchanged(inspection, accepted.grant, operation);
 			this.#setPermit(accepted.grant, operation);
 			await this.#driver.resume({ reconciled: true });
 			return this.snapshot();
@@ -354,9 +365,9 @@ export class SwarmHost {
 		const state = this.#controller.snapshot();
 		check((restart ? ["paused", "stopped", "completed", "failed"] : ["paused"]).includes(state.status), "STATE", "Settle the run before continuation");
 		check(!state.sessions.turns.length && !state.workspace.operations.length && !this.#driver?.snapshot().active.length, "UNSETTLED", "Execution remains unsettled");
-		const inspection = inspectCheckout(state.workspaceRoot);
+		const inspection = await this.#inspect(state.workspaceRoot, operation);
 		const accepted = await this.#approval(restart ? "restart" : "resume", inspection, this.#specification());
-		this.#unchanged(inspection, accepted.grant);
+		await this.#unchanged(inspection, accepted.grant, operation);
 		check(this.#controller.snapshot().revision === state.revision, "STALE", "Run changed during approval");
 		if (["stopped", "completed", "failed"].includes(state.status)) {
 			await this.#driver?.close();
@@ -367,7 +378,7 @@ export class SwarmHost {
 			await this.#wire();
 		} else if (!this.#driver) await this.#wire();
 		this.#assertOperation(operation);
-		this.#unchanged(inspection, accepted.grant);
+		await this.#unchanged(inspection, accepted.grant, operation);
 		await this.#controller.owner("host.continue", { restart, reconciled: true, approval: accepted.approval });
 		this.#setPermit(accepted.grant, operation);
 		return this.snapshot();
@@ -396,10 +407,10 @@ export class SwarmHost {
 			check(this.#driver.snapshot().active.every(workerId => state.workspace.operations.some(item => item.workerId === workerId && live.includes(item.id))), "UNSETTLED", "Live SDK turns must settle normally unless waiting on an identified uncertain operation");
 			const recovery = { operations: state.workspace.operations, turns: state.sessions.turns, liveUncertainIds: live };
 			check(recovery.operations.length || recovery.turns.length, "STATE", "No interrupted execution to reconcile");
-			const inspection = inspectCheckout(state.workspaceRoot);
+			const inspection = await this.#inspect(state.workspaceRoot, operation);
 			const accepted = await this.#approval("reconcile", inspection, this.#specification(), recovery);
 			this.#assertOperation(operation);
-			this.#unchanged(inspection, accepted.grant);
+			await this.#unchanged(inspection, accepted.grant, operation);
 			check(this.#controller.snapshot().revision === state.revision, "STALE", "Execution changed during reconciliation; inspect again");
 			// Record exactly what the user attested before releasing any live lease.
 			await this.#controller.owner("host.attest", { evidence: accepted.attestation.evidence, operationIds: recovery.operations.map(item => item.id), turnIds: recovery.turns.map(item => item.id), fingerprint: inspection.fingerprint }, { expectedRevision: state.revision });

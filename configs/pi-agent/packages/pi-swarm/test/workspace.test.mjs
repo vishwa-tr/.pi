@@ -71,6 +71,22 @@ test("claims and fresh post-acquisition reads are required; stale edits preserve
 	await drain(f);
 });
 
+test("ignored explicit mutation targets retain stale checks and receipt fingerprints", async t => {
+	const f = await fixture(t);
+	writeFileSync(join(f.root, ".gitignore"), "/ignored.txt\n");
+	writeFileSync(join(f.root, "ignored.txt"), "original");
+	f.worker.claim(["ignored.txt"]);
+	await f.worker.read("ignored.txt");
+	writeFileSync(join(f.root, "ignored.txt"), "owner work");
+	await assert.rejects(f.worker.write("ignored.txt", "bad"), code("STALE"));
+	assert.equal(readFileSync(join(f.root, "ignored.txt"), "utf8"), "owner work");
+	await f.worker.read("ignored.txt");
+	await f.worker.write("ignored.txt", "approved change");
+	const receipt = f.c.snapshot().workspace.receipts.at(-1);
+	assert.notEqual(receipt.before, receipt.after);
+	await drain(f);
+});
+
 test("host authorization defaults closed and late approval cannot revive paused work", async t => {
 	const approval = deferred(); const entered = deferred();
 	let launches = 0;
@@ -109,7 +125,8 @@ test("pause retains execution ownership until the runner actually settles", asyn
 test("unsettled command result keeps its lease until explicit settlement attestation", async t => {
 	const f = await fixture(t, { runner: async () => ({ ...success, settled: false }) });
 	const command = f.worker.shell("background work"); const rejected = assert.rejects(command);
-	for (let i = 0; i < 30 && !f.c.snapshot().workspace.operations[0]?.uncertain; i++) await new Promise(resolve => setImmediate(resolve));
+	const deadline = performance.now() + 5000;
+	while (f.c.snapshot().status !== "pausing" && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
 	assert.equal(f.c.snapshot().status, "pausing");
 	const id = f.c.snapshot().workspace.operations[0].id;
 	assert.equal(f.runtime.snapshot().coordination.active.length, 1);
