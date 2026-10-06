@@ -27,7 +27,7 @@ Update this checklist as each phase lands. Put the commit SHA after the box, as 
 appears on `refactor/pi-swarm-native` (after the rebase, not the worktree SHA).
 
 - [ ] Phase 0 — target the managed Pi installation, and a Linux baseline
-- [ ] Phase 1 — delete the custom HTTPS transport
+- [x] Phase 1 — delete the custom HTTPS transport — `7ba5819`
 - [ ] Phase 2 — native session files
 - [ ] Phase 3 — plain model runtime
 - [ ] Phase 4 — built-in coding tools for workers
