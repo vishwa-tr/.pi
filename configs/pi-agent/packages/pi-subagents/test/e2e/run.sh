@@ -37,6 +37,7 @@ TESTS=(
 	phase7-resume.mjs
 	phase8-sandbox.mjs
 	phase9-tui.mjs
+	phase10-focus.mjs
 	loadcheck.mjs
 )
 for t in "${TESTS[@]}"; do
@@ -46,4 +47,8 @@ for t in "${TESTS[@]}"; do
 done
 
 echo ""
-echo "ALL GREEN — typecheck + ${#TESTS[@]} harnesses"
+if [ "${SKIP_TYPECHECK:-0}" = "1" ]; then
+	echo "ALL GREEN — ${#TESTS[@]} harnesses; typecheck skipped"
+else
+	echo "ALL GREEN — typecheck + ${#TESTS[@]} harnesses"
+fi
