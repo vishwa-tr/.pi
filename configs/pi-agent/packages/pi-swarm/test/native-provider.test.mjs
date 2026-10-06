@@ -111,7 +111,7 @@ test("native construction and factory do not create runtimes, resolve credential
 	const handlers = new Map(); let command;
 	extension({ registerMessageRenderer() {}, registerTool() {}, on: (name, fn) => handlers.set(name, fn), registerCommand: (_name, value) => { command = value; } });
 	await command.handler("status", { hasUI: false });
-	await handlers.get("session_start")({ reason: "start" }, { sessionManager: { getEntries: () => [] } });
+	await handlers.get("session_start")({ reason: "start" }, { sessionManager: { getEntries: () => [], getBranch: () => [] } });
 	assert.equal(f.calls.length, 0);
 });
 

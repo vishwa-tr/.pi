@@ -4,14 +4,13 @@ import { ModeGate } from "./host-gates.mjs";
 import { createProgress } from "./progress.mjs";
 import { showDashboard } from "./dashboard.mjs";
 import { requireCondition as check } from "./errors.mjs";
-import { requestUserApproval, statusText } from "./ui.mjs";
+import { prepareLaunchCheckout } from "./launch-setup.mjs";
 import { createNativeRuntime } from "./native-provider.mjs";
 import { specificationFingerprint } from "./host-approval.mjs";
-import { ChatApproval, registerProposalRenderer } from "./chat-approval.mjs";
 import { requestLaunchSpecification } from "./launch-input.mjs";
 import { registerMainTools, swarmSummary } from "./main-tools.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
-import { applyLaunchSetup, inspectLaunchSetup, prepareLaunchCheckout } from "./launch-setup.mjs";
+import { registerAgreementRenderer, requestUserApproval, statusText } from "./ui.mjs";
 
 const LINK = "swarm-run-v1";
 
@@ -40,12 +39,9 @@ export function createSwarmExtension(options = {}) {
 
 function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off", codingTools, instructions, runner, tickIntervalMs = 1000, approvalTimeoutMs = 120000, providerCapability } = {}, resolveSelection) {
 	return function swarmExtension(pi) {
-		registerProposalRenderer(pi);
+		registerAgreementRenderer(pi);
 		let host;
-		let approvalAdapter;
-		let chatBusy = false;
-		const chatApproval = new ChatApproval(pi);
-		pi.on("input", (event, ctx) => chatApproval.input(event, ctx));
+		let approve;
 		let owner;
 		let context;
 		let command;
@@ -57,8 +53,14 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		let contextEpoch = 0;
 		const progressContext = () => !retired && context && (!owner || owner === context.sessionManager.getSessionId()) ? context : undefined;
 		let progress = createProgress(pi, progressContext);
-		const cancel = () => { chatApproval.revoke(); contextEpoch++; command?.abort(); };
+		const cancel = () => { contextEpoch++; command?.abort(); };
 		const notify = (ctx, text, level = "info") => { if (ctx.hasUI) ctx.ui.notify(text, level); };
+		// A native dialog title cannot hold a full packet. A command shows it as a literal
+		// chat message first; mid-turn, Pi would defer that message until after the dialog.
+		const postPacket = (ctx, text) => {
+			check(ctx.isIdle(), "BUSY", "Wait for the main agent turn to finish, then approve Swarm");
+			pi.sendMessage({ customType: "swarm-agreement", display: true, content: text }, { triggerTurn: false });
+		};
 		const contextGuard = (ctx, signal) => {
 			const epoch = contextEpoch;
 			const sessionId = ctx.sessionManager.getSessionId();
@@ -88,7 +90,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				const selection = resolveSelection ? await resolveSelection(ctx, pi) : { modelRuntime, mainModel, thinkingLevel, providerCapability };
 				check(current(), "OWNERSHIP", "Swarm context changed during preparation");
 				host = new SwarmHost({ events: pi.events, sessionId, codingTools, instructions, runner, tickIntervalMs, approvalTimeoutMs, ...selection,
-					requestApproval: request => approvalAdapter ? approvalAdapter(request) : requestUserApproval(context, request),
+					requestApproval: request => approve ? approve(request) : { approved: false },
 					beforePrompt: async () => { if (viewing) { cancel(); await dashboard; } } });
 				progress.bind(host);
 			}
@@ -114,7 +116,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		const remember = ctx => {
 			const run = host?.snapshot().run;
 			if (!run || retired || ctx.sessionManager.getSessionId() !== owner) return;
-			const last = ctx.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === LINK).at(-1)?.data;
+			const last = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === LINK).at(-1)?.data;
 			if (last?.runId !== run.runId || last?.ownerSessionId !== owner) pi.appendEntry(LINK, { runId: run.runId, ownerSessionId: owner });
 		};
 		const brake = async (ctx, stop = false) => {
@@ -127,7 +129,8 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		// Yield the inspection view before a worker's native safety dialog is presented.
 		pi.on("ui_prompt_start", event => { if (viewing && event.kind !== "custom") cancel(); });
 
-		const control = async (args, ctx, signal, consent) => {
+		// `ask` is the main tool's in-call approval; commands post each packet to chat.
+		const control = async (args, ctx, signal, ask) => {
 				const [action = "", ...rest] = args.trim().split(/\s+/);
 				check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot control the Swarm host");
 				if (action === "pause" || action === "stop") {
@@ -151,6 +154,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				check(!signal?.aborted, "CANCELLED", "Swarm request cancelled");
 				const pending = new AbortController();
 				command = pending;
+				approve = ask ?? (request => requestUserApproval(ctx, request, text => postPacket(ctx, text)));
 				const abort = () => { pending.abort(); void brake(ctx).catch(() => {}); };
 				signal?.addEventListener("abort", abort, { once: true });
 				const current = contextGuard(ctx, pending.signal);
@@ -169,7 +173,6 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					if (!selected || selected === "Cancel" || pending.signal.aborted) return;
 					if (selected === "status") { notify(ctx, statusText(host?.snapshot())); return; }
 					if (["pause", "stop"].includes(selected)) { await brake(ctx, selected === "stop"); return; }
-					if (!consent) chatApproval.revoke();
 					let activeHost;
 					if (selected === "start") {
 						if (resolveSelection) check(ctx.model, "MODEL", "Select a physical chat model with /model before starting Swarm");
@@ -181,10 +184,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 							check(current(), "OWNERSHIP", "Swarm setup was cancelled or its context changed");
 							setupGate.assert(permission.token);
 						};
-						if (consent) consent.setup = applyLaunchSetup(consent.setup, assertCurrent);
-						else if (!await prepareLaunchCheckout(ctx, { signal: pending.signal, assertCurrent, timeout: approvalTimeoutMs })) return;
+						if (!await prepareLaunchCheckout(ctx, { signal: pending.signal, assertCurrent, timeout: approvalTimeoutMs })) return;
 						assertCurrent();
-						const specification = consent?.agreement.specification ?? await requestLaunchSpecification(ctx, args.trimStart().replace(/^start(?:\s|$)/, ""), pending.signal, current);
+						const specification = await requestLaunchSpecification(ctx, args.trimStart().replace(/^start(?:\s|$)/, ""), pending.signal, current);
 						if (!current() || !specification) return;
 						assertCurrent();
 						setupPhase = false;
@@ -217,7 +219,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					} else check(false, "INPUT", "Use start, status, pause, stop, restore <run-id>, resume, restart, or reconcile");
 					if (!retired) notify(ctx, statusText(activeHost.snapshot()));
 				} catch (error) {
-					if (consent) throw error;
+					if (ask) throw error;
 					if (error.code === "SETUP" || (setupPhase && error.code === "MODE_DENIED")) {
 						if (!retired) notify(ctx, error.code === "SETUP" ? error.message : "Swarm setup requires Plan to be ready and Off. Return to Off and start again; approved setup changes are not rolled back.", "warning");
 						if (error.code === "MODE_DENIED") throw error;
@@ -235,67 +237,45 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					setupGate?.dispose();
 					remember(ctx);
 					viewing = false;
-					if (command === pending) command = undefined;
+					if (command === pending) { command = undefined; approve = undefined; }
 				}
 			};
-		const chatControl = async (action, args, ctx, signal) => {
+		// One tool call: the human decides in native dialogs inside this owning interactive
+		// session. Tool arguments and chat text never reach the approval answer.
+		const chatControl = async (action, args, ctx, signal, update) => {
 			if (["pause", "stop", "status"].includes(action)) { await control(action, ctx, signal); return inspect(ctx); }
-			if (!args.proposalId) chatApproval.revoke();
-			check(!chatBusy, "BUSY", "Chat control is already preparing");
-			chatBusy = true;
-			const operation = action === "start" ? "launch" : action;
-			let gate;
+			check(ctx.mode === "tui" && ctx.hasUI && typeof update === "function", "UI", "Swarm approval requires interactive CLI mode");
+			check(action !== "start" || (typeof args.objective === "string" && args.objective.trim().length > 0 && args.objective.length <= 32768), "INPUT", "A complete objective is required");
+			const revoked = new AbortController();
+			const current = contextGuard(ctx, signal);
+			const model = specificationFingerprint(ctx.model ?? null);
+			const thinking = pi.getThinkingLevel?.();
+			const registry = ctx.modelRegistry;
+			const cwd = ctx.cwd;
+			const sessionId = ctx.sessionManager.getSessionId();
+			const sessionFile = ctx.sessionManager.getSessionFile();
+			const gate = new ModeGate({ events: pi.events, sessionId, onRevoke: () => revoked.abort() });
 			try {
-				check(ctx.mode === "tui" && ctx.hasUI, "UI", "Chat approval requires interactive CLI mode");
-				check(!command && !retired && !signal?.aborted, "BUSY", "Swarm control unavailable");
-				check(action !== "start" || (typeof args.objective === "string" && args.objective.trim().length > 0 && args.objective.length <= 32768), "INPUT", "A complete objective is required");
-				if (restoreLink) await restorePending(ctx);
-				const activeHost = args.proposalId && host ? host : await ensureHost(ctx);
-				if (args.proposalId) {
-					const consent = chatApproval.consume(args.proposalId, operation, args.objective, ctx);
-					check(specificationFingerprint(activeHost.previewApproval(operation, consent.agreement.specification, ctx.cwd)) === specificationFingerprint(consent.agreement), "STALE", "Agreement changed");
-					let used = false;
-					approvalAdapter = request => {
-						check(!used && !request.signal.aborted && request.action === operation
-							&& specificationFingerprint(request.specification) === specificationFingerprint(consent.agreement.specification)
-							&& specificationFingerprint(request.provider ?? null) === specificationFingerprint(consent.agreement.provider), "AUTHORITY", "Unapproved host operation");
-						check(specificationFingerprint(inspectLaunchSetup(ctx.cwd)) === specificationFingerprint(consent.setup), "STALE", "Checkout changed before host admission");
-						used = true;
-						return { approved: true, existingChanges: "preserve", reconciled: operation !== "launch" };
-					};
-					try { await control(action === "start" ? `start ${args.objective}` : action, ctx, signal, consent); }
-					finally { approvalAdapter = undefined; }
-					return inspect(ctx);
-				}
-				const current = contextGuard(ctx, signal);
-				const model = specificationFingerprint(ctx.model ?? null);
-				const thinking = pi.getThinkingLevel?.();
-				const registry = ctx.modelRegistry;
-				const sessionId = ctx.sessionManager.getSessionId();
-				const sessionFile = ctx.sessionManager.getSessionFile();
-				const setup = inspectLaunchSetup(ctx.cwd);
-				const specification = action === "start" ? await requestLaunchSpecification(ctx, args.objective, signal, current) : undefined;
-				const agreement = activeHost.previewApproval(operation, specification, setup.root);
-				gate = new ModeGate({ events: pi.events, sessionId, onRevoke: () => chatApproval.revoke() });
 				const permission = gate.capture();
-				const proposalGate = gate;
-				const assertCurrent = (inputContext = ctx) => {
-					check(current() && inputContext.mode === "tui" && inputContext.hasUI
-						&& inputContext.sessionManager.getSessionId() === sessionId && inputContext.sessionManager.getSessionFile() === sessionFile
-						&& inputContext.cwd === ctx.cwd && inputContext.modelRegistry === registry
-						&& specificationFingerprint(inputContext.model ?? null) === model && pi.getThinkingLevel?.() === thinking, "OWNERSHIP", "Proposal context changed");
-					proposalGate.assert(permission.token);
-					check(specificationFingerprint(inspectLaunchSetup(ctx.cwd)) === specificationFingerprint(setup), "STALE", "Proposal checkout changed");
-					check(specificationFingerprint(activeHost.previewApproval(operation, specification, setup.root)) === specificationFingerprint(agreement), "STALE", "Run changed");
+				// The human may take a while: re-check the calling context once the dialogs return.
+				const assertCurrent = () => {
+					check(current() && ctx.mode === "tui" && ctx.hasUI
+						&& ctx.sessionManager.getSessionId() === sessionId && ctx.sessionManager.getSessionFile() === sessionFile
+						&& ctx.cwd === cwd && ctx.modelRegistry === registry
+						&& specificationFingerprint(ctx.model ?? null) === model && pi.getThinkingLevel?.() === thinking, "OWNERSHIP", "Approval context changed");
+					gate.assert(permission.token);
 				};
-				const result = chatApproval.propose({ agreement, setup, existingWork: "Preserve all existing source and index changes; no reset, stash, staging or commit.",
-					setupConsent: "Authorize only the listed actions: git-init initializes Git at this exact root; append-runtime-ignore appends /.swarms/ to root .gitignore preserving bytes and permissions. No rollback.",
-					reconciliation: operation === "launch" ? null : "Continue only settled work on this exact checkout snapshot; unresolved operations still require separate user reconciliation." },
-					{ assertCurrent, dispose: () => proposalGate.dispose(), timeout: approvalTimeoutMs });
-				gate = undefined;
-				return result;
-			} catch (error) { chatApproval.revoke(); throw error; }
-			finally { gate?.dispose(); chatBusy = false; }
+				// Mid-turn chat messages are deferred, so the packet streams as this tool's partial result.
+				const present = text => update({ content: [{ type: "text", text }], details: {} });
+				const ask = async request => {
+					const answer = await requestUserApproval(ctx, request, present);
+					assertCurrent();
+					return answer;
+				};
+				const stop = AbortSignal.any([revoked.signal, ...(signal ? [signal] : [])]);
+				await control(action === "start" ? `start ${args.objective}` : action, ctx, stop, ask);
+				return inspect(ctx);
+			} finally { gate.dispose(); }
 		};
 		pi.registerCommand("swarm", {
 			description: "Swarm dashboard, launch, status, pause, stop, resume, restart, and reconciliation",
@@ -314,7 +294,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		pi.on("session_start", async (event, ctx) => {
 			context = ctx;
 			if (event.reason === "fork" || retired) return;
-			const link = ctx.sessionManager.getEntries().filter(entry => entry.type === "custom" && entry.customType === LINK).at(-1)?.data;
+			const link = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === LINK).at(-1)?.data;
 			if (!link || link.ownerSessionId !== ctx.sessionManager.getSessionId()) return;
 			if (resolveSelection) { restoreLink = link; return; }
 			const current = contextGuard(ctx);

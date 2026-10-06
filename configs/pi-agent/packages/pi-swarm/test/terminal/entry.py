@@ -6,7 +6,7 @@ import os
 import shutil
 import subprocess
 import time
-from run import DisposableFixture, Terminal, HERE, pi_cli
+from run import DisposableFixture, Terminal, HERE, compact, pi_cli
 
 
 def main(scripted=False, package_root=False):
@@ -99,18 +99,20 @@ def main(scripted=False, package_root=False):
                 time.sleep(0.3)
                 assert not (project / ".swarms").exists()
                 assert not any(event["type"] in ("auth", "dispatch") for event in events())
+                # The main tool waits inside its own call for the human's native decision.
                 terminal.line("fixture chat launch")
-                wait_event("chat-result")
-                proposal = [event["data"] for event in events() if event["type"] == "chat-result"][-1]
-                assert proposal["status"] == "approval-required", proposal
-                terminal.expect("Fixture main agent returned")
-                assert not any(event["type"] == "dispatch" for event in events())
+                terminal.expect("LAUNCH (Pi native provider)")
+                terminal.read_packet("LAUNCH (Pi native provider)")
+                assert compact('"objective": "Fixture chat goal"') in terminal.last_packet
+                assert not any(event["type"] in ("dispatch", "chat-result") for event in events())
                 assert not (project / ".swarms").exists()
-                terminal.line(proposal["reply"])
-                wait_event("approval-input")
-                assert [event["source"] for event in events() if event["type"] == "approval-input"] == ["interactive"]
-                wait_event("dispatch")
+                terminal.choose(2)
+                terminal.expect("Preserve and proceed?")
+                terminal.choose(1)
+                wait_event("chat-result")
                 assert [event["data"] for event in events() if event["type"] == "chat-result"][-1]["status"] == "running"
+                terminal.expect("Fixture main agent returned")
+                wait_event("dispatch")
                 assert [event["model"] for event in events() if event["type"] == "dispatch"] == ["second"]
                 terminal.line("/swarm pause")
                 wait_event("settled")

@@ -879,6 +879,45 @@ restorable from a different session.
 
 **Done when** no Swarm approval needs a custom TUI component or a typed reply.
 
+### Found during
+
+- **`ctx.ui.confirm` defaults to approving.** In Pi 1.0.4's TUI it is a select over
+  `["Yes", "No"]` with Yes first and preselected (`interactive-mode.js`,
+  `showExtensionConfirm`). Every approval question (agreement, preserve existing work,
+  workspace reconciliation, attest settlement, and the in-tool approval) therefore uses
+  `ctx.ui.select(title, ["Cancel", <action>])` instead, so Enter on the default never
+  approves.
+- **A `display: true` message can't precede an in-tool dialog.** While the agent is
+  streaming, `pi.sendMessage` with `triggerTurn: false` is deferred to the end of the turn
+  (`agent-session.js`, `sendCustomMessage`), so it would appear only after the dialog. The
+  `swarm_start` / `swarm_control` path streams the packet as the tool's partial result
+  (`onUpdate`), and those two tools register a `renderResult` that renders every line
+  through `displayText` (the default renderer collapses to 10 lines and doesn't sanitize).
+  The `/swarm` command path posts a `swarm-agreement` message and refuses with `BUSY` when
+  `ctx.isIdle()` is false, rather than asking with the packet still deferred.
+- **Native select titles can't hold a packet.** In fullscreen mode the dialog sits in the
+  input dock, which shrinks to fit, so a long title is clipped. Titles carry only fixed
+  text; the full, sanitized packet goes to the transcript, which PageUp/PageDown scroll
+  while the select stays focused. The PTY harness reads packets that way (`read_packet`).
+- **Step 3 location.** The `LINK` lookup was in `remember` and the `session_start`
+  handler, not in `ensureHost`. Both now use `getBranch()`.
+- **Left unused, not deleted:** `SwarmHost.previewApproval` (only the proposal flow used it;
+  `host.mjs` is being edited by Phase 2 in parallel) and `inspectLaunchSetup` /
+  `applyLaunchSetup` in `launch-setup.mjs` (Phase 5 deletes that file). Remove
+  `previewApproval` in a later phase.
+- **Git setup consent still uses `ctx.ui.confirm`** (`prepareLaunchCheckout`), so its
+  default is Yes. It now also runs inside the `swarm_start` call, before the agreement.
+  Not changed here because Phase 5 deletes it.
+- **README** still documents the proposal flow, `proposalId` and the deleted modules. Left
+  for the Phase 7 rewrite.
+- **`test/terminal/entry.py`** (the chat-tool PTY) isn't run by `swarm-wsl-test.sh --pty`.
+  It was updated and run by hand on Linux, with and without `--package-root`.
+- **Proposal-only chat tests have no successor.** `wrong-id`, `quoted`, `unrelated`,
+  `wrong-objective`, `wrong-operation`, `new-proposal`, `unapproved`, expiry and one-use
+  consumption all tested proposal identity and reply text, which no longer exist. What
+  replaces them: no `input` listener is registered, and dialog-time context changes are
+  re-checked after the human answers.
+
 ## Phase 7 — README rewrite
 
 `README.md` is about 1,400 lines, mostly phase-by-phase history (Phases 2–14, the

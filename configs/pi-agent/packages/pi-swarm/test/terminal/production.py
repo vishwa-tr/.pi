@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import time
 
-from run import ANSI, HERE, DisposableFixture, Terminal, pi_cli, pi_package_dir
+from run import ANSI, HERE, DisposableFixture, Terminal, compact, pi_cli, pi_package_dir
 
 
 def main(native=False):
@@ -81,23 +81,23 @@ def main(native=False):
         def start():
             terminal.line(f"/swarm start Production policy acceptance. Only approved benign commands execute. {scope}.")
             terminal.expect(f"LAUNCH ({label})")
-            terminal.read_decision()
             if native:
+                terminal.read_packet(f"LAUNCH ({label})")
                 plain = terminal.last_packet
                 for value in ("terminal-native", "native-scripted", "openai-responses", "https://native.invalid/v1",
                               "Pi owns credentials", "OAuth, environment and routing", "informational, not pinned",
                               "objective-and-guidance", "host-instructions", "workspace-content", "tool-definitions-and-results",
                               "worker-history", "peer-messages", "compaction-summaries"):
-                    assert value in plain, f"Missing native agreement disclosure: {value}"
+                    assert compact(value) in plain, f"Missing native agreement disclosure: {value}"
                 assert count("native-request") == 0, "No native request before agreement"
 
         def approve(action):
             terminal.expect(f"{action} ({label})")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Preserve and proceed?")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Workspace reconciliation")
-            terminal.decision()
+            terminal.choose(1)
 
         def resume(script=None):
             if script:
@@ -146,9 +146,9 @@ def main(native=False):
             policy_command("/discuss off")
             mode("off")
             start()
-            terminal.decision(2)
+            terminal.choose(2)
             terminal.expect("Preserve and proceed?")
-            terminal.decision()
+            terminal.choose(1)
             wait_count("worker-start", 1)
             status("running")
 
@@ -242,19 +242,19 @@ def main(native=False):
                 wait_count("uncertain-runner", 1)
                 terminal.line("/swarm reconcile")
                 terminal.expect(f"RECONCILE ({label})")
-                terminal.read_decision()
+                terminal.read_packet(f"RECONCILE ({label})")
                 recovery_packet = terminal.last_packet
                 for value in ('"operations"', '"turns"', '"liveUncertainIds"'):
                     assert value in recovery_packet
-                terminal.decision()
+                terminal.choose(1)
                 terminal.expect("Preserve and proceed?")
-                terminal.decision()
+                terminal.choose(1)
                 terminal.expect("Describe how you independently established")
                 terminal.line("Fixture runner spawned no process; its promise returned unsettled by design.")
                 terminal.expect("Attest settlement")
-                terminal.read_decision()
+                terminal.read_packet("Attest settlement")
                 evidence_packet = terminal.last_packet
-                terminal.decision()
+                terminal.choose(1)
                 time.sleep(0.4)
                 status("paused")
                 stable_workers()

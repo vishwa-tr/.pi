@@ -5,10 +5,8 @@ import { EventEmitter } from "node:events";
 import { repository } from "./helpers.mjs";
 import { createMockRuntime } from "./sdk-env.mjs";
 import { matchesKey } from "@earendil-works/pi-tui";
-import { decisionUI } from "./decision-fixture.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { SwarmDecision } from "../extensions/swarm/decision.mjs";
 import { createSwarmExtension } from "../extensions/swarm/extension.mjs";
 
 function dashboardUI(f) {
@@ -16,11 +14,7 @@ function dashboardUI(f) {
 	f.ctx.ui.custom = factory => new Promise(resolve => {
 		f.event("ui_prompt_start", { kind: "custom" });
 		const bindings = { matches: (data, action) => matchesKey(data, action === "tui.select.cancel" ? "escape" : action === "tui.select.confirm" ? "enter" : "up") };
-		const component = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_, text) => text }, bindings, resolve);
-		if (component instanceof SwarmDecision) {
-			const confirmation = ["Workspace reconciliation", "Attest settlement"].includes(component.title);
-			f.ctx.ui[confirmation ? "confirm" : "select"](component.body, component.choices, { signal: component.signal }).then(answer => component.finish(confirmation ? answer ? component.choices[1] : "Cancel" : answer));
-		} else view = component;
+		view = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_, text) => text }, bindings, resolve);
 	});
 	return () => view;
 }
@@ -44,20 +38,21 @@ async function fixture(t, { script = () => ({ text: "Mock planning complete" }),
 		const answer = responses[kind].shift();
 		if (typeof answer === "function") return answer(...args);
 		if (answer !== undefined) return answer;
-		if (kind === "select") return args[1].includes("Approve") ? "Approve" : args[1].includes("Preserve existing work") ? "Preserve existing work" : undefined;
+		if (kind === "select") return ["Approve", "Preserve existing work", "Continue", "Attest settlement"].find(choice => args[1].includes(choice));
 		if (kind === "confirm") return true;
 		return "All processes independently checked and stopped in the mock fixture";
 	};
-	const ctx = { cwd: root, mode: "tui", hasUI: true,
-		sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries },
-		ui: { custom: decisionUI(dialog), input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: (text, level) => notices.push({ text, level }) } };
+	const ctx = { cwd: root, mode: "tui", hasUI: true, isIdle: () => true,
+		sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries, getBranch: () => entries },
+		ui: { input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: (text, level) => notices.push({ text, level }) } };
 	const tools = new Map(); const messages = [];
-	const pi = { registerMessageRenderer() {}, registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events, on: (name, handler) => handlers.set(name, handler), registerCommand: (name, command) => commands.set(name, command), appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
+	const pi = { registerMessageRenderer() {}, registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => { messages.push({ message, options }); if (message.customType === "swarm-agreement") prompts.push({ kind: "packet", args: [message.content] }); }, events, on: (name, handler) => handlers.set(name, handler), registerCommand: (name, command) => commands.set(name, command), appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
 	createSwarmExtension({ modelRuntime: mock.modelRuntime, mainModel: mock.model, runner, tickIntervalMs: 0, approvalTimeoutMs })(pi);
 	const command = args => commands.get("swarm").handler(args, ctx);
 	const event = (name, data = {}) => handlers.get(name)(data, ctx);
 	const status = async () => { await command("status"); return JSON.parse(notices.at(-1).text); };
-	return { tools, messages, root, mock, entries, notices, prompts, responses, ctx, command, event, status, events, mode };
+	const packets = () => prompts.filter(p => p.kind === "packet").map(p => p.args[0]);
+	return { tools, messages, root, mock, entries, notices, prompts, responses, ctx, command, event, status, events, mode, packets };
 }
 
 test("factory is opt-in and rejects absent or live runtimes without registration", () => {
@@ -96,10 +91,12 @@ for (const field of ["criteria", "scope"]) {
 		f.responses.select.push("Edit agreement", field, "Cancel");
 		f.responses.input.push('["Explicit requirement", "No deployment"]');
 		await assert.rejects(f.command("start goal"), { code: "AUTHORITY" });
-		const packets = f.prompts.filter(p => p.kind === "select" && p.args[1].includes("Approve"));
-		assert.equal(packets.length, 2);
-		assert.match(packets[1].args[0], /Explicit requirement/);
-		assert.match(packets[1].args[0], /No deployment/);
+		const decisions = f.prompts.filter(p => p.kind === "select" && p.args[1].includes("Approve"));
+		assert.equal(decisions.length, 2);
+		assert.equal(f.packets().length, 2);
+		assert.match(f.packets()[1], /Explicit requirement/);
+		assert.match(f.packets()[1], /No deployment/);
+		assert.equal(f.prompts.indexOf(decisions[1]) - 1, f.prompts.findLastIndex(p => p.kind === "packet"), "Edited agreement shown before deciding");
 		assert.equal(f.prompts.filter(p => p.kind === "input").length, 1);
 		assert.equal(existsSync(join(f.root, ".swarms")), false);
 		assert.equal(f.mock.calls.length, 0);
@@ -133,6 +130,7 @@ for (const action of ["pause", "stop", "session_before_tree", "session_shutdown"
 		if (action !== "session-change") assert.equal(signal.aborted, true);
 		answer.resolve("Late valid answer"); await launch;
 		assert.equal(f.prompts.length, 2);
+		assert.equal(f.packets().length, 0);
 		assert.equal(f.entries.length, 0);
 		assert.equal(f.mock.calls.length, 0);
 		assert.equal(existsSync(join(f.root, ".swarms")), false);
@@ -148,11 +146,14 @@ for (const supplied of [true, false]) {
 		f.responses.select.push("Cancel");
 		await assert.rejects(f.command(supplied ? `start ${objective}` : "start"), { code: "AUTHORITY" });
 		assert.equal(f.prompts.filter(p => p.kind === "input").length, supplied ? 0 : 1);
-		const packets = f.prompts.filter(p => p.kind === "select");
-		assert.equal(packets.length, 1);
-		assert.ok(packets[0].args[0].includes(JSON.stringify(objective)));
-		assert.match(packets[0].args[0], /requirements in the approved objective/);
-		assert.match(packets[0].args[0], /file and dependency constraints/);
+		const decisions = f.prompts.filter(p => p.kind === "select");
+		assert.equal(decisions.length, 1);
+		assert.equal(f.packets().length, 1);
+		assert.ok(f.packets()[0].includes(JSON.stringify(objective)));
+		assert.match(f.packets()[0], /requirements in the approved objective/);
+		assert.match(f.packets()[0], /file and dependency constraints/);
+		assert.deepEqual(f.messages.map(item => item.options), [{ triggerTurn: false }]);
+		assert.equal(f.messages[0].message.display, true);
 		assert.equal(f.mock.calls.length, 0);
 		assert.equal(existsSync(join(f.root, ".swarms")), false);
 		await f.event("session_shutdown");
@@ -245,6 +246,29 @@ test("shutdown during a prelaunch field input cancels the dialog without creatin
 	await f.event("session_shutdown"); assert.equal(signal.aborted, true);
 	answer.resolve('["Result"]'); await launch;
 	assert.equal(existsSync(join(f.root, ".swarms")), false);
+});
+
+test("a command approval waits for an idle main agent instead of deferring its packet", async t => {
+	const f = await fixture(t);
+	f.ctx.isIdle = () => false;
+	await assert.rejects(f.command("start goal"), { code: "BUSY" });
+	assert.deepEqual(f.prompts, []); assert.deepEqual(f.messages, []);
+	assert.equal(existsSync(join(f.root, ".swarms")), false);
+	assert.equal(f.mock.calls.length, 0);
+	await f.event("session_shutdown");
+});
+
+test("run link follows the active branch, not every session entry", async t => {
+	const f = await fixture(t); await f.command("start goal"); await f.command("pause"); await f.event("session_shutdown");
+	const other = await fixture(t, { root: f.root, entries: f.entries, mock: f.mock });
+	other.ctx.sessionManager.getBranch = () => [];
+	await other.event("session_start", { reason: "resume" });
+	await other.command("status"); assert.match(other.notices.at(-1).text, /No Swarm/);
+	await other.event("session_shutdown");
+	const linked = await fixture(t, { root: f.root, entries: f.entries, mock: f.mock });
+	await linked.event("session_start", { reason: "resume" });
+	assert.equal((await linked.status()).status, "paused", JSON.stringify(linked.notices));
+	await linked.event("session_shutdown");
 });
 
 for (const mode of ["rpc", "json", "print"]) {

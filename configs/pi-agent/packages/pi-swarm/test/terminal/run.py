@@ -22,6 +22,8 @@ import time
 
 HERE = Path(__file__).resolve().parent
 ANSI = re.compile(r"\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[=>]")
+# Whitespace and Pi's transcript scrollbar glyphs; wrapping may split any packet phrase.
+WRAP = re.compile(r"[\s\u2502\u2503\u2588]")
 MANAGED_MARKER = {"kind": "pi-managed-install", "schemaVersion": 1, "layout": "releases-v1"}
 MANAGED_VERSION = re.compile(r"[0-9A-Za-z._+-]+")
 
@@ -163,29 +165,26 @@ class Terminal:
             time.sleep(0.05)
         self.send("\r")
 
-    def decision(self, steps=1):
-        """Read every page of the bounded packet, then explicitly select an action."""
-        self.read_decision()
-        self.send("\t")
-        time.sleep(0.05)
-        for _ in range(steps):
-            self.send("\x1b[B")
-            time.sleep(0.05)
-        self.send("\r")
-
-    def read_decision(self):
-        for _ in range(100):
-            plain = ANSI.sub("", self.output[self.last_expect_start:])
-            states = re.findall(r"(?:Read to end to decide|Decision available)", plain)
-            if states and states[-1] == "Decision available":
-                self.last_packet = plain
-                return
-            if states:
-                self.send("\x1b[6~")
+    def read_packet(self, title):
+        """With the native dialog open, page Pi's fullscreen transcript up to the packet shown
+        before it, keeping every page, then page back. Stores it without wrap whitespace."""
+        header = compact(f"Swarm approval packet: {title}")
+        seen = ANSI.sub("", self.output[self.last_expect_start:])
+        pages = 0
+        while header not in compact(seen):
+            if pages == 60:
+                raise AssertionError(f"Approval packet {title!r} not found above its dialog: {ANSI.sub('', self.output)[-6000:]}")
+            start = len(self.output)
+            self.send("\x1b[5~")
+            pages += 1
             deadline = time.monotonic() + 0.15
             while time.monotonic() < deadline:
                 self.pump(0.03)
-        raise AssertionError(f"Decision packet did not reach its end: {ANSI.sub('', self.output)[-6000:]}")
+            seen += ANSI.sub("", self.output[start:])
+        for _ in range(pages):
+            self.send("\x1b[6~")
+            time.sleep(0.05)
+        self.last_packet = compact(seen)
 
     def resize(self, columns, rows):
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
@@ -220,6 +219,10 @@ class Terminal:
             if self.fd is not None:
                 os.close(self.fd)
                 self.fd = None
+
+
+def compact(text):
+    return WRAP.sub("", text)
 
 
 class DisposableFixture:
@@ -281,7 +284,7 @@ def main():
             terminal.resize(60, 24)
             terminal.line("/swarm start Terminal goal")
             terminal.expect("LAUNCH (mock only)")
-            terminal.decision(1)
+            terminal.choose(1)
             terminal.expect("Edit agreement field")
             terminal.choose(1)
             terminal.expect("New objective as JSON")
@@ -289,15 +292,19 @@ def main():
             terminal.expect("LAUNCH (mock only)")
             for index, field, value in [(2, "criteria", '["Observable outcome"]'),
                                         (3, "scope", '["Only disposable project"]')]:
-                terminal.decision(1)
+                terminal.choose(1)
                 terminal.expect("Edit agreement field")
                 terminal.choose(index)
                 terminal.expect(f"New {field} as JSON")
                 terminal.line(value)
                 terminal.expect("LAUNCH (mock only)")
-            terminal.decision(2)
+            # The edited agreement is shown in full before the final decision.
+            terminal.read_packet("LAUNCH (mock only)")
+            for value in ('"Edited terminal goal"', '"Observable outcome"', '"Only disposable project"'):
+                assert compact(value) in terminal.last_packet, f"Edited agreement not shown: {value}"
+            terminal.choose(2)
             terminal.expect("Preserve and proceed?")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect_status("running")
             wait_event("worker-start")
             terminal.line("/swarm dashboard")
@@ -314,11 +321,11 @@ def main():
             terminal.expect_status("paused")
             terminal.line("/swarm resume")
             terminal.expect("RESUME (mock only)")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Preserve and proceed?")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Workspace reconciliation")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect_status("running")
             wait_event("worker-start", 2)
             terminal.line("/reload")
@@ -334,11 +341,11 @@ def main():
             terminal.expect("SWARM live / mock only | paused")
             terminal.send("r")
             terminal.expect("RESUME (mock only)")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Preserve and proceed?")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Workspace reconciliation")
-            terminal.decision()
+            terminal.choose(1)
             wait_event("worker-start", 3)
             terminal.line("/swarm dashboard")
             terminal.expect("SWARM live / mock only | running")
@@ -353,11 +360,11 @@ def main():
             terminal.expect("Uncertain fixture armed")
             terminal.line("/swarm restart")
             terminal.expect("RESTART (mock only)")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Preserve and proceed?")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Workspace reconciliation")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Fixture shell permission")
             terminal.choose(0)
             wait_event("uncertain-runner")
@@ -366,20 +373,20 @@ def main():
             terminal.resize(80, 24)
             terminal.line("/swarm reconcile")
             terminal.expect("RECONCILE (mock only)")
-            terminal.read_decision()
+            terminal.read_packet("RECONCILE (mock only)")
             recovery_packet = terminal.last_packet
             assert '"operations"' in recovery_packet and '"turns"' in recovery_packet
             assert '"liveUncertainIds"' in recovery_packet
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Preserve and proceed?")
-            terminal.decision()
+            terminal.choose(1)
             terminal.expect("Describe how you independently established")
             terminal.line("Fixture runner spawned no process; its promise returned unsettled by design.")
             terminal.expect("Attest settlement")
-            terminal.read_decision()
+            terminal.read_packet("Attest settlement")
             evidence_packet = terminal.last_packet
-            assert "Fixture runner spawned no process" in evidence_packet
-            terminal.decision()
+            assert compact("Fixture runner spawned no process") in evidence_packet
+            terminal.choose(1)
             # The durable attestation is asserted below; fullscreen may clip notifications.
             time.sleep(0.3)
             terminal.line("/swarm status")

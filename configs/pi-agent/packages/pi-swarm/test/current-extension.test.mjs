@@ -9,7 +9,6 @@ import { EventEmitter } from "node:events";
 import { repository } from "./helpers.mjs";
 import { execFileSync } from "node:child_process";
 import { guardNetwork } from "./network-guard.mjs";
-import { decisionUI } from "./decision-fixture.mjs";
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { SwarmHost } from "../extensions/swarm/host.mjs";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -53,20 +52,26 @@ async function fixture(t, { policy = true, entries = [], root, hold = false } = 
 	const dialog = kind => async (...args) => {
 		if (kind === "input") return '["Fixture only"]';
 		packets.push(args[0]);
-		if (answers.length) return answers.shift();
+		if (answers.length) {
+			const answer = answers.shift();
+			return typeof answer === "function" ? answer(...args) : answer;
+		}
 		if (kind === "confirm") return true;
-		return args[1].includes("Approve") ? "Approve" : "Preserve existing work";
+		return ["Approve", "Preserve existing work", "Continue", "Attest settlement"].find(choice => args[1].includes(choice));
 	};
-	const ctx = { cwd: root ?? repository(t), mode: "tui", hasUI: true, model: undefined,
-		modelRegistry: new ModelRegistry(source), sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries },
-		ui: { custom: decisionUI(dialog), input: dialog("input"), notify: text => notices.push(text) } };
+	const ctx = { cwd: root ?? repository(t), mode: "tui", hasUI: true, model: undefined, isIdle: () => true,
+		modelRegistry: new ModelRegistry(source), sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries, getBranch: () => entries },
+		ui: { custom: () => assert.fail("Approval needs no custom TUI component"), input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: text => notices.push(text) } };
 	const tools = new Map(); const messages = []; const renderers = new Map();
 	const pi = { registerMessageRenderer: (type, renderer) => renderers.set(type, renderer), registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events, on: (name, fn) => handlers.set(name, fn), registerCommand: (name, value) => { assert.equal(name, "swarm"); command = value; },
 		getThinkingLevel: () => thinking, appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
 	assert.equal(createCurrentSwarmExtension()(pi), undefined);
 	const event = (name, data = {}) => handlers.get(name)?.(data, ctx);
 	t.after(() => event("session_shutdown"));
-	return { tools, messages, renderers, ctx, source, calls, packets, answers, entries, event, events, notices, auth: () => auth,
+	// Main tools stream their approval packet as a partial result before each dialog.
+	const updates = [];
+	const tool = (name, args, signal) => tools.get(name).execute("call", args, signal, update => updates.push(update.content[0].text), ctx);
+	return { tools, tool, updates, handlers, messages, renderers, ctx, source, calls, packets, answers, entries, event, events, notices, auth: () => auth,
 		select(id) { ctx.model = source.getModel(model.provider, id); }, thinking(value) { thinking = value; },
 		command: args => command.handler(args, ctx), status: async () => { await command.handler("status", ctx); return notices.at(-1).startsWith("{") ? JSON.parse(notices.at(-1)) : { status: "unattached" }; } };
 }
@@ -87,18 +92,18 @@ test("main tools are registered without auth; status and history listing stay in
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
 });
 
-test("registered proposal renderer preserves literal full terms at narrow widths without expansion", async t => {
+test("registered agreement renderer preserves literal full terms at narrow widths without expansion", async t => {
 	const f = await fixture(t); f.select("first");
-	assert.deepEqual([...f.renderers.keys()], ["swarm-proposal"]);
+	assert.deepEqual([...f.renderers.keys()], ["swarm-agreement"]);
 	const objective = '**literal-name** `name` [label](https://example.invalid/full/destination) \\\\path\\file\nnext "quoted" ``` fence 界';
-	const result = await f.tools.get("swarm_start").execute("call", { objective }, undefined, undefined, f.ctx);
-	assert.equal(result.details.status, "approval-required");
-	const { message, options } = f.messages.find(item => item.message.customType === "swarm-proposal");
-	assert.equal(options.triggerTurn, false);
+	f.answers.push("Cancel");
+	await assert.rejects(f.command(`start ${objective}`), { code: "AUTHORITY" });
+	const { message, options } = f.messages.find(item => item.message.customType === "swarm-agreement");
+	assert.equal(options.triggerTurn, false); assert.equal(message.display, true);
 	const content = message.content;
-	const packet = JSON.parse(content.slice(content.indexOf("{\n"), content.indexOf("\nReply exactly:")));
-	assert.equal(packet.agreement.specification.objective, objective);
-	assert.ok(packet.agreement.provider && packet.setup && packet.existingWork && packet.setupConsent);
+	const packet = JSON.parse(content.slice(content.indexOf("{\n"), content.indexOf("\nProvider agreement")));
+	assert.equal(packet.objective, objective);
+	assert.ok(content.includes("Existing changes:") && content.includes('"transport": "pi-native"'));
 	const renderer = f.renderers.get(message.customType);
 	for (const expanded of [false, true]) {
 		const component = renderer(message, { expanded, outputPad: 2 }, {});
@@ -115,26 +120,42 @@ test("registered proposal renderer preserves literal full terms at narrow widths
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
 });
 
-test("registered proposal renderer visibly escapes terminal and bidi controls", async t => {
+test("registered agreement renderer visibly escapes terminal and bidi controls", async t => {
 	const f = await fixture(t);
 	const content = '**literal** `name` [label](https://example.invalid/path)\\n\\\\\n\x1b[2J\x9b31m\r\u202eend';
-	const renderer = f.renderers.get("swarm-proposal");
+	const renderer = f.renderers.get("swarm-agreement");
 	const lines = renderer({ content }, { expanded: false, outputPad: 0 }, {}).render(200);
 	assert.equal(lines.map(line => line.trimEnd()).join("\n"),
 		'**literal** `name` [label](https://example.invalid/path)\\n\\\\\n\\u001b[2J\\u009b31m\\u000d\\u202eend');
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
 });
 
+test("main tool packet renders every line, sanitized, instead of a collapsed preview", async t => {
+	const f = await fixture(t);
+	const theme = { fg: (_color, text) => text };
+	const text = Array.from({ length: 60 }, (_, i) => `packet-line-${i}`).join("\n") + "\n\x1b[2J\u202eend";
+	for (const name of ["swarm_start", "swarm_control"]) {
+		const component = f.tools.get(name).renderResult({ content: [{ type: "text", text }], details: {} }, { expanded: false, isPartial: true }, theme, {});
+		const rendered = component.render(80).map(line => line.trimEnd()).join("\n");
+		for (let i = 0; i < 60; i++) assert.ok(rendered.includes(`packet-line-${i}`));
+		assert.ok(rendered.endsWith("\\u001b[2J\\u202eend"));
+	}
+	for (const name of ["swarm_status", "swarm_history"]) assert.equal(f.tools.get(name).renderResult, undefined);
+});
+
 test("main start returns while native worker streams and status remains callable; stop settles", async t => {
 	const f = await fixture(t, { hold: true }); f.select("first");
-	const call = (name, args) => f.tools.get(name).execute("call", args, undefined, undefined, f.ctx);
-	const proposal = await call("swarm_start", { objective: "Approved fixture goal" });
-	assert.equal(proposal.details.status, "approval-required");
-	assert.equal(f.auth(), 0);
-	await f.event("input", { source: "interactive", text: proposal.details.reply });
-	assert.equal(f.auth(), 0);
-	const launched = await call("swarm_start", { objective: "Approved fixture goal", proposalId: proposal.details.proposalId });
+	const call = (name, args) => f.tool(name, args);
+	f.answers.push((title, choices) => {
+		assert.equal(f.auth(), 0, "No auth before the human approves");
+		assert.match(title, /^LAUNCH \(Pi native provider\)/); assert.equal(choices[0], "Cancel");
+		assert.match(f.updates.at(-1), /"objective": "Approved fixture goal"/);
+		return "Approve";
+	});
+	const launched = await call("swarm_start", { objective: "Approved fixture goal" });
 	assert.equal(launched.details.status, "running");
+	assert.match(f.updates[0], /^Swarm approval packet: LAUNCH \(Pi native provider\)/);
+	assert.ok(f.messages.every(item => item.message.customType !== "swarm-agreement"));
 	await until(() => f.calls.length === 1);
 	assert.equal((await call("swarm_status", {})).details.status, "running");
 	const auth = f.auth();
@@ -150,25 +171,51 @@ test("main start returns while native worker streams and status remains callable
 	assert.equal(f.calls.length, 1);
 });
 
-for (const refusal of ["cancel", "no-ui", "signal", "mode", "model"]) {
-	test(`main start ${refusal} never treats tool call as approval`, async t => {
+for (const refusal of ["cancel", "escape", "no-ui", "no-update", "signal", "aborted", "stop", "mode", "model", "model-silent", "thinking", "owner", "session-file", "rpc-context", "reload", "changed-file"]) {
+	test(`main start ${refusal} never treats the tool call as approval`, async t => {
 		const f = await fixture(t); f.select("first");
+		writeFileSync(join(f.ctx.cwd, "user.txt"), "Preserve me");
 		const signal = new AbortController();
 		if (refusal === "no-ui") { f.ctx.mode = "json"; f.ctx.hasUI = false; }
 		if (refusal === "signal") signal.abort();
-		const tool = args => f.tools.get("swarm_start").execute("call", args, signal.signal, undefined, f.ctx);
-		const proposal = await tool({ objective: "Never approved" });
-		if (proposal.details.proposalId) {
+		let shown = 0;
+		// Every change happens while the human's dialog is open; the human then approves late.
+		f.answers.push(async () => {
+			shown++;
+			if (refusal === "cancel") return "Cancel";
+			if (refusal === "escape") return undefined;
+			if (refusal === "aborted") signal.abort();
+			if (refusal === "stop") await f.command("stop");
 			if (refusal === "model") { f.select("second"); await f.event("model_select"); }
+			if (refusal === "model-silent") f.select("second");
+			if (refusal === "thinking") f.thinking("low");
+			if (refusal === "owner") f.ctx.sessionManager.getSessionId = () => "foreign";
+			if (refusal === "session-file") f.ctx.sessionManager.getSessionFile = () => "other.jsonl";
+			if (refusal === "rpc-context") f.ctx.mode = "rpc";
+			if (refusal === "reload") await f.event("session_shutdown");
+			if (refusal === "changed-file") writeFileSync(join(f.ctx.cwd, "user.txt"), "Changed");
 			if (refusal === "mode") f.events.emit("pi-plan:mode-changed", { version: 1, instanceId: "entry-policy", revision: 2,
 				contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "plan", enforcedMode: "plan", runMode: null, pendingChange: false });
-			await f.event("input", { source: "interactive", text: refusal === "cancel" ? proposal.details.reply.replace("Approve", "Cancel") : proposal.details.reply });
-			assert.equal((await tool({ objective: "Never approved", proposalId: proposal.details.proposalId })).isError, true);
-		}
+			return "Approve";
+		});
+		const result = refusal === "no-update"
+			? await f.tools.get("swarm_start").execute("call", { objective: "Never approved" }, undefined, undefined, f.ctx)
+			: await f.tool("swarm_start", { objective: "Never approved" }, signal.signal);
+		assert.equal(result.isError, true);
+		assert.equal(shown, ["no-ui", "no-update", "signal"].includes(refusal) ? 0 : 1);
 		assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
-		assert.equal(f.messages.length, ["no-ui", "signal"].includes(refusal) ? 0 : 1);
+		assert.equal(existsSync(join(f.ctx.cwd, ".swarms")), false);
+		assert.ok(f.messages.every(item => item.message.customType !== "swarm-agreement"));
 	});
 }
+
+test("chat text cannot answer an in-tool approval: there is no input listener", async t => {
+	const f = await fixture(t); f.select("first");
+	assert.equal(f.handlers.has("input"), false);
+	f.answers.push("Cancel");
+	assert.equal((await f.tool("swarm_start", { objective: "Approve swarm" })).isError, true);
+	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+});
 
 test("explicit continuation restores chat observation if another extension cancels navigation", async t => {
 	const f = await fixture(t, { hold: true }); f.select("first");
@@ -180,93 +227,57 @@ test("explicit continuation restores chat observation if another extension cance
 	await f.command("stop");
 });
 
-test("user stop revokes a chat proposal without deadlocking", async t => {
-	const f = await fixture(t); f.select("first");
-	f.ctx.ui.custom = () => assert.fail("Chat tools must not open UI");
-	const tool = args => f.tools.get("swarm_start").execute("call", args, undefined, undefined, f.ctx);
-	const proposal = await tool({ objective: "Fixture" });
-	await f.command("stop");
-	await f.event("input", { source: "interactive", text: proposal.details.reply });
-	assert.equal((await tool({ objective: "Fixture", proposalId: proposal.details.proposalId })).isError, true);
-	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
-});
-
-test("main tool cancellation revokes pending chat approval", async t => {
+test("tool cancellation closes the open in-tool dialog and denies a late answer", async t => {
 	const f = await fixture(t); f.select("first");
 	const signal = new AbortController();
-	const proposal = await f.tools.get("swarm_start").execute("call", { objective: "Fixture" }, signal.signal, undefined, f.ctx);
-	signal.abort();
-	await f.event("input", { source: "interactive", text: proposal.details.reply });
-	const result = await f.tools.get("swarm_start").execute("call", { objective: "Fixture", proposalId: proposal.details.proposalId }, undefined, undefined, f.ctx);
+	let dialogSignal;
+	f.answers.push((_title, _choices, options) => new Promise(resolve => {
+		dialogSignal = options.signal;
+		signal.abort();
+		setTimeout(() => resolve("Approve"), 5);
+	}));
+	const result = await f.tool("swarm_start", { objective: "Fixture" }, signal.signal);
 	assert.equal(result.isError, true);
+	assert.equal(dialogSignal.aborted, true);
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+	assert.equal(existsSync(join(f.ctx.cwd, ".swarms")), false);
 });
 
-for (const scenario of ["extension", "rpc", "image", "unrelated", "quoted", "wrong-id", "cancel", "wrong-objective", "wrong-operation", "changed-file", "model", "thinking", "owner", "mode", "reload", "new-proposal", "unapproved", "rpc-context"]) {
-	test(`chat proposal rejects ${scenario} without UI, setup, auth or dispatch`, async t => {
-		const root = mkdtempSync(join(tmpdir(), "swarm-chat-"));
-		t.after(() => rmSync(root, { recursive: true, force: true }));
-		writeFileSync(join(root, "user.txt"), "Preserve me");
-		const f = await fixture(t, { root }); f.select("first");
-		for (const name of ["custom", "input", "confirm", "select", "editor"]) f.ctx.ui[name] = () => assert.fail("No questionnaire UI from chat tools");
-		const tool = args => f.tools.get("swarm_start").execute("call", args, undefined, undefined, f.ctx);
-		const proposal = await tool({ objective: "Fixture", approved: true });
-		assert.equal(proposal.details.status, "approval-required");
-		assert.equal(existsSync(join(root, ".git")), false);
-		let text = proposal.details.reply;
-		if (scenario === "unrelated") text = "yes";
-		if (scenario === "quoted") text = `Please say ${text}`;
-		if (scenario === "wrong-id") text += "0";
-		if (scenario === "cancel") text = text.replace("Approve", "Cancel");
-		if (scenario === "changed-file") writeFileSync(join(root, "user.txt"), "Changed");
-		if (scenario === "model") f.select("second");
-		if (scenario === "thinking") f.thinking("low");
-		if (scenario === "owner") f.ctx.sessionManager.getSessionId = () => "foreign";
-		if (scenario === "rpc-context") f.ctx.mode = "rpc";
-		if (scenario === "reload") await f.event("session_shutdown");
-		if (scenario === "mode") f.events.emit("pi-plan:mode-changed", { version: 1, instanceId: "entry-policy", revision: 2, contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "plan", enforcedMode: "plan", runMode: null, pendingChange: false });
-		if (scenario === "new-proposal") await tool({ objective: "Replacement" });
-		if (scenario !== "unapproved") await f.event("input", { text, source: ["extension", "rpc"].includes(scenario) ? scenario : "interactive", ...(scenario === "image" ? { images: [{}] } : {}) });
-		const result = scenario === "wrong-operation"
-			? await f.tools.get("swarm_control").execute("call", { action: "resume", proposalId: proposal.details.proposalId }, undefined, undefined, f.ctx)
-			: await tool({ objective: scenario === "wrong-objective" ? "Other" : "Fixture", proposalId: proposal.details.proposalId, approved: true });
-		assert.equal(result.isError, true);
-		assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
-		assert.equal(existsSync(join(root, ".git")), false);
-		assert.equal(existsSync(join(root, ".swarms")), false);
-	});
-}
-
-test("chat first setup and continuation use exact one-use approval without native dialogs", async t => {
+test("chat first setup and continuation ask native dialogs inside each tool call", async t => {
 	const root = mkdtempSync(join(tmpdir(), "swarm-chat-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	writeFileSync(join(root, "user.txt"), "Preserve me");
 	writeFileSync(join(root, ".gitignore"), "# rules\r\n", { mode: 0o640 });
 	const f = await fixture(t, { root, hold: true }); f.select("first");
-	for (const name of ["custom", "input", "confirm", "select", "editor"]) f.ctx.ui[name] = () => assert.fail("No questionnaire UI from chat tools");
-	const tool = (name, args) => f.tools.get(name).execute("call", args, undefined, undefined, f.ctx);
+	const order = [];
+	const select = f.ctx.ui.select;
+	const confirm = f.ctx.ui.confirm;
+	f.ctx.ui.select = (...args) => { order.push(`select:${args[0].split(":")[0]}@${f.updates.length}`); return select(...args); };
+	f.ctx.ui.confirm = (...args) => { order.push(`confirm:${args[0]}`); return confirm(...args); };
 	const launch = { objective: "Fixture \u001b[31m \u202e goal" };
-	const proposal = await tool("swarm_start", launch);
-	assert.equal(proposal.details.status, "approval-required");
-	assert.ok(f.messages[0].message.content.includes("git-init"));
-	assert.ok(!f.messages[0].message.content.includes("\u202e"));
-	await f.event("input", { source: "interactive", text: proposal.details.reply });
-	assert.equal(f.auth(), 0);
-	assert.equal((await tool("swarm_start", { ...launch, proposalId: proposal.details.proposalId })).details.status, "running");
+	assert.equal((await f.tool("swarm_start", launch)).details.status, "running");
+	// Setup consent precedes any setup action and the agreement; each packet precedes its select.
+	assert.deepEqual(order, ["confirm:Set up Git for Swarm?", "confirm:Keep Swarm runtime files out of Git?",
+		"select:LAUNCH (Pi native provider)@1", "select:Preserve and proceed?@2"]);
+	assert.ok(f.updates[0].includes("Fixture \\u001b[31m \\u202e goal"));
+	assert.ok(f.updates.every(text => !/[\x1b\u202e]/.test(text)));
+	assert.match(f.updates[1], /user\.txt/);
 	await until(() => f.calls.length === 1);
 	assert.equal(readFileSync(join(root, "user.txt"), "utf8"), "Preserve me");
 	assert.equal(readFileSync(join(root, ".gitignore"), "utf8"), "# rules\r\n/.swarms/\r\n");
 	assert.equal(execFileSync("git", ["-C", root, "ls-files"], { encoding: "utf8" }), "");
-	await tool("swarm_control", { action: "pause" });
-	assert.equal((await tool("swarm_start", { ...launch, proposalId: proposal.details.proposalId })).isError, true);
+	await f.tool("swarm_control", { action: "pause" });
 	for (const action of ["resume", "restart"]) {
-		const next = await tool("swarm_control", { action });
-		assert.equal(next.details.status, "approval-required");
-		await f.event("input", { source: "interactive", text: next.details.reply });
-		assert.equal((await tool("swarm_control", { action, proposalId: next.details.proposalId })).details.status, "running");
+		order.length = 0;
+		const before = f.updates.length;
+		assert.equal((await f.tool("swarm_control", { action })).details.status, "running");
+		assert.deepEqual(order, [`select:${action.toUpperCase()} (Pi native provider)@${before + 1}`, `select:Preserve and proceed?@${before + 2}`, `select:Workspace reconciliation@${before + 2}`]);
 		await until(() => f.calls.length === (action === "resume" ? 2 : 3));
-		await tool("swarm_control", { action: "pause" });
+		await f.tool("swarm_control", { action: "pause" });
 	}
+	f.answers.push("Cancel");
+	assert.equal((await f.tool("swarm_control", { action: "resume" })).isError, true);
+	assert.equal(f.calls.length, 3);
 });
 
 test("normal entry registers synchronously without model, auth, provider dispatch or discovery", async t => {
@@ -304,7 +315,7 @@ for (const event of ["model_select", "thinking_level_select"]) {
 			let shown = false; let release;
 			const answer = new Promise(resolve => { release = resolve; });
 			if (stage === "objective") f.ctx.ui.input = async () => { shown = true; return answer; };
-			else f.ctx.ui.custom = decisionUI(() => async () => { shown = true; return answer; });
+			else f.ctx.ui.select = async () => { shown = true; return answer; };
 			const launch = stage === "objective" ? f.command("start") : assert.rejects(f.command("start goal"));
 			await until(() => shown);
 			f.select("second"); f.thinking("low");
