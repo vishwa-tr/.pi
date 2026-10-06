@@ -82,6 +82,23 @@ export class SwarmHost {
 		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, pendingApproval: Boolean(this.#pending) || this.#pendingSafety > 0, errors: [...this.#errors] };
 	}
 
+	/** Pure agreement preview; no storage creation, auth resolution or dispatch. */
+	previewApproval(action, specification, root) {
+		this.#mode.capture();
+		check(["launch", "resume", "restart"].includes(action), "INPUT", "Unsupported proposal action");
+		const run = this.#controller?.snapshot();
+		if (action === "launch") check(!run, "STATE", "Host already owns a run");
+		else {
+			check(run && (action === "resume" ? ["paused"] : ["paused", "stopped", "completed", "failed"]).includes(run.status), "STATE", "Settle before continuation");
+			check(!run.sessions.turns.length && !run.workspace.operations.length && !this.#driver?.snapshot().active.length, "UNSETTLED", "Execution remains unsettled");
+		}
+		const draft = action === "launch" ? this.#draft(specification) : this.#specification();
+		this.#validate(draft, root, "proposal-preflight");
+		return freeze(structuredClone({ action, specification: draft,
+			provider: this.#providerCapability ? providerDescriptor(this.#providerCapability) : null,
+			runId: run?.runId ?? null, revision: run?.revision ?? null }));
+	}
+
 	/** Observation conveys no owner or worker capability. */
 	subscribe(listener) {
 		this.#listeners.add(listener);

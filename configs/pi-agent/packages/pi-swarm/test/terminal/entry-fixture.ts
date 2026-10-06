@@ -1,7 +1,7 @@
 // Scripted public native provider only; the normal entry is loaded separately with -e.
 import { appendFileSync } from "node:fs";
 import { guardNetwork } from "../network-guard.mjs";
-import { createAssistantMessageEventStream, createProvider } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, createProvider, getCurrentTools } from "@earendil-works/pi-ai";
 
 export default function (pi) {
 	if (process.env.PI_OFFLINE !== "1" || !process.env.SWARM_TERMINAL_FIXTURE) throw new Error("Offline fixture required");
@@ -14,6 +14,22 @@ export default function (pi) {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 	const stream = (selected, _context, options) => {
 		if (options.apiKey !== "memory-only-fixture") throw new Error("Fixture auth missing");
+		if (getCurrentTools(_context.messages).some(tool => tool.name === "swarm_start")) {
+			const last = _context.messages.at(-1);
+			const text = typeof last?.content === "string" ? last.content : last?.content?.filter(block => block.type === "text").map(block => block.text).join("\n") ?? "";
+			const approval = /^Approve swarm ([a-f0-9-]+)$/.exec(text);
+			const args = { objective: "Fixture chat goal", ...(approval ? { proposalId: approval[1] } : {}) };
+			const launch = last?.role === "user" && (text === "fixture chat launch" || approval);
+			const output = createAssistantMessageEventStream();
+			const message = { role: "assistant", content: launch
+				? [{ type: "toolCall", id: `chat-${Date.now()}`, name: "swarm_start", arguments: args }]
+				: [{ type: "text", text: "Fixture main agent returned. Review the Swarm proposal in chat." }],
+				api: selected.api, provider: selected.provider, model: selected.id, timestamp: Date.now(), stopReason: launch ? "toolUse" : "stop",
+				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+			output.push({ type: "done", reason: message.stopReason, message }); output.end();
+			record({ type: "main-dispatch", launch: Boolean(launch) });
+			return output;
+		}
 		record({ type: "dispatch", model: selected.id });
 		const output = createAssistantMessageEventStream();
 		void (async () => {
@@ -29,6 +45,10 @@ export default function (pi) {
 		auth: { apiKey: { name: "Fixture", check: async () => ({ type: "api_key" }),
 			resolve: async () => { record({ type: "auth" }); return { auth: { apiKey: "memory-only-fixture" } }; } } },
 		api: { stream, streamSimple: stream } }));
+	pi.on("tool_result", event => {
+		if (event.toolName === "swarm_start") record({ type: "chat-result", data: event.details });
+	});
+	pi.on("input", event => { if (event.text.startsWith("Approve swarm ")) record({ type: "approval-input", source: event.source }); });
 	pi.on("session_start", (_event, ctx) => {
 		const names = pi.getAllTools().map(tool => tool.name);
 		const expected = ["swarm_start", "swarm_status", "swarm_control", "swarm_history"];

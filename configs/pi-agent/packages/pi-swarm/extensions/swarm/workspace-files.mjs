@@ -264,9 +264,9 @@ export class WorkspaceFiles {
 	}
 
 	/** Opaque deterministic digest; includes ignored files but not volatile coordination/Git internals. */
-	snapshot() {
+	snapshot({ includeGit = true } = {}) {
 		return filesystem(() => {
-			const capture = () => hash(encoded([this.#tree(), this.#gitSnapshot()]));
+			const capture = () => hash(encoded([this.#tree(), includeGit ? this.#gitSnapshot() : null]));
 			const fingerprint = capture();
 			requireCondition(capture() === fingerprint, "STALE", "Workspace changed during snapshot");
 			this.#checkRoot();

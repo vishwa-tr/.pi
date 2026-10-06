@@ -5,6 +5,7 @@ import {
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { SwarmError } from "./errors.mjs";
+import { WorkspaceFiles } from "./workspace-files.mjs";
 import { execFileSync } from "node:child_process";
 
 const fail = message => { throw new SwarmError("SETUP", message); };
@@ -69,6 +70,51 @@ export async function prepareLaunchCheckout(ctx, { signal, assertCurrent, timeou
 	state = inspect(root, assertCurrent);
 	if (!state.repository || !state.ignored) fail("Git did not confirm the runtime exclusion. Review root .gitignore rules, then try again.");
 	return true;
+}
+
+/** Read-only proposal snapshot, including projects that do not yet have Git. */
+export function inspectLaunchSetup(cwd) {
+	const root = realpathSync(cwd);
+	const state = inspectCheckout(root);
+	if (!state.ignored) readIgnore(root); // Reject unsafe setup before asking for consent.
+	const fingerprint = new WorkspaceFiles(root).snapshot({ includeGit: state.repository });
+	const changes = state.repository
+		? git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]).stdout.split("\0").filter(Boolean)
+		: ["Preserve all existing files in this not-yet-versioned project."];
+	return { root, ...state, fingerprint, changes,
+		actions: [...(!state.repository ? ["git-init"] : []), ...(!state.ignored ? ["append-runtime-ignore"] : [])] };
+}
+
+/** Apply only the exact setup actions in an already consented, unchanged snapshot. */
+export function applyLaunchSetup(snapshot, assertCurrent) {
+	assertCurrent();
+	const identity = lstatSync(snapshot.root, { bigint: true });
+	const checkContext = assertCurrent;
+	assertCurrent = () => {
+		checkContext();
+		const stat = lstatSync(snapshot.root, { bigint: true });
+		if (realpathSync(snapshot.root) !== snapshot.root || stat.dev !== identity.dev || stat.ino !== identity.ino || !stat.isDirectory()) {
+			fail("The approved project directory was replaced during setup. Inspect before retrying.");
+		}
+	};
+	const current = inspectLaunchSetup(snapshot.root);
+	if (JSON.stringify(current) !== JSON.stringify(snapshot)) fail("Project changed after the proposal. Request a new proposal; nothing was approved for this snapshot.");
+	if (snapshot.actions.includes("git-init")) {
+		assertCurrent();
+		const files = new WorkspaceFiles(snapshot.root);
+		const before = files.snapshot({ includeGit: false });
+		git(snapshot.root, ["init", "--quiet"]);
+		assertCurrent();
+		if (files.snapshot({ includeGit: false }) !== before) fail("Project contents changed during Git initialization. Approved Git setup remains; request a new proposal.");
+	}
+	if (snapshot.actions.includes("append-runtime-ignore")) {
+		assertCurrent();
+		appendIgnore(snapshot.root, readIgnore(snapshot.root), assertCurrent);
+	}
+	assertCurrent();
+	const result = inspectLaunchSetup(snapshot.root);
+	if (!result.repository || !result.ignored) fail("Approved setup did not establish the runtime exclusion. Inspect before retrying; approved changes remain.");
+	return result;
 }
 
 function inspect(root, assertCurrent) {

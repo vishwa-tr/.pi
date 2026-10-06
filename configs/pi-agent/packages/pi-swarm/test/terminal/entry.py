@@ -52,7 +52,7 @@ def main(scripted=False, package_root=False):
                 if any(event["type"] == kind for event in events()):
                     return
                 terminal.pump()
-            raise AssertionError("Missing fixture event: " + kind)
+            raise AssertionError(f"Missing fixture event: {kind}; observations: {events()}; terminal: {terminal.output[-6000:]}")
         try:
             terminal.expect("Entry fixture ready" if scripted else "No models available")
             terminal.line("/swarm dashboard")
@@ -100,12 +100,18 @@ def main(scripted=False, package_root=False):
                 time.sleep(0.3)
                 assert not (project / ".swarms").exists()
                 assert not any(event["type"] in ("auth", "dispatch") for event in events())
-                terminal.line("/swarm start fixture goal")
-                terminal.expect("LAUNCH (Pi native provider)")
-                terminal.decision(2)
-                terminal.expect("Preserve and proceed?")
-                terminal.decision()
+                terminal.line("fixture chat launch")
+                wait_event("chat-result")
+                proposal = [event["data"] for event in events() if event["type"] == "chat-result"][-1]
+                assert proposal["status"] == "approval-required", proposal
+                terminal.expect("Fixture main agent returned")
+                assert not any(event["type"] == "dispatch" for event in events())
+                assert not (project / ".swarms").exists()
+                terminal.line(proposal["reply"])
+                wait_event("approval-input")
+                assert [event["source"] for event in events() if event["type"] == "approval-input"] == ["interactive"]
                 wait_event("dispatch")
+                assert [event["data"] for event in events() if event["type"] == "chat-result"][-1]["status"] == "running"
                 assert [event["model"] for event in events() if event["type"] == "dispatch"] == ["second"]
                 terminal.line("/swarm pause")
                 wait_event("settled")

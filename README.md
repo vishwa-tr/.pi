@@ -130,7 +130,9 @@ root `skills/` is the canonical global skill library.
 - **Swarm:** `pi-swarm` provides main-agent chat start/status/control/history tools,
   event-driven chat updates without automatic model turns, `/swarm start <goal>` and
   on-demand `/swarm` inspection using native Pi workers with the current model/thinking snapshot. Launch and
-  continuation require explicit user approval; Plan must be ready and Off, and
+  continuation require explicit user approval: chat tools show a full proposal and require
+  the exact interactive reply `Approve swarm <id>` before a second tool call; `/swarm start`
+  keeps its native approval UI. Plan must be ready and Off, and
   Safety gates worker commands. Use `/swarm pause` or `/swarm stop` to brake work.
   Load, reload, session resume, and ordinary prompts never automatically dispatch
   Swarm work. See its [usage and limitations](configs/pi-agent/packages/pi-swarm/README.md).

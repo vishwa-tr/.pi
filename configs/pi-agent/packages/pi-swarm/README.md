@@ -62,7 +62,7 @@ write failures. They cover state transitions, persistence/replay, exclusive owne
 across processes, corruption rejection, restart accounting, stale capabilities,
 independent-review bookkeeping, and preservation of source/index contents.
 
-The current combined suite has **544 passing tests on Pi 1.0.1**. It includes actual local shell execution,
+The current combined suite has **572 passing tests on Pi 1.0.1**. It includes actual local shell execution,
 process-group cancellation, filesystem races, persistent real SDK sessions, native compaction,
 and autonomous peer/tool interaction using scripted providers. Factory tests invoke real SDK sessions through scripted mock providers and fake native
 UI contexts. These are not live-model, interactive-terminal, or power-loss tests.
@@ -88,8 +88,9 @@ pi -e <configuration-root>/configs/pi-agent/packages/pi-plan/extensions/plan/ind
 
 Use a persisted interactive session, an already configured physical chat model (`/model`),
 and the desired `/thinking` level. Plan must be ready and **Off**; missing or conflicting policy
-providers deny execution. Before asking launch questions or binding a model host, Swarm checks
-Git prerequisites. If the folder is not in a repository, it offers a native confirmation to
+providers deny execution. For command-driven launch, before asking launch questions or binding
+a model host, Swarm checks Git prerequisites. Chat tools instead use the read-only proposal
+and exact-reply consent flow described below. If the folder is not in a repository, it offers a native confirmation to
 initialize Git in that exact folder, without staging or committing. For an existing repository,
 start Pi at its checkout root (including a worktree root), not a subdirectory; Swarm never
 silently initializes a nested repository or modifies a parent checkout.
@@ -165,7 +166,8 @@ missing-model load/status/reload, then a scripted native
 provider registered through Pi alongside actual Plan/Safety entries, current-model selection,
 declined initialization with zero changes, separately approved Git/ignore setup, declined
 ignore changes, CRLF/permission/source preservation, prompt-first approval, cancelled agreement
-with zero auth/dispatch, approved dirty-work launch and paused reload.
+with zero auth/dispatch, actual model-issued chat proposal, interactive exact-reply approval,
+second-tool dirty-work launch and paused reload.
 The other four PTY scenarios remain separate broader policy/workspace regressions.
 Guided-setup verification also passes **68 Plan/Safety tests**, **four PTY cleanup tests**,
 and all five PTY scenarios (normal entry checked as both raw file and package root).
@@ -179,17 +181,25 @@ These are automated offline checks, not human visual sign-off.
 Ask the main agent to start a Swarm for an objective, inspect its progress or history,
 or pause/stop it. The native main-agent tools are:
 
-- `swarm_start({ objective })`: the same setup, editable agreement, existing-work consent,
-  owner/model checks, Plan Off and Safety flow as `/swarm start`. A tool call is **not**
-  consent. It returns after approved launch and planner recruitment, not after workers finish;
-  the main agent can answer and inspect status while workers continue.
+- `swarm_start({ objective, proposalId? })`: proposes the complete objective in ordinary
+  chat, with no questionnaire or native launch dialog. Ask the main agent to clarify any
+  missing details in chat first. The initial call only inspects the checkout and displays
+  an immutable full proposal: objective, seeded criteria/scope, model/thinking, provider
+  context, tools/instructions, limits, existing-work preservation and exact required Git
+  setup actions. It returns `proposalId` and the exact reply `Approve swarm <id>`.
+  After that interactive reply, the main agent calls again with the same objective and ID.
+  Approval alone does not execute anything. The second call consumes consent once and
+  returns after launch/planner recruitment, not worker completion. Tool arguments, including
+  an `approved` flag, are never approval. To revise any field, request a new proposal;
+  `/swarm start` retains its existing editable native agreement.
 - `swarm_status({})`: bounded current progress, task states, active workers, blockers and
   unsettled counts. Like `/swarm status`, the first explicit inspection after reload can
   reattach saved ownership **paused**, through the existing model/mode checks. It does not
   wake workers or resolve authentication.
-- `swarm_control({ action })`: `pause`, `stop`, `resume` or `restart`, through the same
-  command handler. Continuation requires fresh human approval. Brakes stay available while
-  a launch tool awaits approval; cancelling that tool also cancels its pending control.
+- `swarm_control({ action, proposalId? })`: `pause` and `stop` act immediately;
+  `resume` and `restart` use the same two-phase chat proposal/approval protocol, without
+  native continuation dialogs. Each continuation needs fresh one-use human approval.
+  Brakes revoke pending proposals; cancelling a tool also fences its pending operation.
   A stopping/pausing result is not settled completion. Reconciliation remains user-only
   through `/swarm reconcile`.
 - `swarm_history({ workerId?, offset?, limit? })`: without a worker ID, list workers;
@@ -197,6 +207,34 @@ or pause/stop it. The native main-agent tools are:
   Offset is a zero-based entry index; limit is 1–20 (default 10). Results include total
   entries and the next offset; individual entries are capped at 2,000 characters and marked
   when truncated. `/swarm` conversations retain the full wrapped entries.
+
+Only the current persisted owner session in interactive CLI mode can approve. The complete
+reply must match exactly, with no images; unrelated text, broad yes/no answers, quoted
+approval, wrong IDs, extension-originated input and RPC input confer no authority.
+`Cancel swarm <id>` revokes the pending proposal. There is only one in-memory proposal:
+replacement, failure, use, expiry (120 seconds by default), policy restriction, model/thinking
+changes, navigation, reload and shutdown invalidate it. Checkout or run-state drift requires
+a new proposal. Returning to Off never restores an old approval. First-run Git initialization
+and the exact root `.gitignore` append are separately enumerated actions in the chat packet;
+the exact reply consents to those listed actions and preservation of existing source/index
+work. No setup mutation, run creation or worker authentication/dispatch happens before that
+consent. Approved setup is not rolled back on later failure. Actual sensitive worker operations
+still use independent Safety decisions; chat approval is not blanket command permission.
+
+**Trust boundary:** provenance uses Pi's public `input` event with `source: "interactive"`
+and `ctx.mode === "tui"`. Installed extensions and the native SDK host are trusted runtime
+components, as they are for native dialogs. Trusted extensions can transform input before
+this handler and an SDK host can synthesize events. This is not raw-terminal proof and does
+not protect against malicious installed extensions or a malicious SDK host. Supported use is
+the native interactive CLI, not remote/RPC authorization. Native `/swarm start`, continuation
+and reconciliation controls retain their existing UI behavior.
+
+Proposals and updates use non-waking `pi.sendMessage` messages. Proposals have a dedicated
+public TUI `Text` renderer, not Markdown: literal markers, backticks, backslashes and link
+destinations remain visible. The entire packet wraps at the available width even when
+unexpanded; terminal and bidi controls are visibly escaped. Stored message content is unchanged. Rendering does
+not prove a person read or understood the packet. Only the memory-held binding grants authority;
+persisted proposal messages and model-written copies cannot recreate it after reload.
 
 Authorizing tools refuse print/JSON/RPC operation instead of guessing consent. Tools are
 model-only and optional: they add no instruction to delegate unrelated questions. Worker
@@ -227,7 +265,9 @@ There is no persistent widget or Todo integration. The existing dashboard stays 
 and never opens automatically.
 
 Offline coverage includes registered main-tool discovery through both normal CLI entry forms,
-actual tool execution against scripted native workers, prompt return while workers stream,
+actual tool execution against scripted native workers, exact interactive chat approval through
+both CLI entry forms, first-run setup and dirty-work preservation without questionnaire UI,
+source/mode/context rejection, expired/replayed/cancelled proposals, prompt return while workers stream,
 caller/user cancellation, mode/model revocation, inert status/history, bounded/redacted results,
 coalesced terminal notices and public SDK idle/busy message delivery without another model call.
 This is not a new live-provider trial or human visual sign-off. The delivery/schema contract
@@ -295,7 +335,7 @@ and inspection are entirely local, without model or network calls.
 restores paused ownership, but native ESM modules may remain cached in the process; it is
 not a guarantee that edited source code is reloaded.
 
-Offline verification on Pi 1.0.1: **544 Swarm tests**, **68 Plan/Safety tests**,
+Offline verification on Pi 1.0.1: **572 Swarm tests**, **68 Plan/Safety tests**,
 **four PTY cleanup tests**, and all five CLI scenarios pass. Normal entry was verified
 through both file and package loading. The actual CLI exercises search-input isolation, conversation/back navigation and
 focused End/Home help paging. Existing safety exclusion and reload tests remain intact;
@@ -327,7 +367,7 @@ are scripted-provider checks, not a new live-model trial or human visual sign-of
 | `extensions/swarm/constrained-provider.mjs` | Isolated text Chat Completions request/response adapter with explicit credentials, request fencing and branded transport settlement. |
 | `extensions/swarm/https-transport.mjs` | Explicit host egress authorization, pinned public-IPv4 HTTPS client, separate loopback test policy and actual socket settlement. |
 | `extensions/swarm/extension.mjs`, `ui.mjs`, `decision.mjs` | Opt-in factory, bounded cancellable native decision packets, commands and lifecycle hooks. |
-| `extensions/swarm/main-tools.mjs`, `progress.mjs` | Main-agent chat tools, bounded semantic observations and event-driven non-waking chat updates; no widget. |
+| `extensions/swarm/main-tools.mjs`, `chat-approval.mjs`, `progress.mjs` | Main-agent chat tools, memory-only exact-reply proposal authority, bounded observations and non-waking chat updates; no widget. |
 | `extensions/swarm/launch-setup.mjs`, `launch-input.mjs` | Explicitly consented Git/runtime-exclusion prerequisites, optional objective input and editable objective-referencing defaults, before host binding. |
 | `extensions/swarm/dashboard.mjs`, `transcript.mjs` | Focused, refreshing, read-only dashboard and semantic transcript/search; actions return to existing host controls. |
 | `test/` | Foundation, host recovery, and offline real-SDK/factory integration tests. |
