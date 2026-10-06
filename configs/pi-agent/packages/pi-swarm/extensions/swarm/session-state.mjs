@@ -20,9 +20,8 @@ function selection(value, state) {
 	check(value !== null && typeof value === "object" && !Array.isArray(value), "INPUT", "Invalid session selection");
 	check(Object.keys(value).sort().join() === "modelId,provider,thinkingLevel", "INPUT", "Unexpected or missing selection fields");
 	const provider = state.hostApprovals?.at(-1)?.provider;
-	check(value.provider === "swarm-mock" || (["https-chat-completions", "pi-native"].includes(provider?.transport) &&
-		value.provider === provider.provider && value.modelId === provider.modelId &&
-		(provider.transport === "pi-native" || value.thinkingLevel === "off")),
+	check(value.provider === "swarm-mock" || (provider?.transport === "pi-native" &&
+		value.provider === provider.provider && value.modelId === provider.modelId),
 	"INPUT", "Non-mock selection requires a matching host provider agreement");
 	check(typeof value.modelId === "string" && value.modelId.trim().length > 0 && value.modelId.length <= 32768, "INPUT", "Invalid model identifier");
 	check(THINKING_LEVELS.has(value.thinkingLevel), "INPUT", "Invalid thinking level");

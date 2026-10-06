@@ -7,7 +7,6 @@ import {
 import { dirname, isAbsolute, resolve } from "node:path";
 import { assertProviderSelection } from "./provider-capability.mjs";
 import { bindNativeRuntime, isNativeRuntime } from "./native-provider.mjs";
-import { bindConstrainedRuntime, isConstrainedRuntime } from "./constrained-provider.mjs";
 import { closeSync, constants, fsyncSync, lstatSync, openSync, realpathSync } from "node:fs";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -196,19 +195,17 @@ function openManager(cwd, sessionDir, sessionFile) {
 	return SessionManager.open(path, sessionDir);
 }
 
-/** Non-discovering SDK factory: legacy mocks or branded per-request-fenced native/legacy adapters. */
+/** Non-discovering SDK factory: offline mocks or the branded per-request-fenced native adapter. */
 export async function createSdkSession({ cwd, sessionDir, sessionFile, modelRuntime, selection, systemPrompt, customTools, providerCapability, requestAdmission }) {
 	// Gate before directories, sessions, authentication lookup, or fallback selection.
-	const constrained = isConstrainedRuntime(modelRuntime, providerCapability);
 	const native = isNativeRuntime(modelRuntime, providerCapability);
 	if (providerCapability) assertProviderSelection(providerCapability, selection, modelRuntime);
-	invariant(native || constrained || selection?.provider === "swarm-mock", "This phase only supports the swarm-mock provider");
+	invariant(native || selection?.provider === "swarm-mock", "This phase only supports the swarm-mock provider");
 	invariant(typeof selection.modelId === "string" && THINKING_LEVELS.has(selection.thinkingLevel), "Explicit model and thinking selection required");
 	invariant(modelRuntime && typeof modelRuntime.getModel === "function", "Model runtime required");
 	const model = modelRuntime.getModel(selection.provider, selection.modelId);
-	invariant(native || constrained || (model?.provider === "swarm-mock" && model.api === "swarm-mock" && model.id === selection.modelId),
+	invariant(native || (model?.provider === "swarm-mock" && model.api === "swarm-mock" && model.id === selection.modelId),
 		"Selected swarm-mock model/API unavailable; fallback is disabled");
-	if (constrained) modelRuntime = bindConstrainedRuntime(modelRuntime, providerCapability, requestAdmission);
 	if (native) modelRuntime = bindNativeRuntime(modelRuntime, providerCapability, requestAdmission);
 	invariant(typeof systemPrompt === "string" && systemPrompt.trim().length > 0, "Explicit system prompt required");
 	invariant(Array.isArray(customTools), "Explicit custom tools required");

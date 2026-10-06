@@ -7,7 +7,6 @@ import { reduceEvent } from "../../extensions/swarm/state.mjs";
 const readLines = path => readFileSync(path, "utf8").trim().split("\n").map(JSON.parse);
 const journal = readLines(process.argv[2]).map(record => record.payload);
 const observations = readLines(process.argv[3]);
-const tls = process.argv[4] === "tls";
 const nativeProvider = process.argv[4] === "native";
 let state = null;
 let continuations = 0;
@@ -27,9 +26,9 @@ for (const event of journal) {
 		assert.equal(state.tasksCreated, previous.tasksCreated);
 	}
 }
-assert.equal(continuations, tls || nativeProvider ? 6 : 5);
+assert.equal(continuations, nativeProvider ? 6 : 5);
 assert.equal(state.status, "paused", "Shutdown restores a paused run, not completion");
-const boundary = tls ? "Disposable project and explicit local TLS fixture only" : "Disposable project only; no network";
+const boundary = "Disposable project only; no network";
 assert.equal(state.objective, `Production policy acceptance. Only approved benign commands execute. ${boundary}.`);
 assert.deepEqual(state.criteria, ["Satisfy the behavior and verification requirements in the approved objective."]);
 assert.deepEqual(state.scope, ["Work only on the requested task; honor the objective's file and dependency constraints."]);

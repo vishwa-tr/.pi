@@ -15,11 +15,11 @@ function fixture() {
 	return { view, options, signal, results, historyReads, tick: () => tick(), snapshot, setSnapshot: next => { snapshot = next; }, clears: () => clears, renders: () => renders };
 }
 
-test("dashboard labels HTTPS and unattached selection without claiming mock-only execution", () => {
+test("dashboard labels native and unattached selection without claiming mock-only execution", () => {
 	const f = fixture();
-	f.snapshot.run.hostApprovals = [{ provider: { transport: "https-chat-completions" } }];
+	f.snapshot.run.hostApprovals = [{ provider: { transport: "pi-native" } }];
 	f.tick();
-	assert.match(f.view.render(100).join("\n"), /HTTPS provider/);
+	assert.match(f.view.render(100).join("\n"), /Pi native provider/);
 	assert.doesNotMatch(f.view.render(100).join("\n"), /mock only/);
 	assert.match(f.view.body(), /cost: unknown/);
 	f.setSnapshot(undefined); f.tick();

@@ -11,10 +11,9 @@ export async function requestUserApproval(ctx, request) {
 	let specification = structuredClone(request.specification);
 	while (!signal.aborted) {
 		const choices = request.action === "launch" ? ["Cancel", "Edit agreement", "Approve"] : ["Cancel", "Approve"];
-		const network = request.provider?.transport === "https-chat-completions";
 		const native = request.provider?.transport === "pi-native";
-		const label = native ? "Pi native provider" : network ? "HTTPS provider" : "mock only";
-		const disclosure = native ? "Declared worker context sent through the configured Pi provider. Pi owns credentials, OAuth, environment and routing. Endpoint is informational, not pinned; no redaction or OS sandbox guarantee" : network ? "HTTPS; declared context sent to the exact endpoint" : "in-memory only; no network";
+		const label = native ? "Pi native provider" : "mock only";
+		const disclosure = native ? "Declared worker context sent through the configured Pi provider. Pi owns credentials, OAuth, environment and routing. Endpoint is informational, not pinned; no redaction or OS sandbox guarantee" : "in-memory only; no network";
 		const summary = `${request.action.toUpperCase()} (${label})\n${json(specification)}${request.provider ? `\nProvider agreement (${disclosure}):\n${json(request.provider)}` : ""}\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`;
 		const choice = await showDecision(ctx, `${request.action.toUpperCase()} (${label})`, summary, choices, signal);
 		if (signal.aborted || !choice || choice === "Cancel") return { approved: false };

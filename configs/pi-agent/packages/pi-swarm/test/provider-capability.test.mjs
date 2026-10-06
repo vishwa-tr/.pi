@@ -39,18 +39,6 @@ test("provider descriptors are strict, detached, immutable, and cannot be deseri
 	}
 });
 
-test("real descriptors fail closed before calling any supplied runtime method", () => {
-	let calls = 0;
-	const live = { ...descriptor(), provider: "example", api: "openai-responses", transport: "https-unsupported", endpoint: "https://example.invalid/v1" };
-	validateProviderDescriptor(live);
-	const cap = createProviderCapability(live);
-	assert.throws(() => assertProviderSelection(cap, { provider: "example", modelId: "scripted" }, { getModel() { calls++; } }), { code: "UNSUPPORTED_TRANSPORT" });
-	assert.equal(calls, 0);
-	for (const endpoint of ["http://example.invalid/", "https://user:pass@example.invalid/", "https://example.invalid/?token=x", "https://example.invalid/#x"]) {
-		assert.throws(() => createProviderCapability({ ...live, endpoint }), { code: "PROVIDER" });
-	}
-});
-
 test("model, API, endpoint, headers, routing and sampling substitutions are denied", () => {
 	const cap = createProviderCapability(descriptor());
 	const selection = { provider: "swarm-mock", modelId: "scripted" };
@@ -114,11 +102,11 @@ test("unsupported live host launch creates no storage, requests no approval, and
 	const root = repository(t);
 	const mode = bus();
 	let reads = 0; let approvals = 0;
-	const cap = createProviderCapability({ ...descriptor(), provider: "example", api: "openai-responses", transport: "https-unsupported", endpoint: "https://example.invalid/v1" });
+	const cap = createProviderCapability({ ...descriptor(), provider: "example", api: "openai-responses", transport: "pi-native", endpoint: "https://example.invalid/v1" });
 	const host = new SwarmHost({ events: mode.events, sessionId: "owner1", providerCapability: cap,
 		mainModel: { provider: "example", id: "scripted" }, modelRuntime: { getModel() { reads++; throw new Error("forbidden"); } },
 		requestApproval() { approvals++; return approve(); } });
-	await assert.rejects(host.launch({ workspace: root, runId: "run1", specification: spec }), { code: "UNSUPPORTED_TRANSPORT" });
+	await assert.rejects(host.launch({ workspace: root, runId: "run1", specification: spec }), { code: "PROVIDER" });
 	assert.equal(reads, 0); assert.equal(approvals, 0);
 	assert.equal(existsSync(join(root, ".swarms")), false);
 	await host.close();

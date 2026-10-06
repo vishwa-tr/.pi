@@ -4,7 +4,6 @@ Uses the existing bounded child cleanup guard; no installs, keys, or global acti
 """
 import json
 import os
-import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -13,7 +12,7 @@ import time
 from run import ANSI, HERE, DisposableFixture, Terminal
 
 
-def main(tls=False, native=False):
+def main(native=False):
     pi = shutil.which(os.environ.get("PI_BIN", "pi"))
     assert pi and shutil.which("node") and shutil.which("git"), "Installed pi, node and git required"
     with DisposableFixture() as fixture:
@@ -26,12 +25,10 @@ def main(tls=False, native=False):
                "LANG": "C.UTF-8", "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1",
                "PI_TELEMETRY": "0", "PI_SKIP_VERSION_CHECK": "1", "GIT_CONFIG_NOSYSTEM": "1",
                "GIT_CONFIG_GLOBAL": os.devnull, "SWARM_TERMINAL_FIXTURE": str(event_file)}
-        if tls:
-            env["SWARM_TERMINAL_TLS"] = "1"
         if native:
             env["SWARM_TERMINAL_NATIVE"] = "1"
-        label = "Pi native provider" if native else "HTTPS provider" if tls else "mock only"
-        scope = "Disposable project and explicit local TLS fixture only" if tls else "Disposable project only; no network"
+        label = "Pi native provider" if native else "mock only"
+        scope = "Disposable project only; no network"
         if os.environ.get("PI_SDK_DIR"):
             env["PI_SDK_DIR"] = os.environ["PI_SDK_DIR"]
         settings = {"quietStartup": True, "enableInstallTelemetry": False,
@@ -94,16 +91,6 @@ def main(tls=False, native=False):
                               "worker-history", "peer-messages", "compaction-summaries"):
                     assert value in plain, f"Missing native agreement disclosure: {value}"
                 assert count("native-request") == 0, "No native request before agreement"
-            if tls:
-                wait(lambda: "compaction-summaries" in ANSI.sub("", terminal.output), "complete native provider disclosure")
-                assert "declared context sent to the exact endpoint" in ANSI.sub("", terminal.output)
-                # Observe the actual native summary, not fixture metadata or a fake UI.
-                plain = terminal.last_packet
-                assert re.search(r"https://localhost:\d+/v1/chat/completions", plain), "Complete exact endpoint displayed"
-                for value in ("terminal-tls", "terminal-scripted", "/v1/chat/completions", "outboundData",
-                              "workspace-content", "tool-definitions-and-results", "compaction-summaries"):
-                    assert value in plain, f"Missing native provider disclosure: {value}\n{plain[-10000:]}"
-                assert count("tls-request") == 0, "No request before human agreement"
 
         def approve(action):
             terminal.expect(f"{action} ({label})")
@@ -134,11 +121,6 @@ def main(tls=False, native=False):
             if native:
                 assert count("native-request") == before, "No native follow-up after revocation"
                 assert count("native-settled") == before, "Every native stream actually drained"
-            if tls:
-                assert count("tls-request") == before, "No additional TLS follow-up after revocation"
-                assert count("tls-response-close") == before, "Every received response really closed"
-                assert count("tls-server-socket-close") == before, "Every accepted TLS socket really closed"
-                assert count("tls-fixture-error") == 0
 
         try:
             terminal.expect("Production policy fixture ready")
@@ -281,19 +263,6 @@ def main(tls=False, native=False):
             # Shutdown with a real worker awaiting native confirmation cancels it.
             resume("shutdown")
             terminal.expect("phase8-shutdown")
-            if tls:
-                # Also fence the SDK follow-up after cancelling a production safety gate,
-                # then exercise native shutdown with an actually open HTTPS response.
-                terminal.send("\x1b[Z")
-                mode("discuss")
-                time.sleep(0.3)
-                status("paused")
-                policy_command("/discuss off")
-                mode("off")
-                stable_workers()
-                resume()
-                wait_count("tls-request", 17)
-                assert count("tls-response-close") == 16
             # Native CLI SIGTERM path owns shutdown, including actual socket settlement.
             terminal.process.terminate()
             wait(lambda: terminal.process.poll() is not None, "graceful CLI shutdown")
@@ -312,14 +281,12 @@ def main(tls=False, native=False):
             assert [e["reason"] for e in observations if e["type"] == "shutdown"] == ["reload", "quit"]
             journal_path, = (project / ".swarms").glob("*/events.jsonl")
             subprocess.run([shutil.which("node"), str(HERE / "assert-production.mjs"), str(journal_path), str(event_file),
-                            *(["native"] if native else ["tls"] if tls else [])], env=env, check=True)
+                            *(["native"] if native else [])], env=env, check=True)
             if native:
                 subprocess.run([shutil.which("node"), str(HERE / "assert-native.mjs"), str(journal_path), str(event_file)], env=env, check=True)
                 journal = [json.loads(line)["payload"] for line in journal_path.read_text().splitlines()]
                 operation = next(event["payload"]["id"] for event in journal if event["type"] == "workspace.start" and "uncertain" in event["payload"].get("command", ""))
                 assert operation in recovery_packet and operation in evidence_packet, "Exact uncertain intent shown in both decisions"
-            if tls:
-                subprocess.run([shutil.which("node"), str(HERE / "assert-tls.mjs"), str(journal_path), str(event_file)], env=env, check=True)
             audit = [json.loads(line) for line in (agent / "safety-audit.jsonl").read_text().splitlines()]
             assert any(e["decision"] == "approved" for e in audit)
             assert any(e["decision"] == "denied" for e in audit)

@@ -1,7 +1,6 @@
 // Test-only composition of the actual production factories. No policy substitutes.
 import { appendFileSync } from "node:fs";
 import { createMockRuntime } from "../sdk-env.mjs";
-import { createTlsWorker } from "./tls-worker.mjs";
 import { createNativeWorker } from "./native-worker.mjs";
 import { runShell } from "../../extensions/swarm/shell.mjs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -54,7 +53,6 @@ export default async function (pi) {
 	pi.registerProvider(main.modelRuntime.getProvider("swarm-mock"));
 	let steps = [];
 	let release;
-	const tls = process.env.SWARM_TERMINAL_TLS === "1";
 	const native = process.env.SWARM_TERMINAL_NATIVE === "1";
 	const nextStep = async ({ options }) => {
 		record({ type: "worker-start" });
@@ -69,7 +67,7 @@ export default async function (pi) {
 		}
 		return step ?? { waitForAbort: true };
 	};
-	const worker = native ? await createNativeWorker(record, nextStep) : tls ? await createTlsWorker(record, nextStep) : await createMockRuntime(nextStep);
+	const worker = native ? await createNativeWorker(record, nextStep) : await createMockRuntime(nextStep);
 	const extension = native ? await createNativeSwarmExtension({ modelRegistry: worker.modelRegistry, mainModel: worker.mainModel,
 		runner: async request => {
 			if (request.command === `node -e "console.log('phase8-uncertain')"`) {
@@ -78,8 +76,7 @@ export default async function (pi) {
 			}
 			return runShell(request);
 		},
-	}) : createSwarmExtension({ modelRuntime: worker.modelRuntime, mainModel: worker.model,
-		...(tls ? { providerCapability: worker.providerCapability } : {}) });
+	}) : createSwarmExtension({ modelRuntime: worker.modelRuntime, mainModel: worker.model });
 	extension(observeFactory("swarm"));
 	pi.registerCommand("fixture-script", { handler: async (args, ctx) => {
 		const [id, hold] = args.trim().split(/\s+/);
@@ -118,7 +115,7 @@ export default async function (pi) {
 	pi.on("session_shutdown", async event => {
 		for (const probe of probes) probe.abort();
 		unsubscribeMode();
-		if ((tls || native) && event.reason !== "reload") await worker.close();
+		if (native && event.reason !== "reload") await worker.close();
 		record({ type: "shutdown", reason: event.reason, activeDialogs });
 	});
 }

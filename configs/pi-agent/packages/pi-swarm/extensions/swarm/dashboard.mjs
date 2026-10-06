@@ -208,7 +208,7 @@ export class SwarmDashboard {
 		const status = this.snapshot?.run?.status ?? "unattached";
 		const continuation = status === "paused" ? "r resume | R restart" : ["stopped", "completed", "failed"].includes(status) ? "R restart" : "";
 		const transport = this.snapshot?.run?.hostApprovals?.at(-1)?.provider?.transport;
-		const providerLabel = !this.snapshot?.run ? "not selected" : transport === "pi-native" ? "Pi native provider" : transport === "https-chat-completions" ? "HTTPS provider" : "mock only";
+		const providerLabel = !this.snapshot?.run ? "not selected" : transport === "pi-native" ? "Pi native provider" : "mock only";
 		const header = [
 			`SWARM live / ${providerLabel} | ${status}`,
 			this.searching ? "SEARCH · Enter find | Esc cancel" : this.help ? "HELP · j/k scroll | ? back" : `p PAUSE | s STOP | q/Esc ${this.section === 5 ? "back" : "close"}`,

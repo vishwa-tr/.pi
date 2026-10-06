@@ -37,7 +37,6 @@ assert.equal(events("native-binding").length, 2, "Native reload constructs a fre
 assert.deepEqual(events("native-network-guard"), [{ type: "native-network-guard", attempts: 0 }]);
 assert.ok(requests.every(request => request.authVerified && request.headersVerified && request.provider === "terminal-native" &&
 	request.model === "native-scripted" && request.api === "openai-responses"));
-assert.equal(events("tls-request").length, 0);
 const toolResults = requests.flatMap(request => request.messages.filter(message => message.role === "toolResult"));
 assert.ok(toolResults.some(message => message.toolName === "bash" && !message.isError && JSON.stringify(message.content).includes("phase8-approved")), "Real approved stdout returned to native provider");
 assert.ok(toolResults.some(message => message.toolName === "bash" && message.isError), "Real denied tool result returned to native provider");

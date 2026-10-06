@@ -125,8 +125,6 @@ test("native capability cannot be copied, minted from descriptors or substituted
 	assert.throws(() => assertProviderSelection(f.native.providerCapability, selection, { ...f.native.modelRuntime }), { code: "PROVIDER" });
 	assert.equal((await f.native.modelRuntime.completeSimple(f.native.mainModel, context)).stopReason, "error");
 	await assert.rejects(createNativeRuntime({ modelRuntime: {}, mainModel: f.native.mainModel }), { code: "PROVIDER" });
-	const legacy = createProviderCapability({ ...f.native.providerCapability.descriptor, transport: "https-unsupported" });
-	assert.throws(() => assertProviderSelection(legacy, selection, f.native.modelRuntime), { code: "UNSUPPORTED_TRANSPORT" });
 	assert.equal(f.calls.length, 0);
 });
 
