@@ -42,9 +42,18 @@ export class WorkspaceFiles {
 		const normalized = this.path(path);
 		return hash(JSON.stringify(capture(join(this.#root, normalized))));
 	}
-	snapshot({ includeGit = true } = {}) {
+	snapshot({ includeGit = true, paths } = {}) {
 		this.#checkRoot();
-		const snapshot = () => hash(JSON.stringify([capture(this.#root, true), includeGit ? gitState(this.#root) : null]));
+		if (paths !== undefined) {
+			check(Array.isArray(paths), "INPUT", "Invalid snapshot file scope");
+			for (const path of paths) {
+				const parts = path.replaceAll("\\", "/").split("/");
+				check(path && !isAbsolute(path) && !parts.some(part => ["..", ".git", ""].includes(part)), "PATH", "Invalid snapshot path");
+			}
+		}
+		const contents = () => paths === undefined ? capture(this.#root, true)
+			: paths.map(path => [path, captureScoped(this.#root, path)]);
+		const snapshot = () => hash(JSON.stringify([contents(), includeGit ? gitState(this.#root) : null]));
 		const fingerprint = snapshot();
 		check(snapshot() === fingerprint, "STALE", "Workspace changed during snapshot");
 		this.#checkRoot();
@@ -82,4 +91,19 @@ function gitState(root) {
 	const common = statOrMissing(commonFile) ? resolve(git, readFileSync(commonFile, "utf8").trim()) : git;
 	return [pointer, capture(join(git, "HEAD")), capture(join(git, "index")), capture(join(git, "refs")),
 		capture(join(common, "packed-refs")), capture(join(common, "refs"))];
+}
+
+function captureScoped(root, path) {
+	const parts = path.replaceAll("\\", "/").split("/");
+	let current = root;
+	for (let i = 0; i < parts.length; i++) {
+		current = join(current, parts[i]);
+		const stat = statOrMissing(current);
+		if (!stat) return null;
+		check(i === parts.length - 1 || stat.isDirectory() && !stat.isSymbolicLink(), "PATH", "Snapshot directory aliases are unsupported");
+		// A Git file list can include a submodule directory. Do not recursively
+		// hash its ignored tree while claiming a tracked-file-only scope.
+		check(i !== parts.length - 1 || !stat.isDirectory(), "PATH", "Nested repository directories require a separate workspace");
+	}
+	return capture(current);
 }

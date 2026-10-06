@@ -79,8 +79,9 @@ def main(native=False):
             terminal.expect_status(expected, label)
 
         def start():
+            terminal.cursor = len(terminal.output)
             terminal.line(f"/fixture-swarm start Production policy acceptance. Only approved benign commands execute. {scope}.")
-            terminal.expect(f"LAUNCH ({label})")
+            terminal.expect(f"LAUNCH ({label}): review the full packet above, then decide")
             if native:
                 terminal.read_packet(f"LAUNCH ({label})")
                 plain = terminal.last_packet
@@ -166,7 +167,7 @@ def main(native=False):
             mode("off", "quick", True)
             # Must deny continuation while the old restricted turn is still enforced.
             terminal.line("/fixture-swarm resume")
-            terminal.expect("Swarm request refused or failed")
+            terminal.expect("MODE_DENIED")
             mode("off")
             stable_workers()
             status("paused")
@@ -176,7 +177,7 @@ def main(native=False):
             mode("plan")
             for action in ("resume", "restart"):
                 terminal.line(f"/fixture-swarm {action}")
-                terminal.expect("Swarm request refused or failed")
+                terminal.expect("MODE_DENIED")
             policy_command("/plan off")
             mode("off")
             stable_workers()

@@ -62,6 +62,27 @@ test("launch waits for explicit human approval before creating storage or sessio
 	await f.host.close();
 });
 
+for (const action of ["pause", "close"]) {
+	test(`${action} cancels pre-dialog inspection without authority and a new host can request fresh approval`, async t => {
+		let prompts = 0;
+		const f = await fixture(t, { approval: request => { prompts++; return approved(request); } });
+		const rejected = assert.rejects(f.launch(), code("CANCELLED"));
+		await new Promise(resolve => setTimeout(resolve, 0));
+		await f.host[action]();
+		await rejected;
+		assert.equal(prompts, 0);
+		assert.equal(f.host.snapshot().run, null);
+		assert.equal(f.mock.calls.length, 0);
+		assert.equal(existsSync(prepareLayout(f.root, "run1").stateRoot), false);
+		await f.host.close();
+		const fresh = new SwarmHost({ events: f.events, sessionId: "owner1", requestApproval: request => { prompts++; return approved(request); }, modelRuntime: f.mock.modelRuntime, mainModel: f.mock.model, tickIntervalMs: 0 });
+		await fresh.launch({ workspace: f.root, runId: "run1", specification });
+		assert.equal(prompts, 1);
+		assert.equal(fresh.snapshot().run.hostApprovals.length, 1);
+		await fresh.close();
+	});
+}
+
 test("dirty checkout requires an explicit preservation decision", async t => {
 	const f = await fixture(t, { approval: () => ({ approved: true }) });
 	writeFileSync(join(f.root, "user.txt"), "user work\n");
@@ -110,6 +131,25 @@ test("external edits during approval require a fresh decision and are never roll
 	decision.resolve(approved(request)); await rejected;
 	assert.equal(readFileSync(join(f.root, "new-user-work"), "utf8"), "preserve me");
 	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
+	await f.host.close();
+});
+
+test("stop during approved workspace revalidation cannot grant authority and requires fresh approval", async t => {
+	let prompts = 0;
+	let paused;
+	let f;
+	f = await fixture(t, { approval: request => {
+		prompts++;
+		if (prompts === 1) paused = new Promise(resolve => setTimeout(() => resolve(f.host.pause()), 0));
+		return approved(request);
+	} });
+	await assert.rejects(f.launch(), code("CANCELLED"));
+	await paused;
+	assert.equal(f.host.snapshot().run, null);
+	assert.equal(f.mock.calls.length, 0);
+	await f.launch();
+	assert.equal(prompts, 2);
+	assert.equal(f.host.snapshot().run.hostApprovals.length, 1);
 	await f.host.close();
 });
 

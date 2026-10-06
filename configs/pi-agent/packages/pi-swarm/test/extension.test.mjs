@@ -54,7 +54,7 @@ async function fixture(t, { script = () => ({ text: "Mock planning complete" }),
  const command = args => mainAgentAction(tools, ctx, args, output => prompts.push({ kind: "packet", args: [output.content[0].text] }));
 	const event = (name, data = {}) => handlers.get(name)(data, ctx);
 	const status = async () => { await command("status"); return JSON.parse(notices.at(-1).text); };
-	const packets = () => prompts.filter(p => p.kind === "packet").map(p => p.args[0]);
+	const packets = () => prompts.filter(p => p.kind === "packet" && p.args[0].startsWith("Swarm approval packet:")).map(p => p.args[0]);
 	return { slashCommand, commands, tools, messages, root, mock, entries, notices, prompts, responses, ctx, command, event, status, events, mode, packets };
 }
 
@@ -155,7 +155,7 @@ test("invalid agreement value returns a sanitized main-tool error", async t => {
 	const f = await fixture(t);
 	f.responses.input.push('[]');
 	f.responses.select.push("Edit agreement", "objective", "Approve");
-	await assert.rejects(f.command("start goal"), /Swarm request refused/);
+	await assert.rejects(f.command("start goal"), /Swarm launch failed \(INPUT\)/);
 	assert.equal(f.mock.calls.length, 0);
 	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
 	await f.event("session_shutdown");

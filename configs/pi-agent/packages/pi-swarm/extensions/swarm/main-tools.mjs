@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
 import { displayText } from "./dashboard.mjs";
 import { transcriptText } from "./transcript.mjs";
+import { SwarmError, failureDiagnostic } from "./errors.mjs";
 
 const object = properties => Type.Object(properties, { additionalProperties: false });
 const bounded = (text, size = 512) => displayText(String(text ?? "")).slice(0, size);
@@ -88,11 +89,12 @@ export function registerMainTools(pi, { control, chatControl, inspect, history }
 		...(["swarm_start", "swarm_control"].includes(definition.name) ? { renderResult } : {}),
 		async execute(_id, args, signal, update, ctx) {
 			try {
-				if (signal?.aborted) return { ...result({ error: "cancelled" }), isError: true };
+				if (signal?.aborted) throw new SwarmError("CANCELLED", "Request cancelled");
 				return result(await invoke(args, ctx, signal, update));
-			} catch {
-				// Provider/SDK and filesystem exception strings are not a safe model-facing contract.
-				return { ...result({ error: "Swarm request refused or failed. Inspect status; no automatic retry, approval or rollback." }), isError: true };
+			} catch (error) {
+				const fallback = definition.name === "swarm_start" ? "setup" : definition.name === "swarm_history" ? "history" : "control";
+				const diagnostic = failureDiagnostic(error, fallback);
+				return { ...result({ error: `Swarm ${diagnostic.phase} failed (${diagnostic.code}). ${diagnostic.message} No automatic retry, approval or rollback.`, diagnostic }), isError: true };
 			}
 		},
 	});

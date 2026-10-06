@@ -61,7 +61,7 @@ test("native session identity persists before first prompt and after idle/reopen
 	const first = await f.open();
 	const bound = { sessionId: first.sessionId, sessionFile: first.sessionFile };
 	assert.equal(existsSync(first.sessionFile), false, "Pi writes the session file at the first prompt");
-	assert.equal(statSync(f.options.sessionDir).mode & 0o777, 0o700);
+	if (process.platform !== "win32") assert.equal(statSync(f.options.sessionDir).mode & 0o777, 0o700);
 	const empty = await f.open(bound);
 	assert.equal(empty.sessionId, first.sessionId);
 	empty.session.dispose();
@@ -327,7 +327,7 @@ test("session paths reject symlinks, traversal, outside files and a public direc
 	await assert.rejects(f.open({ ...bound, sessionFile: join(f.root, "outside.jsonl") }), /inside/);
 	await assert.rejects(f.open({ ...bound, sessionFile: `${f.options.sessionDir}/../sessions/${first.sessionFile.split("/").at(-1)}` }), /inside|canonical/);
 	chmodSync(f.options.sessionDir, 0o755);
-	await assert.rejects(f.open(bound), /private/);
+	if (process.platform !== "win32") await assert.rejects(f.open(bound), /private/);
 });
 
 test('retry backoff abort settles promptly without a later request', async t => {

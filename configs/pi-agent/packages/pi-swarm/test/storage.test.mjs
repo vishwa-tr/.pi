@@ -179,7 +179,7 @@ test("journal detects concurrent append and unsafe permission changes", t => {
 	assert.throws(() => journal.append({ event: 2 }), /outside its writer/);
 	journal.close();
 	chmodSync(layout.journalPath, 0o644);
-	assert.throws(() => openJournal(layout.journalPath, lease.assertOwned), /private/);
+	if (process.platform !== "win32") assert.throws(() => openJournal(layout.journalPath, lease.assertOwned), /private/);
 	lease.release();
 });
 

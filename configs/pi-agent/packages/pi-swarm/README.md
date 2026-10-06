@@ -31,14 +31,36 @@ continuation reconciliation receive separate confirmation. Commands and approval
 fenced when the session, project, model, thinking level, mode or ownership changes.
 
 Launch, resume, restart and recovery require an interactive TUI. Print, JSON and RPC
-contexts cannot supply approval. The default agreement deadline is 120 seconds; worker
+contexts cannot supply approval. Checkout inspection and each approval revalidation run without blocking the host event
+loop: Git is asynchronous and content fingerprints run in a cancellable worker.
+Git checkouts fingerprint tracked and non-ignored files plus Git control state, not entire
+ignored dependency/build/worktree trees. The approval packet discloses this scope. Tracked
+files remain covered even if an ignore rule matches them. Without Git, inspection retains
+a full-directory fallback off-thread. Each inspection has a separate 120-second deadline and a 64 MiB Git output limit.
+File lists are revalidated after hashing. Snapshot paths cannot follow replaced directory
+symlinks; Git submodule directories require a separate workspace.
+Workspace attachment and receipt/candidate checks use the same nonblocking inspection.
+Explicit edit/write targets are additionally fingerprinted even when ignored; fresh-read,
+claim and immediate pre-edit checks remain mandatory. Explicit target observations survive
+controller reload through the recorded operation receipts. Ignored files changed indirectly by
+shell commands are not globally detected: receipts are observations of this scope, not proof
+that ignored content was unchanged. Shell authorization is still required. Stop, shutdown and
+reload cancel pending admission inspection without granting authority; scoped changes still
+require fresh approval. Post-execution settlement observations remain bounded and are not
+aborted merely because execution was cancelled, so receipts can record its effects. The default agreement deadline is 120 seconds; worker
 confirmation defaults to 30 seconds. A refusal or timeout does not start an automatic retry.
+
+Failed main-agent tool calls return a constant, safe diagnostic with the failing phase
+and an error code. Inspection timeouts and output limits are distinguished from user
+cancellation; approval, attachment and storage errors can be identified without disclosing
+filesystem paths, credentials, provider responses or raw exception text. Failures never
+approve work or start an automatic retry.
 
 ## Requirements and optional integrations
 
 Use managed **Pi 1.0.4** and **Node 22.19+**. Linux is the verified runtime and PTY test
 platform. Storage avoids POSIX-only ownership checks and directory fsync on Windows;
-Windows terminal/process behavior has not been verified by this test run. Bash must be
+Windows terminal/process behavior has not been verified by this test run. Native Windows end-to-end behavior remains unverified. Bash must be
 available for the native Bash tool. Git is optional: Swarm does not initialize repositories
 or edit ignore files. Existing project files and Git changes are disclosed and fingerprinted.
 
