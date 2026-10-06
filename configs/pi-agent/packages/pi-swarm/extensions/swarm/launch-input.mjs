@@ -1,17 +1,13 @@
-const validText = value => typeof value === "string" && value.trim().length > 0 && value.length <= 32768;
+import { requireCondition as check } from "./errors.mjs";
 
-/** Seed editable agreement fields without model work or redundant launch questions. */
-export async function requestLaunchSpecification(ctx, objective, signal, current) {
-	let value = objective.trim() ? objective : undefined;
-	while (current()) {
-		if (value === undefined) value = await ctx.ui.input("Swarm objective", "Describe the goal", { signal });
-		if (!current() || value === undefined) return;
-		if (validText(value)) return {
-			objective: value,
-			criteria: ["Satisfy the behavior and verification requirements in the approved objective."],
-			scope: ["Work only on the requested task; honor the objective's file and dependency constraints."],
-		};
-		ctx.ui.notify("Enter a non-empty objective (maximum 32768 characters). Escape cancels.", "warning");
-		value = undefined;
-	}
+/** The main agent supplies the complete objective; the dialog only edits agreement fields. */
+export async function requestLaunchSpecification(_ctx, objective, _signal, current) {
+	if (!current()) return;
+	check(typeof objective === "string" && objective.trim().length > 0 && objective.length <= 32768,
+		"INPUT", "The main agent must supply a complete objective");
+	return {
+		objective,
+		criteria: ["Satisfy the behavior and verification requirements in the approved objective."],
+		scope: ["Work only on the requested task; honor the objective's file and dependency constraints."]
+	};
 }

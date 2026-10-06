@@ -1,10 +1,10 @@
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, fsyncSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { SwarmController } from "../extensions/swarm/core.mjs";
-import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import { acquireLease } from "../extensions/swarm/store/lease.mjs";
 import { privateDirectory, writeAll } from "../extensions/swarm/store/files.mjs";
 import { openJournal } from "../extensions/swarm/store/journal.mjs";
@@ -73,7 +73,7 @@ test("durable model-free workflow releases ownership only after settlement", asy
 	await c.system("run.verify");
 	await c.system("run.complete", { evidence: "mock-final-receipt" });
 	assert.equal(c.snapshot().status, "completed");
-	assert.equal(existsSync(join(root, ".swarms", "reservation.json")), false);
+	assert.equal(existsSync(join(prepareLayout(root, "run1").stateRoot, "reservation.json")), false);
 	const next = await SwarmController.open({ workspace: root, runId: "run2", ownerSessionId: "session2", create: specification });
 	await next.close(); await c.close();
 });
@@ -90,7 +90,7 @@ test("paused history can be reopened only by the same owner and remains reserved
 	const copy = reopened.snapshot(); copy.objective = "changed";
 	assert.notEqual(reopened.snapshot().objective, "changed");
 	await reopened.owner("run.stop"); await reopened.system("run.settle");
-	assert.equal(existsSync(join(root, ".swarms", "reservation.json")), false);
+	assert.equal(existsSync(join(prepareLayout(root, "run1").stateRoot, "reservation.json")), false);
 	await reopened.close();
 });
 
@@ -174,7 +174,7 @@ test("failed fsync publishes no state and fences all further writes", async t =>
 	assert.deepEqual(c.snapshot(), before);
 	await assert.rejects(c.owner("run.resume", { reconciled: true }), code("FAULT"));
 	await assert.rejects(c.close(), code("FAULT"));
-	assert.equal(existsSync(join(root, ".swarms", "controller.lock")), true);
+	assert.equal(existsSync(join(prepareLayout(root, "run1").stateRoot, "controller.lock")), true);
 });
 
 test("controller refuses validly checksummed but invalid state transitions", async t => {

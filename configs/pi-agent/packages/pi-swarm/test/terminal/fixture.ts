@@ -1,3 +1,4 @@
+import { driveMainAgentTools } from "./main-agent-fixture.ts";
 // Test-only CLI entry: never register this fixture in personal settings.
 import { appendFileSync } from "node:fs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -48,6 +49,6 @@ export default async function (pi) {
 	});
 	createSwarmExtension({ modelRuntime: mock.modelRuntime, mainModel: mock.model,
 		runner: async () => { record({ type: "uncertain-runner" }); return { settled: false, exitCode: null }; },
-	})(instrumented);
+	})(driveMainAgentTools(instrumented));
 	pi.on("session_start", (_event, ctx) => ctx.ui.notify("Swarm terminal fixture ready", "info"));
 }

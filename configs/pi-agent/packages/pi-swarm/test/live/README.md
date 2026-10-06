@@ -8,7 +8,7 @@ This is not a sandbox or a spending cap. The reviewer must remain a non-contribu
 
 ## Usage
 
-Requires installed Pi 1.0 SDK, Node 22.19+, Git and POSIX. From the package directory:
+Requires managed Pi 1.0.4 SDK, Node 22.19+, Git and POSIX. From the package directory:
 
 ```sh
 node test/live/trial.mjs # dry run, no SDK/configuration/authentication reads
@@ -27,7 +27,7 @@ assume `off` is supported. Unsupported thinking fails before fixture creation or
 Do not use private source, inherited project instructions, or unrelated provider configuration.
 
 The harness prints a new neutral `/tmp/swarm-trial-*` location. It retains its Git project
-and private runtime evidence without a commit or automatic cleanup. Limits are fixed:
+and private runtime evidence under its own `agent/sessions/` tree, without a commit or automatic cleanup. Limits are fixed:
 two identities, two active workers, five tasks, one failed/rejected attempt per task,
 five minutes active wall-clock. No automatic continuation or allowance reset occurs.
 
@@ -66,4 +66,4 @@ The first approved synthetic trial durably completed with independent review and
 final check, but its original reporting cleanup requested stop after automatic controller
 closure and failed before writing `result.json`. That result was recovered read-only from
 the retained journal/history; the repair was tested offline, not with a second live run.
-See the package README for the bounded outcome and remaining limitations.
+This historical result does not validate the current migration; use the package README for current offline coverage and limitations.

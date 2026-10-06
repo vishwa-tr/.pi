@@ -1,12 +1,13 @@
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { repository } from "./helpers.mjs";
+import { createMockRuntime } from "./sdk-env.mjs";
 import { SwarmHost } from "../extensions/swarm/host.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
-import { createMockRuntime } from "./sdk-env.mjs";
-import { repository } from "./helpers.mjs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const code = expected => error => error.code === expected;
 const approved = request => ({ approved: true, existingChanges: "preserve", reconciled: request.requiresReconciliation });
@@ -27,7 +28,7 @@ async function fixture(t, options = {}) {
 	return { root, ...bus, mock, host, launch };
 }
 
-test("read-only host history does not create sessions or dispatch and validates persisted identity", async t => {
+test("read-only host history does not create sessions, files or dispatch", async t => {
 	const f = await fixture(t, { script: () => ({ text: "History evidence" }) });
 	await f.launch();
 	await f.host.recruit({ id: "worker", specialization: "Review", brief: "Inspect", reason: "Independent inspection" });
@@ -38,11 +39,11 @@ test("read-only host history does not create sessions or dispatch and validates 
 	assert.ok(Array.isArray(entries));
 	assert.throws(() => f.host.history("missing"), { code: "NOT_FOUND" });
 	const binding = before.run.sessions.workers[0];
-	const path = join(f.root, ".swarms", "run1", "sessions", binding.sessionFile);
-	const original = readFileSync(path, "utf8");
-	writeFileSync(path, original.replace(binding.sessionId, "wrong-identity"));
-	assert.throws(() => f.host.history("worker"));
-	writeFileSync(path, original);
+	const path = join(prepareLayout(f.root, "run1").stateRoot, "run1", "sessions", binding.sessionFile);
+	// The open, unprompted session has no persisted history, and reading it writes nothing.
+	// Persisted identity checks for unopened sessions are covered in sdk-driver.test.mjs.
+	assert.deepEqual(entries, []);
+	assert.equal(existsSync(path), false);
 	await f.host.close();
 });
 
@@ -53,7 +54,7 @@ test("launch waits for explicit human approval before creating storage or sessio
 	assert.equal(request.action, "launch");
 	assert.equal(request.requiresExistingWorkDecision, true);
 	assert.equal(f.mock.calls.length, 0);
-	assert.equal(existsSync(join(f.root, ".swarms")), false);
+	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
 	decision.resolve(approved(request)); await launch;
 	assert.equal(f.host.snapshot().run.status, "running");
 	assert.equal(f.host.snapshot().run.hostApprovals[0].existingChanges, "preserve");
@@ -66,7 +67,7 @@ test("dirty checkout requires an explicit preservation decision", async t => {
 	writeFileSync(join(f.root, "user.txt"), "user work\n");
 	await assert.rejects(f.launch(), code("DIRTY"));
 	assert.equal(readFileSync(join(f.root, "user.txt"), "utf8"), "user work\n");
-	assert.equal(existsSync(join(f.root, ".swarms")), false);
+	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
 	await f.host.close();
 });
 
@@ -84,7 +85,7 @@ for (const selectedMode of ["plan", "discuss", "quick"]) {
 		f.change({ selectedMode, enforcedMode: "off", pendingChange: true });
 		await assert.rejects(f.launch(), code("MODE_DENIED"));
 		assert.equal(prompts, 0);
-		assert.equal(existsSync(join(f.root, ".swarms")), false);
+		assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
 		await f.host.close();
 	});
 }
@@ -96,7 +97,7 @@ test("mode ABA and late approval cannot revive cancelled launch", async t => {
 	f.change({ selectedMode: "plan", enforcedMode: "plan" });
 	f.change({ selectedMode: "off", enforcedMode: "off" });
 	decision.resolve({ approved: true, existingChanges: "preserve" }); await rejected;
-	assert.equal(existsSync(join(f.root, ".swarms")), false);
+	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
 	assert.equal(f.mock.calls.length, 0);
 	await f.host.close();
 });
@@ -108,7 +109,7 @@ test("external edits during approval require a fresh decision and are never roll
 	writeFileSync(join(f.root, "new-user-work"), "preserve me");
 	decision.resolve(approved(request)); await rejected;
 	assert.equal(readFileSync(join(f.root, "new-user-work"), "utf8"), "preserve me");
-	assert.equal(existsSync(join(f.root, ".swarms")), false);
+	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
 	await f.host.close();
 });
 

@@ -44,7 +44,7 @@ async function candidate(f) {
 
 test("actual guarded edits, verification command, independent review and final completion", async t => {
 	const f = await fixture(t);
-	f.worker.claim(["source.txt"]); f.worker.read("source.txt");
+	f.worker.claim(["source.txt"]); await f.worker.read("source.txt");
 	await f.worker.edit("source.txt", [{ oldText: "original", newText: "implemented" }]);
 	const reviewer = await candidate(f);
 	await reviewer.review(true, "Checked requirements and test relevance");
@@ -60,11 +60,11 @@ test("actual guarded edits, verification command, independent review and final c
 
 test("claims and fresh post-acquisition reads are required; stale edits preserve user work", async t => {
 	const f = await fixture(t);
-	f.worker.read("source.txt");
+	await f.worker.read("source.txt");
 	await assert.rejects(f.worker.write("source.txt", "bad"), code("CLAIM_REQUIRED"));
 	f.worker.claim(["source.txt"]);
 	await assert.rejects(f.worker.write("source.txt", "bad"), code("STALE"));
-	f.worker.read("source.txt"); writeFileSync(join(f.root, "source.txt"), "user change\n");
+	await f.worker.read("source.txt"); writeFileSync(join(f.root, "source.txt"), "user change\n");
 	await assert.rejects(f.worker.write("source.txt", "bad"), code("STALE"));
 	assert.equal(readFileSync(join(f.root, "source.txt"), "utf8"), "user change\n");
 	assert.equal(f.c.snapshot().workspace.operations.length, 0);
@@ -145,7 +145,7 @@ test("external changes invalidate receipts and submitted candidates without roll
 test("a reviewer who edits becomes a contributor and needs a different reviewer", async t => {
 	const f = await fixture(t);
 	const reviewer = await candidate(f);
-	reviewer.claim(["source.txt"]); reviewer.read("source.txt");
+	reviewer.claim(["source.txt"]); await reviewer.read("source.txt");
 	await reviewer.write("source.txt", "review correction\n");
 	assert.equal(f.c.snapshot().tasks[0].assignment.kind, "build");
 	assert.ok(f.c.snapshot().tasks[0].contributors.includes("reviewer"));
@@ -171,7 +171,7 @@ test("source-writing final checks cannot complete the run", async t => {
 test("guidance fences pending authorization and requires fresh reads after acknowledgment", async t => {
 	const approval = deferred(); const entered = deferred();
 	const f = await fixture(t, { authorize: async () => { entered.resolve(); return approval.promise; } });
-	f.worker.claim(["source.txt"]); f.worker.read("source.txt");
+	f.worker.claim(["source.txt"]); await f.worker.read("source.txt");
 	const edit = f.worker.write("source.txt", "late"); const rejected = assert.rejects(edit);
 	await entered.promise; await f.c.owner("run.redirect", { text: "Do not use the pending change" });
 	approval.resolve(true); await rejected;
@@ -194,7 +194,7 @@ test("rejected candidates cannot be resubmitted through raw bound dispatch", asy
 
 test("cross-task authors cannot independently approve the shared workspace", async t => {
 	const f = await fixture(t);
-	f.worker.claim(["source.txt"]); f.worker.read("source.txt");
+	f.worker.claim(["source.txt"]); await f.worker.read("source.txt");
 	await f.worker.write("source.txt", "implementation for another task\n");
 	await candidate(f);
 	await f.c.owner("task.create", { id: "task2", title: "Second feature", criteria: [0], dependencies: [] });

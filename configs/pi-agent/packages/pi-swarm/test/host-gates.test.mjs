@@ -325,7 +325,7 @@ test("safety denies absent, duplicate, malformed, late, or throwing claimants", 
 				if (kind === "late") queueMicrotask(() => claim(approve));
 				if (kind === "throw") throw new Error("private");
 			});
-			assert.deepEqual(await requestSafety({ events, request }), { approved: false });
+			assert.deepEqual(await requestSafety({ events, request }), kind === "absent" ? { approved: false, unclaimed: true } : { approved: false });
 			await microtask();
 			assert.equal(called, 0);
 			assert.equal(providerSignal.aborted, true);

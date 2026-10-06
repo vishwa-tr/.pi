@@ -118,3 +118,25 @@ node configs/pi-agent/test/standalone-invocation.test.mjs
 Then test the configured TUI with the official standalone Pi 0.81.0 release.
 The static tests prove shared root-export class identity and restoration; only a
 real standalone TUI run verifies bundled-runtime behavior end to end.
+
+## Swarm native runtime verification (2026-10-06)
+
+Managed Pi 1.0.4 supplies the coding definitions and the host ModelRuntime directly.
+Its `AgentSession._runDefaultCompaction` passes `agent.streamFunction` into the
+summary generator; the same stream hook covers agent-loop follow-ups and retries.
+Swarm performs admission checks there and aborts both the session and compaction
+on revocation. Offline integration tests exercise each path, automatic compaction
+continuation, cancellation during backoff, and one task failure after exhausted retries.
+
+The SDK's native Bash operations wait for the shell and handle process-tree
+cancellation; Swarm retains its own execution receipts and explicit reconciliation
+for unknown outcomes. This is a cooperative native-tool contract, not an OS sandbox.
+Production storage is under Pi's per-project session directory; no Git setup or
+project-local runtime directory is required. See the package README for current
+main-agent tools, stop-only user command, approval and recovery behavior.
+
+Basis: the installed 1.0.4 `dist/core/agent-session.js`,
+`dist/core/tools/{bash,read,edit,write}.js`, and public extension/TUI types.
+These observations apply to that version; newer releases require rerunning the
+SDK and terminal tests. Windows storage branches have simulated unit coverage,
+not a Windows terminal or process test.

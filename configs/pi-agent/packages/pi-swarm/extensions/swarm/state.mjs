@@ -1,8 +1,8 @@
-import { validateApproval } from "./approval-state.mjs";
 import { validId } from "./store/files.mjs";
 import { requireCondition } from "./errors.mjs";
-import { WORKSPACE_FIELDS, invalidateCandidates, reduceWorkspace, requireCandidate, requireFinalEvidence } from "./workspace-state.mjs";
+import { validateApproval } from "./approval-state.mjs";
 import { SESSION_FIELDS, reduceSession, requireSessionIdle, requireWorkerTurn } from "./session-state.mjs";
+import { WORKSPACE_FIELDS, invalidateCandidates, reduceWorkspace, requireCandidate, requireFinalEvidence } from "./workspace-state.mjs";
 export { SwarmError, requireCondition } from "./errors.mjs";
 
 export const DEFAULT_LIMITS = Object.freeze({ agents: 8, active: 4, tasks: 100, attempts: 3, durationMs: 60 * 60 * 1000 });
@@ -16,6 +16,7 @@ const FIELDS = {
 	"host.approve": ["approval"], "host.continue": ["restart", "reconciled", "approval"],
 	"run.create": ["runId", "ownerSessionId", "workspaceRoot", "objective", "criteria", "scope", "limits"],
 	"run.resume": ["reconciled"], "run.restart": ["reconciled"], "run.pause": [], "run.stop": [],
+	"run.adopt": ["ownerSessionId"],
 	"run.fail": ["reason"], "run.recover": [], "run.tick": [], "run.settle": [],
 	"run.verify": [], "run.complete": ["evidence"], "run.redirect": ["text"], "limits.update": ["limits"],
 	"worker.create": ["id", "specialization", "brief", "reason", "workloadRevision"], "worker.ack": ["revision"],
@@ -140,7 +141,7 @@ export function reduceEvent(previous, event) {
 			requireCondition(worker.guidanceRevision === state.guidanceRevision, "GUIDANCE", "Read and acknowledge current user guidance first");
 		}
 	}
-	const ownerOnly = ["run.resume", "run.restart", "run.redirect", "limits.update"];
+	const ownerOnly = ["run.adopt", "run.resume", "run.restart", "run.redirect", "limits.update"];
 	if (ownerOnly.includes(event.type)) requireCondition(event.actor === "owner", "AUTHORITY", "Explicit user authorization required");
 	const systemOnly = ["assignment.settle", "run.settle", "run.recover", "run.verify", "run.complete"];
 	if (systemOnly.includes(event.type)) requireCondition(event.actor === "system", "AUTHORITY", "Trusted runtime settlement required");
@@ -204,6 +205,11 @@ export function reduceEvent(previous, event) {
 			requireCondition(!["stopped", "completed", "failed"].includes(state.status), "STATE", "Run already settled");
 			state.failureReason = p.reason;
 			drain(state, "failing");
+			break;
+		case "run.adopt":
+			requireCondition(!["running", "verifying"].includes(state.status), "STATE", "Fence the prior controller before adopting a run");
+			text(p.ownerSessionId, "owner session");
+			state.ownerSessionId = p.ownerSessionId;
 			break;
 		case "run.recover":
 			requireCondition(EXECUTING.has(state.status), "STATE", "Run does not need recovery reconciliation");

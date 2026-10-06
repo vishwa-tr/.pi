@@ -39,12 +39,13 @@ async function trial() {
 	const root = mkdtempSync("/tmp/swarm-trial-");
 	const workspace = join(root, "project");
 	mkdirSync(workspace, { mode: 0o700 });
-	writeFileSync(join(workspace, ".gitignore"), ".swarms/\n");
+	const agentDir = join(root, "agent");
+	mkdirSync(agentDir, { mode: 0o700 });
+	process.env.PI_CODING_AGENT_DIR = agentDir; // Runtime already references explicitly authorized credentials.
 	writeFileSync(join(workspace, "csv.mjs"), "export function parseCsv(text) { throw new Error('Not implemented'); }\n");
 	writeFileSync(join(workspace, "csv.test.mjs"), "// Add dependency-free node:test coverage.\n");
 	execFileSync("git", ["init", "-q", workspace]);
-	execFileSync("git", ["-C", workspace, "add", ".gitignore", ...files]);
-	execFileSync("git", ["-C", workspace, "check-ignore", "-q", ".swarms/probe"]);
+	execFileSync("git", ["-C", workspace, "add", ...files]);
 	const events = new EventEmitter();
 	const mode = { version: 1, instanceId: "bounded-host-policy", revision: 1, contextRevision: 1,
 		ready: true, sessionId: "trial-owner", selectedMode: "off", enforcedMode: "off", runMode: null, pendingChange: false };

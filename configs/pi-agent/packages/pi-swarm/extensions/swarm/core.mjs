@@ -1,10 +1,11 @@
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { lstatSync } from "node:fs";
-import { DEFAULT_LIMITS, reduceEvent, requireCondition } from "./state.mjs";
-import { prepareLayout } from "./store/layout.mjs";
-import { privateDirectory } from "./store/files.mjs";
 import { acquireLease } from "./store/lease.mjs";
 import { openJournal } from "./store/journal.mjs";
+import { prepareLayout } from "./store/layout.mjs";
+import { privateDirectory } from "./store/files.mjs";
+import { existsSync, realpathSync, lstatSync } from "node:fs";
+import { DEFAULT_LIMITS, reduceEvent, requireCondition } from "./state.mjs";
 
 const TERMINAL = new Set(["stopped", "completed", "failed"]);
 
@@ -25,12 +26,13 @@ function fingerprint(actor, type, payload, cycle, generation) {
  * A later adapter must never expose those capabilities to worker sessions.
  */
 export class SwarmController {
-	static async open({ workspace, runId, ownerSessionId, create, createOnly = false, clock = Date.now, journalIo }) {
-		const layout = prepareLayout(workspace, runId);
+	static async open({ workspace, runId, ownerSessionId, create, createOnly = false, clock = Date.now, journalIo, agentDir, adopt = false }) {
+		const layout = prepareLayout(realpathSync(workspace), runId, { agentDir });
 		if (!create) {
 			try { lstatSync(layout.journalPath); }
 			catch (error) {
 				if (error.code !== "ENOENT") throw error;
+				requireCondition(!existsSync(join(layout.workspaceRoot, ".swarms", runId)), "LEGACY_RUN", "This run was created by an older Swarm version and cannot be restored. Its files were preserved.");
 				requireCondition(false, "NOT_FOUND", "Run does not exist");
 			}
 		}
@@ -42,7 +44,7 @@ export class SwarmController {
 				payload: { runId, ownerSessionId, workspaceRoot: layout.workspaceRoot, objective: create.objective, criteria: create.criteria, scope: create.scope, limits: { ...DEFAULT_LIMITS, ...create.limits } },
 			});
 		}
-		const lease = acquireLease(layout);
+		const lease = acquireLease(layout, { ownerSessionId });
 		let journal;
 		try {
 			if (createOnly) {
@@ -56,7 +58,7 @@ export class SwarmController {
 			}
 			privateDirectory(layout.runRoot);
 			journal = openJournal(layout.journalPath, lease.assertOwned, journalIo);
-			const controller = new SwarmController(journal, lease, clock);
+			const controller = new SwarmController(journal, lease, clock, layout);
 			for (const event of journal.readAll()) controller.#replay(event);
 			if (controller.#state === null) {
 				requireCondition(create, "NOT_FOUND", "Run does not exist; an approved launch specification is required");
@@ -67,12 +69,13 @@ export class SwarmController {
 				});
 			} else {
 				requireCondition(controller.#state.runId === runId && controller.#state.workspaceRoot === layout.workspaceRoot, "IDENTITY", "Run belongs to a different workspace");
-				requireCondition(controller.#state.ownerSessionId === ownerSessionId, "AUTHORITY", "Run belongs to a different owner session");
+				requireCondition(adopt || controller.#state.ownerSessionId === ownerSessionId, "AUTHORITY", "Run belongs to a different owner session");
 				if (["running", "verifying", "pausing", "stopping", "failing"].includes(controller.#state.status)) {
 					await controller.system("run.recover", {});
 					if (!controller.#state.tasks.some(task => task.assignment) && !controller.#state.workspace?.operations.length && !controller.#state.sessions?.turns.length) await controller.system("run.settle", {});
 				}
 			}
+			if (controller.#state.ownerSessionId !== ownerSessionId) await controller.owner("run.adopt", { ownerSessionId });
 			return controller;
 		} catch (error) {
 			journal?.close();
@@ -83,6 +86,8 @@ export class SwarmController {
 		}
 	}
 
+	#layout;
+	get layout() { return this.#layout; }
 	#listeners = new Set();
 	#state = null;
 	#journal;
@@ -94,7 +99,8 @@ export class SwarmController {
 	#fault = null;
 	#executionAbort = new AbortController();
 
-	constructor(journal, lease, clock) {
+	constructor(journal, lease, clock, layout) {
+		this.#layout = layout;
 		this.#journal = journal;
 		this.#lease = lease;
 		this.#clock = clock;
@@ -202,7 +208,7 @@ export class SwarmController {
 			return receipt;
 		};
 		const result = this.#queue.then(execute);
-		this.#queue = result.catch(() => {});
+		this.#queue = result.catch(() => { });
 		return result;
 	}
 

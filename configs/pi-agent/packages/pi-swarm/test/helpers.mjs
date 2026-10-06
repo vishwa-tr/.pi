@@ -1,8 +1,13 @@
+import { after } from "node:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { DEFAULT_LIMITS, reduceEvent } from "../extensions/swarm/state.mjs";
+
+const testAgentDir = mkdtempSync(join(tmpdir(), "swarm-test-agent-"));
+process.env.PI_CODING_AGENT_DIR = testAgentDir;
+after(() => rmSync(testAgentDir, { recursive: true, force: true }));
 
 export function repository(t, ignored = true) {
 	const root = mkdtempSync(join(tmpdir(), "swarm-foundation-"));

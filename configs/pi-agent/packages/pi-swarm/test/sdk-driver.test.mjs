@@ -1,3 +1,4 @@
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -84,6 +85,26 @@ test("persistent specialist retains identity and context through pause and reope
 	await driver.pause(); await driver.close();
 });
 
+test("history of an open specialist comes from memory and never writes its session file", async t => {
+	const f = await fixture(t, [{ text: "Live decision" }]);
+	await f.driver.recruit(specialist("builder"));
+	f.driver.wake("builder"); await f.driver.idle();
+	const binding = f.c.snapshot().sessions.workers.find(worker => worker.workerId === "builder");
+	const path = join(prepareLayout(f.root, "run1").stateRoot, "run1", "sessions", binding.sessionFile);
+	const original = readFileSync(path, "utf8");
+	// A concurrent append caught midway: Pi's file loader would "repair" it by appending a newline.
+	const partial = original + '{"type":"message","id":"partial';
+	writeFileSync(path, partial);
+	try {
+		const history = await f.driver.history("builder", 100);
+		assert.ok(history.some(entry => entry.type === "message"));
+		history.find(entry => entry.type === "message").message.content = "Mutated inspection";
+		assert.notDeepEqual(await f.driver.history("builder", 100), history, "History is a detached copy");
+		assert.equal(readFileSync(path, "utf8"), partial, "Reading history must not write the session file");
+	} finally { writeFileSync(path, original); }
+	await shutdown(f);
+});
+
 test("restored unopened history is detached, bounded, validated and independent of the model runtime", async t => {
 	const f = await fixture(t, [{ text: "Persisted decision" }]);
 	await f.driver.recruit(specialist("builder"));
@@ -105,7 +126,7 @@ test("restored unopened history is detached, bounded, validated and independent 
 	} });
 	const driver = await SwarmSessions.attach(c, { workspace, modelRuntime, mainModel: f.mock.model, tickIntervalMs: 0 });
 	const before = c.snapshot();
-	const directory = join(f.root, ".swarms", "run1", "sessions");
+	const directory = join(prepareLayout(f.root, "run1").stateRoot, "run1", "sessions");
 	const files = readdirSync(directory);
 	const binding = before.sessions.workers.find(worker => worker.workerId === "builder");
 	const path = join(directory, binding.sessionFile);
@@ -127,7 +148,8 @@ test("restored unopened history is detached, bounded, validated and independent 
 		writeFileSync(path, records.map(record => JSON.stringify(record)).join("\n") + "\n");
 		await assert.rejects(driver.history("builder"), /Session history identity changed/);
 		writeFileSync(path, original + "not-json\n");
-		await assert.rejects(driver.history("builder"));
+		// Pi skips a malformed line, as it does when it reopens the session.
+		assert.deepEqual(await driver.history("builder", 100), expected);
 	} finally { writeFileSync(path, original); }
 	assert.equal(runtimeReads, 1);
 	assert.equal(f.mock.calls.length, 1);
@@ -317,12 +339,13 @@ test("real SDK coding tools use guarded claims and recorded command evidence", a
 			case 3: return tool("write", { path: "feature.txt", content: "implemented" });
 			case 4: return tool("bash", { command: "test -f feature.txt" });
 			case 5: {
-				const execution = JSON.parse(results.at(-1).content[0].text).executionId;
+				const execution = results.at(-1).content.find(part => part.text?.startsWith("Swarm execution receipt: ")).text.split(": ")[1];
 				return tool("swarm_report", { action: "submit", summary: "Implemented", receipts: [execution] });
 			}
 			default: return { text: "Awaiting independent review" };
 		}
 	});
+	writeFileSync(join(f.root, "feature.txt"), "initial");
 	await f.driver.recruit(specialist("builder"));
 	await f.c.owner("task.create", { id: "build", title: "Feature", criteria: [0], dependencies: [] });
 	f.driver.wake("builder"); await f.driver.idle();
@@ -332,4 +355,21 @@ test("real SDK coding tools use guarded claims and recorded command evidence", a
 	assert.equal(f.c.snapshot().workspace.receipts.length, 2);
 	assert.ok(f.mock.calls.every(call => !call.context.messages.some(message => message.role === "toolResult" && message.isError)));
 	await shutdown(f);
+});
+
+test('exhausted Pi retries consume exactly one task failure', async t => {
+ const f = await fixture(t, ({ index }) => index === 0
+  ? tool('swarm_task', { action: 'claim', taskId: 'retry-task', kind: 'build' })
+  : { error: '429 rate limit exceeded' });
+ try {
+  await f.driver.recruit(specialist('builder'));
+  await f.c.owner('task.create', { id: 'retry-task', title: 'Retry test', criteria: [0], dependencies: [] });
+  f.driver.wake('builder'); await f.driver.idle();
+  assert.equal(f.mock.calls.length, 5);
+  const task = f.c.snapshot().tasks[0];
+  assert.equal(task.failures, 1);
+  assert.equal(task.failureHistory.length, 1);
+  assert.equal(task.assignment, null);
+  assert.equal(f.c.snapshot().sessions.history.filter(turn => turn.outcome === 'failed').length, 1);
+ } finally { await shutdown(f); }
 });

@@ -1,19 +1,19 @@
+import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { privateDirectory } from "./store/files.mjs";
 import { makeSessionTools } from "./session-tools.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { pendingMail, sessionWorker } from "./session-state.mjs";
-import { createSdkSession, readSessionHistory } from "./sdk-session.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
-import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { createSdkSession, readSessionHistory } from "./sdk-session.mjs";
 import { buildSpecialistPrompt, buildTurnPrompt } from "./specializations.mjs";
 
 const attached = new WeakSet();
 const terminal = new Set(["paused", "stopped", "completed", "failed"]);
 const draining = new Set(["pausing", "stopping", "failing"]);
 
-/** Host-only offline SDK integration. There is deliberately no extension entry point. */
+/** Host-owned native SDK worker lifecycle and admission. */
 export class SwarmSessions {
 	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission, providerCapability } = {}) {
 		controller.assertOwned();
@@ -23,9 +23,9 @@ export class SwarmSessions {
 		const selected = override?.model ?? mainModel;
 		const selection = state.sessions?.selection ?? { provider: selected?.provider, modelId: selected?.id, thinkingLevel: override?.thinkingLevel ?? thinkingLevel };
 		const model = providerCapability ? assertProviderSelection(providerCapability, selection, modelRuntime) : modelRuntime?.getModel(selection.provider, selection.modelId);
-		check(providerCapability || (selection.provider === "swarm-mock" && model?.api === "swarm-mock"), "MODEL", "Live model execution is disabled in phase 3");
+		check(providerCapability || (selection.provider === "swarm-mock" && model?.api === "swarm-mock"), "MODEL", "A native provider agreement or explicit offline mock is required");
 		check(Number.isSafeInteger(tickIntervalMs) && tickIntervalMs >= 0, "INPUT", "Invalid tick interval");
-		makeSessionTools(async () => {}, state.sessions?.codingTools ?? codingTools);
+		makeSessionTools(async () => { }, state.sessions?.codingTools ?? codingTools);
 		attached.add(controller);
 		try {
 			if (!state.sessions) await controller.owner("sessions.configure", { selection, instructions, codingTools });
@@ -58,7 +58,7 @@ export class SwarmSessions {
 		this.#providerCapability = providerCapability;
 		this.#admission = admission;
 		const state = controller.snapshot();
-		this.#sessionDir = join(state.workspaceRoot, ".swarms", state.runId, "sessions");
+		this.#sessionDir = controller.layout.sessionDir;
 		privateDirectory(this.#sessionDir);
 		if (tickIntervalMs) {
 			this.#timer = setInterval(() => {
@@ -85,17 +85,13 @@ export class SwarmSessions {
 		entry.ready = (async () => {
 			const state = this.#controller.snapshot();
 			const binding = sessionWorker(state, workerId);
-			const tools = makeSessionTools((name, params, call) => this.#invoke(entry, name, params, call), state.sessions.codingTools);
+			const tools = makeSessionTools((name, params, call) => this.#invoke(entry, name, params, call), state.sessions.codingTools, state.workspaceRoot);
 			const created = await createSdkSession({
-				cwd: state.workspaceRoot, sessionDir: this.#sessionDir,
+				cwd: state.workspaceRoot, sessionDir: this.#sessionDir, sessionId: binding?.sessionId,
 				sessionFile: binding ? join(this.#sessionDir, binding.sessionFile) : undefined,
 				modelRuntime: this.#modelRuntime, selection: state.sessions.selection,
 				providerCapability: this.#providerCapability,
-				requestAdmission: {
-					assert: async () => { await this.#controller.system("run.tick"); this.#requestGuard(entry); },
-					check: () => this.#requestGuard(entry),
-					signal: () => entry.active?.signal ?? AbortSignal.abort(),
-				},
+				admitRequest: async () => { await this.#controller.system("run.tick"); this.#requestGuard(entry); },
 				systemPrompt: buildSpecialistPrompt(state, worker), customTools: tools,
 			});
 			Object.assign(entry, created);
@@ -131,7 +127,8 @@ export class SwarmSessions {
 		return state;
 	}
 
-	async #invoke(entry, name, params, { toolCallId, signal }) {
+	async #invoke(entry, name, params, call) {
+		const { toolCallId, signal } = call;
 		const state = this.#guard(entry, signal);
 		const turn = entry.active;
 		const operationId = createHash("sha256").update(`${entry.sessionId}:${turn.id}:${toolCallId}:${name}`).digest("hex");
@@ -146,8 +143,10 @@ export class SwarmSessions {
 				// Host agreements and native storage bindings are not worker context.
 				const { status, revision, cycle, generation, objective, criteria, scope, limits,
 					guidanceRevision, guidance, workers, tasks, messages } = state;
-				return { status, revision, cycle, generation, objective, criteria, scope, limits,
-					guidanceRevision, guidance, workers, tasks, messages };
+				return {
+					status, revision, cycle, generation, objective, criteria, scope, limits,
+					guidanceRevision, guidance, workers, tasks, messages
+				};
 			}
 			case "swarm_task": {
 				const { action, ...payload } = params;
@@ -182,17 +181,17 @@ export class SwarmSessions {
 				const worker = this.#workspace.worker(entry.workerId);
 				return params.action === "submit" ? worker.submit(params.summary, params.receipts) : worker.review(params.approved, params.summary);
 			}
-			case "read": currentTask(); return this.#workspace.worker(entry.workerId).read(params.path);
+			case "read": currentTask(); return this.#workspace.worker(entry.workerId).read(params.path, call, params);
 			case "write":
 			case "edit": {
 				currentTask();
-				return withFileMutationQueue(resolve(state.workspaceRoot, params.path), async () => {
-					this.#guard(entry, signal);
-					const worker = this.#workspace.worker(entry.workerId);
-					return name === "write" ? worker.write(params.path, params.content) : worker.edit(params.path, params.edits);
-				});
+				this.#guard(entry, signal);
+				const worker = this.#workspace.worker(entry.workerId);
+				// Pi's native write/edit tools own the file mutation queue. Taking the same
+				// queue outside them would deadlock.
+				return name === "write" ? worker.write(params.path, params.content, call) : worker.edit(params.path, params.edits, call);
 			}
-			case "bash": currentTask(); return this.#workspace.worker(entry.workerId).shell(params.command);
+			case "bash": currentTask(); return this.#workspace.worker(entry.workerId).shell(params.command, { ...call, timeout: params.timeout });
 			default: check(false, "AUTHORITY", "Tool is not enabled");
 		}
 	}
@@ -258,15 +257,13 @@ export class SwarmSessions {
 		let failure;
 		let outcome = "settled";
 		try {
-			this.#admission?.assert();
-			check(!context.signal.aborted, "FENCED", "Execution changed before prompt acceptance");
+			this.#requestGuard(entry);
 			const prompt = buildTurnPrompt(state, worker, { messages, reason });
 			if (kind === "compaction") await entry.session.compact(`${buildSpecialistPrompt(state, worker)}\n\nPreserve decisions, questions, references, and focus. Authoritative state:\n${prompt}`);
 			else {
 				// This packet is the only model input admitted for this generation.
 				await context.worker.dispatch("worker.ack", { revision: state.guidanceRevision });
-				this.#admission?.assert();
-				check(!context.signal.aborted, "FENCED", "Guidance changed before dispatch");
+				this.#requestGuard(entry);
 				await entry.session.prompt(prompt, { expandPromptTemplates: false });
 			}
 			await entry.session.waitForIdle();
@@ -292,7 +289,6 @@ export class SwarmSessions {
 					}
 				}
 			}
-			entry.sync();
 			await this.#controller.system("session.turn.end", { id: context.id, outcome });
 			entry.active = null;
 			const task = this.#controller.snapshot().tasks.find(task => task.assignment?.workerId === workerId);
@@ -375,7 +371,17 @@ export class SwarmSessions {
 		const state = this.#controller.snapshot();
 		const binding = sessionWorker(state, workerId);
 		if (!binding) return [];
-		return readSessionHistory(join(this.#sessionDir, binding.sessionFile), state.workspaceRoot, binding.sessionId).slice(-limit);
+		const entries = this.liveHistory(workerId) ?? readSessionHistory(join(this.#sessionDir, binding.sessionFile), state.workspaceRoot, binding.sessionId);
+		return entries.slice(-limit);
+	}
+
+	/** Active branch of an open specialist session, from memory. Reading its file instead could race the
+	 * session's own appends: Pi's loader repairs a missing final newline by writing to the file.
+	 * Until Pi first writes the file there is no persisted history, matching a restored session. */
+	liveHistory(workerId) {
+		const manager = this.#entries.get(workerId)?.manager;
+		if (!manager) return undefined;
+		return existsSync(manager.getSessionFile()) ? structuredClone(manager.getBranch()) : [];
 	}
 
 	async idle() {
@@ -400,7 +406,7 @@ export class SwarmSessions {
 		for (const entry of this.#entries.values()) {
 			await entry.ready;
 			check(entry.session.isIdle, "UNSETTLED", "SDK session is not idle");
-			entry.sync(); entry.session.dispose();
+			entry.session.dispose();
 		}
 		clearInterval(this.#timer);
 		this.#closed = true;

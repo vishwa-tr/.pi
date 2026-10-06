@@ -1,143 +1,88 @@
 #!/usr/bin/env python3
-"""Normal file/package entry smoke test, isolated offline CLI, no SDK resolver preload."""
+"""Real main-model tools, sole /swarm stop command, isolated offline package entry."""
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
-import subprocess
 import time
-from run import DisposableFixture, Terminal, HERE
+from run import DisposableFixture, Terminal, HERE, compact, pi_cli
 
 
 def main(scripted=False, package_root=False):
-    pi = shutil.which(os.environ.get("PI_BIN", "pi"))
-    assert pi and shutil.which("node") and shutil.which("git")
+    pi = pi_cli()
     with DisposableFixture() as fixture:
-        home, agent, project = [fixture.root / name for name in ("home", "agent", "project")]
+        home, agent, project = [fixture.root / name for name in ('home', 'agent', 'project')]
         for path in (home, agent, project):
             path.mkdir(mode=0o700)
-        env = {"PATH": os.environ["PATH"], "HOME": str(home), "TERM": "xterm-256color",
-               "LANG": "C.UTF-8", "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1",
-               "PI_TELEMETRY": "0", "PI_SKIP_VERSION_CHECK": "1", "GIT_CONFIG_NOSYSTEM": "1",
-               "GIT_CONFIG_GLOBAL": os.devnull, "SWARM_TERMINAL_FIXTURE": str(fixture.root / "events.jsonl")}
-        (agent / "settings.json").write_text(json.dumps({"quietStartup": True, "enableInstallTelemetry": False,
-            "compaction": {"enabled": False}, "retry": {"enabled": False}, "cacheWarming": {"enabled": False}}))
-        if not scripted:
-            subprocess.run(["git", "init", "-q", str(project)], env=env, check=True)
-            (project / ".git" / "info" / "exclude").write_text(".swarms/\n")
+        env = {'PATH': os.environ['PATH'], 'HOME': str(home), 'TERM': 'xterm-256color',
+               'LANG': 'C.UTF-8', 'PI_CODING_AGENT_DIR': str(agent), 'PI_OFFLINE': '1',
+               'PI_TELEMETRY': '0', 'SWARM_TERMINAL_FIXTURE': str(fixture.root / 'events.jsonl')}
+        (agent / 'settings.json').write_text(json.dumps({'quietStartup': True, 'enableInstallTelemetry': False,
+            'compaction': {'enabled': False}, 'retry': {'enabled': False}, 'cacheWarming': 'off'}))
+        (project / 'user.txt').write_text('Preserve fixture work\n')
+        (project / '.gitignore').write_bytes(b'# Preserve existing rules\r\n')
+        entry = HERE.parent.parent if package_root else HERE.parent.parent / 'extensions/index.ts'
+        command = [shutil.which('node'), str(pi), '--no-extensions', '-e', str(entry), '--no-skills',
+                   '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-approve']
         if scripted:
-            (project / "user.txt").write_text("Preserve fixture work\n")
-            (project / ".gitignore").write_bytes(b"# Preserve existing rules\r\n")
-            (project / ".gitignore").chmod(0o640)
-        entry = HERE.parent.parent if package_root else HERE.parent.parent / "extensions" / "index.ts"
-        command = [shutil.which("node"), str(Path(pi).resolve()), "--no-extensions",
-                   "-e", str(entry),
-                   "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
-                   "--no-approve"]
-        command += ["--tools", "swarm_start,swarm_status,swarm_control,swarm_history"] if scripted else ["--no-tools"]
-        if scripted:
-            packages = HERE.parent.parent.parent
-            command += ["-e", str(HERE / "entry-fixture.ts"),
-                        "-e", str(packages / "pi-plan/extensions/plan/index.ts"),
-                        "-e", str(packages / "pi-safety/extensions/safety/index.ts"),
-                        "--provider", "entry-fixture", "--model", "first"]
+            command += ['-e', str(HERE / 'entry-fixture.ts'), '--provider', 'entry-fixture', '--model', 'first',
+                        '--tools', 'swarm_start,swarm_status,swarm_control,swarm_history']
+        else:
+            command += ['--no-tools']
         terminal = fixture.terminal = Terminal(command, project, env)
         def events():
-            path = fixture.root / "events.jsonl"
+            path = fixture.root / 'events.jsonl'
             return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
-        def wait_event(kind):
-            deadline = time.monotonic() + 15
+        def wait_event(kind, count=1):
+            deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
-                if any(event["type"] == kind for event in events()):
+                if sum(row['type'] == kind for row in events()) >= count:
                     return
                 terminal.pump()
-            raise AssertionError(f"Missing fixture event: {kind}; observations: {events()}; terminal: {terminal.output[-6000:]}")
+            raise AssertionError(f'Missing {kind}: {events()}; terminal: {terminal.output[-5000:]}')
         try:
-            terminal.expect("Entry fixture ready" if scripted else "No models available")
-            terminal.line("/swarm dashboard")
-            terminal.expect("SWARM")
-            terminal.send("\x1b")
-            time.sleep(0.3)
-            terminal.line("/reload")
-            terminal.expect("Reloaded")
-            terminal.line("/swarm dashboard")
-            terminal.expect("SWARM")
-            terminal.send("\x1b")
-            assert not (project / ".swarms").exists()
+            terminal.expect('Entry fixture ready' if scripted else 'No models available')
+            terminal.line('/swarm start forbidden')
+            terminal.expect('Use /swarm stop')
+            for action in (' status', ' resume'):
+                terminal.line('/swarm' + action)
+                deadline = time.monotonic() + .3
+                while time.monotonic() < deadline:
+                    terminal.pump(.03)
+            assert not events() or not any(row['type'] in ('auth', 'dispatch') for row in events())
             if scripted:
-                assert not any(event["type"] in ("auth", "dispatch") for event in events())
-                time.sleep(0.3)
-                terminal.line("/fixture-model")
-                terminal.expect("Entry model changed")
-                terminal.line("/swarm start fixture goal")
-                terminal.expect("Set up Git for Swarm?")
-                terminal.choose(1)  # Explicit No: no Git, ignore, run or provider changes.
-                time.sleep(0.3)
-                assert not (project / ".git").exists()
-                assert (project / ".gitignore").read_bytes() == b"# Preserve existing rules\r\n"
-                assert not (project / ".swarms").exists()
-                assert not any(event["type"] in ("auth", "dispatch") for event in events())
-                terminal.line("/swarm start fixture goal")
-                terminal.expect("Set up Git for Swarm?")
-                terminal.choose(0)  # Explicit Yes to init, then No to ignore mutation.
-                terminal.expect("Keep Swarm runtime files out of Git?")
-                terminal.choose(1)
-                time.sleep(0.3)
-                assert (project / ".git").is_dir()
-                assert (project / ".gitignore").read_bytes() == b"# Preserve existing rules\r\n"
-                assert subprocess.check_output(["git", "-C", str(project), "ls-files"], env=env) == b""
-                assert not (project / ".swarms").exists()
-                terminal.line("/swarm start fixture goal")
-                terminal.expect("Keep Swarm runtime files out of Git?")
-                terminal.choose(0)
-                terminal.expect("LAUNCH (Pi native provider)")
-                assert (project / ".gitignore").read_bytes() == b"# Preserve existing rules\r\n/.swarms/\r\n"
-                assert (project / ".gitignore").stat().st_mode & 0o777 == 0o640
-                assert (project / "user.txt").read_text() == "Preserve fixture work\n"
-                subprocess.run(["git", "-C", str(project), "check-ignore", "-q", ".swarms/probe/events.jsonl"], env=env, check=True)
-                terminal.send("\x1b")
-                time.sleep(0.3)
-                assert not (project / ".swarms").exists()
-                assert not any(event["type"] in ("auth", "dispatch") for event in events())
-                terminal.line("fixture chat launch")
-                wait_event("chat-result")
-                proposal = [event["data"] for event in events() if event["type"] == "chat-result"][-1]
-                assert proposal["status"] == "approval-required", proposal
-                terminal.expect("Fixture main agent returned")
-                assert not any(event["type"] == "dispatch" for event in events())
-                assert not (project / ".swarms").exists()
-                terminal.line(proposal["reply"])
-                wait_event("approval-input")
-                assert [event["source"] for event in events() if event["type"] == "approval-input"] == ["interactive"]
-                wait_event("dispatch")
-                assert [event["data"] for event in events() if event["type"] == "chat-result"][-1]["status"] == "running"
-                assert [event["model"] for event in events() if event["type"] == "dispatch"] == ["second"]
-                terminal.line("/swarm pause")
-                wait_event("settled")
-                terminal.resize(80, 24)
-                terminal.line("/swarm dashboard")
-                terminal.expect("SWARM live / Pi native provider | paused")
-                terminal.inspect_conversation()
-                terminal.send("q")
-                terminal.expect("Workers")
-                terminal.send("q")
-                time.sleep(0.2)
-                terminal.line("/reload")
-                terminal.expect("Reloaded")
-                time.sleep(0.5)
-                assert sum(event["type"] == "dispatch" for event in events()) == 1
-                terminal.expect_status("paused", transport="Pi native provider")
-                assert (project / "user.txt").read_text() == "Preserve fixture work\n"
+                terminal.line('/fixture-model'); terminal.expect('Entry model changed')
+                terminal.line('fixture chat launch'); terminal.expect('LAUNCH (Pi native provider)')
+                terminal.send('\x1b'); terminal.expect('Fixture main agent returned')
+                assert not any(row['type'] == 'dispatch' for row in events())
+                terminal.line('fixture chat launch'); terminal.expect('LAUNCH (Pi native provider)')
+                terminal.read_packet('LAUNCH (Pi native provider)')
+                assert compact('"objective": "Fixture chat goal"') in terminal.last_packet
+                terminal.choose(2); terminal.expect('Preserve and proceed?'); terminal.choose(1)
+                terminal.expect('Fixture main agent returned'); wait_event('dispatch')
+                assert [row['model'] for row in events() if row['type'] == 'dispatch'] == ['second']
+                terminal.line('fixture chat pause'); terminal.expect('Fixture main agent returned'); wait_event('settled')
+                terminal.line('fixture chat view'); terminal.expect('SWARM live / Pi native provider | paused')
+                terminal.send('r'); terminal.send('p'); terminal.send('s'); time.sleep(.2)
+                assert sum(row['type'] == 'dispatch' for row in events()) == 1
+                terminal.send('\x1b'); terminal.expect('Fixture main agent returned')
+                terminal.line('/reload'); terminal.expect('Reloaded'); time.sleep(.3)
+                terminal.line('fixture chat status'); terminal.expect('Fixture main agent returned')
+                assert sum(row['type'] == 'dispatch' for row in events()) == 1
+            terminal.line('/swarm stop')
+            time.sleep(.3)
+            assert not (project / '.git').exists()
+            assert not (project / '.swarms').exists()
+            assert (project / '.gitignore').read_bytes() == b'# Preserve existing rules\r\n'
+            assert (project / 'user.txt').read_text() == 'Preserve fixture work\n'
         finally:
             terminal.close()
-    print("Explicit normal entry scripted approval/current-model/paused-reload passed" if scripted else
-          "Explicit normal entry load/reload passed without auth or worker dispatch")
+    print('PASS: main-agent tools, Cancel-default approval, read-only dashboard, reload and sole /swarm stop' if scripted else
+          'PASS: normal entry exposes only /swarm stop without model dispatch')
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package-root", action="store_true", help="Load the package manifest instead of the raw entry file")
+    parser.add_argument('--package-root', action='store_true')
     args = parser.parse_args()
     main(package_root=args.package_root)
     main(scripted=True, package_root=args.package_root)

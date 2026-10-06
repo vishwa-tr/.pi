@@ -15,11 +15,11 @@ function fixture() {
 	return { view, options, signal, results, historyReads, tick: () => tick(), snapshot, setSnapshot: next => { snapshot = next; }, clears: () => clears, renders: () => renders };
 }
 
-test("dashboard labels HTTPS and unattached selection without claiming mock-only execution", () => {
+test("dashboard labels native and unattached selection without claiming mock-only execution", () => {
 	const f = fixture();
-	f.snapshot.run.hostApprovals = [{ provider: { transport: "https-chat-completions" } }];
+	f.snapshot.run.hostApprovals = [{ provider: { transport: "pi-native" } }];
 	f.tick();
-	assert.match(f.view.render(100).join("\n"), /HTTPS provider/);
+	assert.match(f.view.render(100).join("\n"), /Pi native provider/);
 	assert.doesNotMatch(f.view.render(100).join("\n"), /mock only/);
 	assert.match(f.view.body(), /cost: unknown/);
 	f.setSnapshot(undefined); f.tick();
@@ -53,10 +53,10 @@ test("worker selection and paged native history have no entry-count cutoff", () 
 });
 
 for (const [key, status, action] of [["p", "running", "pause"], ["s", "running", "stop"], ["r", "paused", "resume"], ["R", "stopped", "restart"], ["C", "pausing", "reconcile"]]) {
-	test(`${key} returns ${action} only after timer disposal`, () => {
+	test(`${key} cannot ${action} from the read-only dashboard`, () => {
 		const f = fixture(); f.snapshot.run.status = status; f.tick();
 		f.view.handleInput(key); f.view.handleInput(key);
-		assert.deepEqual(f.results, [action]); assert.equal(f.clears(), 1);
+		assert.deepEqual(f.results, []); assert.equal(f.clears(), 0); f.view.dispose();
 	});
 }
 

@@ -1,7 +1,7 @@
-import { lstatSync, mkdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { atomicJson, invariant, readPrivate, syncDirectory, validId } from "./files.mjs";
+import { lstatSync, mkdirSync, rmdirSync, unlinkSync } from "node:fs";
+import { atomicJson, invariant, privateDirectory, readPrivate, syncDirectory, validId } from "./files.mjs";
 
 function readReservation(path) {
 	try {
@@ -16,14 +16,15 @@ function readReservation(path) {
 
 // A live lock never expires automatically. A crash requires explicit recovery,
 // since a PID disappearing does not prove its spawned commands have stopped.
-export function acquireLease(layout) {
+export function acquireLease(layout, { ownerSessionId } = {}) {
+	privateDirectory(layout.stateRoot);
 	const token = randomUUID();
 	mkdirSync(layout.ownerPath, { mode: 0o700 });
 	syncDirectory(layout.stateRoot);
 	const identity = lstatSync(layout.ownerPath);
 	const tokenPath = join(layout.ownerPath, "owner.json");
 	let closed = false;
-	atomicJson(tokenPath, { version: 1, token, runId: layout.runId });
+	atomicJson(tokenPath, { version: 1, token, runId: layout.runId, pid: process.pid, ownerSessionId: ownerSessionId ?? null });
 
 	function assertLiveOwner() {
 		invariant(!closed, "Controller lease is closed");
@@ -63,4 +64,25 @@ export function acquireLease(layout) {
 		throw error;
 	}
 	return { assertOwned, release };
+}
+
+/** Read-only disclosure. A dead PID alone never authorizes reclaiming a lease. */
+export function inspectLease(layout) {
+	try { return JSON.parse(readPrivate(join(layout.ownerPath, "owner.json"))); }
+	catch (error) { if (error.code === "ENOENT") return null; throw error; }
+}
+
+/** Explicit host attestation, compare-before-unlink, and live-process refusal. */
+export function releaseStaleLease(layout, expected, { settled } = {}) {
+	invariant(settled === true && expected?.token, "Explicit settlement attestation required");
+	const current = inspectLease(layout);
+	invariant(JSON.stringify(current) === JSON.stringify(expected), "Controller lease changed during confirmation");
+	if (Number.isSafeInteger(current.pid) && current.pid > 0) {
+		try { process.kill(current.pid, 0); throw new Error("The previous controller process is still alive"); }
+		catch (error) { if (error.code !== "ESRCH") throw error; }
+	}
+	unlinkSync(join(layout.ownerPath, "owner.json"));
+	syncDirectory(layout.ownerPath);
+	rmdirSync(layout.ownerPath);
+	syncDirectory(layout.stateRoot);
 }

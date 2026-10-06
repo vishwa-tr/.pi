@@ -127,15 +127,13 @@ root `skills/` is the canonical global skill library.
 - **Teams and merging:** `pi-teams` adds persistent team agents and optional peer
   messaging. `pi-merge` synthesizes selected session branches into a new session
   while leaving source branches intact.
-- **Swarm:** `pi-swarm` provides main-agent chat start/status/control/history tools,
-  event-driven chat updates without automatic model turns, `/swarm start <goal>` and
-  on-demand `/swarm` inspection using native Pi workers with the current model/thinking snapshot. Launch and
-  continuation require explicit user approval: chat tools show a full proposal and require
-  the exact interactive reply `Approve swarm <id>` before a second tool call; `/swarm start`
-  keeps its native approval UI. Plan must be ready and Off, and
-  Safety gates worker commands. Use `/swarm pause` or `/swarm stop` to brake work.
-  Load, reload, session resume, and ordinary prompts never automatically dispatch
-  Swarm work. See its [usage and limitations](configs/pi-agent/packages/pi-swarm/README.md).
+- **Swarm:** `pi-swarm` is managed through the main agent's start/status/control/history
+  tools, with explicit human approval in native Cancel-default dialogs. The only direct
+  user command is `/swarm stop`. Its dashboard is read-only. Plan and Safety are optional
+  integrations; without Safety, Swarm asks before every mutation and command. Durable
+  state lives beside Pi's project sessions, and another session can restore a run paused.
+  Loading, reload and session resume never dispatch work automatically. See its
+  [usage and recovery](configs/pi-agent/packages/pi-swarm/README.md).
 - **User notices and turn statistics:** `pi-notify-user` renders structured
   end-of-turn notices with optional urgent toasts. `pi-turn-stats` emits a
   compact TUI-only notice after the agent truly settles; it does not alter the
@@ -172,7 +170,7 @@ Authenticate with `/login`. When migrating an existing installation, restore
 only the machine-local state you intentionally preserved in the private backup;
 keep it outside Git and retain its restrictive permissions.
 
-The enabled Swarm package requires **Pi 1.0.0+ and Node 22.19+**; Pi 1.0.0 is
+The enabled Swarm package requires **Pi 1.0.4+ and Node 22.19+**; Pi 1.0.4 is
 its verified runtime baseline, and later versions require revalidation.
 Start Pi and run `/reload` after resource changes. Built-in MCP requires
 [Pi 0.99.0 or later](https://github.com/earendil-works/pi/releases/tag/v0.99.0).

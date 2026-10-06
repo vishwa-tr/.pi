@@ -20,29 +20,27 @@ function storage(t, runId = "run1") {
 	return { root, layout, lease };
 }
 
-test("state layout requires an existing ignore boundary before creating files", t => {
-	const root = repository(t, false);
-	assert.throws(() => prepareLayout(root, "run1"));
-	assert.equal(existsSync(join(root, ".swarms")), false);
-	assert.throws(() => prepareLayout(root, "../escape"), /identifier/);
-});
-
-test("tracked runtime data is refused even if an ignore rule exists", t => {
-	const root = repository(t);
-	mkdirSync(join(root, ".swarms"));
-	writeFileSync(join(root, ".swarms", "tracked"), "data");
-	execFileSync("git", ["-C", root, "add", "--force", ".swarms/tracked"]);
-	assert.throws(() => prepareLayout(root, "run1"), /must not be tracked/);
+test("state layout is pure, external to the project, and needs no Git ignore rule", t => {
+ const root = repository(t, false);
+ const layout = prepareLayout(root, "run1");
+ assert.ok(!layout.stateRoot.startsWith(root + "/"));
+ assert.equal(existsSync(layout.stateRoot), false);
+ assert.throws(() => prepareLayout(root, "../escape"), /identifier/);
+ const lease = acquireLease(layout); lease.release();
+ assert.equal(existsSync(join(root, ".gitignore")), false);
 });
 
 test("state directories reject symlinks and non-private permissions", t => {
-	const root = repository(t);
-	mkdirSync(join(root, "other"));
-	symlinkSync(join(root, "other"), join(root, ".swarms"));
-	assert.throws(() => prepareLayout(root, "run1"), /Unsafe state directory|symbolic link/);
-	rmSync(join(root, ".swarms"));
-	mkdirSync(join(root, ".swarms"), { mode: 0o755 });
-	assert.throws(() => prepareLayout(root, "run1"), /private/);
+ const root = repository(t);
+ const layout = prepareLayout(root, "run1");
+ const parent = join(layout.stateRoot, "..");
+ mkdirSync(parent, { recursive: true, mode: 0o700 });
+ mkdirSync(join(root, "other"));
+ symlinkSync(join(root, "other"), layout.stateRoot);
+ assert.throws(() => acquireLease(layout), /Unsafe state directory|symbolic link/);
+ rmSync(layout.stateRoot);
+ mkdirSync(layout.stateRoot, { mode: 0o755 });
+ if (process.platform !== "win32") assert.throws(() => acquireLease(layout), /private/);
 });
 
 test("one controller owns the checkout across processes and no stale lock is stolen", t => {
@@ -183,4 +181,28 @@ test("journal detects concurrent append and unsafe permission changes", t => {
 	chmodSync(layout.journalPath, 0o644);
 	assert.throws(() => openJournal(layout.journalPath, lease.assertOwned), /private/);
 	lease.release();
+});
+
+test('Windows storage branch needs neither getuid nor directory fsync', t => {
+ const root = repository(t);
+ const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+ const getuid = process.getuid;
+ Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+ process.getuid = undefined;
+ try {
+  const directory = join(root, 'windows-profile-state');
+  privateDirectory(directory);
+  const lease = acquireLease({ ...prepareLayout(root, 'portable', { agentDir: directory }), ownerSessionId: 'owner' });
+  lease.release();
+ } finally {
+  Object.defineProperty(process, 'platform', platform);
+  process.getuid = getuid;
+ }
+});
+
+test('state creation refuses aliased ancestors before writing outside its layout', t => {
+ const root = repository(t); mkdirSync(join(root, 'outside'));
+ symlinkSync(join(root, 'outside'), join(root, 'alias'), process.platform === 'win32' ? 'junction' : 'dir');
+ assert.throws(() => privateDirectory(join(root, 'alias', 'sessions', 'swarm')), /ancestry/);
+ assert.equal(existsSync(join(root, 'outside', 'sessions')), false);
 });

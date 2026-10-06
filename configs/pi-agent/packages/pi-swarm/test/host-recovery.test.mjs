@@ -1,3 +1,4 @@
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -24,7 +25,7 @@ async function orphanFixture(t, approval = approve) {
 	// Simulate journaled interrupted execution on a safely closed fixture only.
 	// No controller lease is stolen or deleted, and no real process is inferred dead.
 	let state = first.snapshot().run;
-	const journal = openJournal(join(root, ".swarms", "run1", "events.jsonl"), () => {});
+	const journal = openJournal(join(prepareLayout(root, "run1").stateRoot, "run1", "events.jsonl"), () => {});
 	const append = (actor, type, payload) => {
 		const event = { version: 1, operationId: randomUUID(), actor, type, payload, expectedRevision: state.revision, cycle: state.cycle, generation: state.generation, atMs: state.lastAtMs };
 		state = reduceEvent(state, event); journal.append(event);

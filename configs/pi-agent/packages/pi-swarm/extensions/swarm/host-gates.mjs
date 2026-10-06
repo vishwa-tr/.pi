@@ -52,8 +52,9 @@ export class ModeGate {
 	#controller = new AbortController();
 	#tokens = new WeakMap();
 	#retiredInstances = new Set();
+	#seenProvider = false;
 
-	constructor({ events, sessionId, onRevoke = () => {} }) {
+	constructor({ events, sessionId, onRevoke = () => { } }) {
 		if (!events || typeof events.on !== "function" || typeof events.emit !== "function"
 			|| typeof sessionId !== "string" || !sessionId || typeof onRevoke !== "function") throw modeError();
 		this.#events = events;
@@ -61,7 +62,7 @@ export class ModeGate {
 		this.#onRevoke = onRevoke;
 		const listener = (value) => {
 			if (this.#disposed) return;
-			try { this.#accept(copySnapshot(value), false); }
+			try { this.#seenProvider = true; this.#accept(copySnapshot(value), false); }
 			catch { this.#invalidate(); }
 		};
 		// Subscribe before the first query so changes during that query cannot be missed.
@@ -77,7 +78,7 @@ export class ModeGate {
 		this.#controller = new AbortController();
 		previous.abort(modeError());
 		// A failing pause callback must never undo fencing or leak private exception text.
-		try { Promise.resolve(this.#onRevoke("Mode permission changed or became unavailable.")).catch(() => {}); }
+		try { Promise.resolve(this.#onRevoke("Mode permission changed or became unavailable.")).catch(() => { }); }
 		catch { /* Tokens are already revoked. */ }
 	}
 
@@ -124,14 +125,20 @@ export class ModeGate {
 			this.#events.emit("pi-plan:query-mode", Object.freeze({
 				version: 1,
 				respond: (value) => {
-					if (!accepting) { this.#invalidate(); return; }
+					if (!accepting) { this.#seenProvider = true; this.#invalidate(); return; }
 					count++;
+					this.#seenProvider = true;
 					try { response = copySnapshot(value); }
 					catch { malformed = true; }
 				},
 			}));
 			accepting = false;
-			if (count !== 1 || malformed) throw modeError();
+			if (count === 0 && !this.#seenProvider) {
+				response = Object.freeze({
+					version: 1, instanceId: "absent", revision: 0, contextRevision: 0,
+					ready: true, sessionId: this.#sessionId, selectedMode: "off", enforcedMode: "off", runMode: null, pendingChange: false
+				});
+			} else if (count !== 1 || malformed) throw modeError();
 			this.#accept(response, true);
 			if (this.#disposed || !this.#healthy) throw modeError();
 			return this.#snapshot;
@@ -197,7 +204,7 @@ function safetyResult(value) {
 }
 
 /** One synchronous claimant, bounded asynchronous approval, and request-local cancellation. */
-export async function requestSafety({ events, request, signal, timeoutMs = 30_000 }) {
+export async function requestSafety({ events, request, signal, timeoutMs = 30_000, probe = false }) {
 	const controller = new AbortController();
 	let copiedRequest;
 	try { copiedRequest = safetyRequest(request, controller.signal); }
@@ -238,6 +245,8 @@ export async function requestSafety({ events, request, signal, timeoutMs = 30_00
 			}));
 			accepting = false;
 			if (settled) return;
+			if (count === 0 && performance.now() < deadline) { queueMicrotask(() => finish({ approved: false, unclaimed: true })); return; }
+			if (probe && count === 1 && !malformed) { finish({ approved: false, claimed: true }); return; }
 			if (count !== 1 || malformed || performance.now() >= deadline) { cancel(); return; }
 			// Invoke only after claim collection: duplicate providers never open dialogs.
 			Promise.resolve(provider(copiedRequest)).then((value) => {

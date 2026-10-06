@@ -27,7 +27,7 @@ for (const event of observations) {
 	if (event.type === "native-request") active.add(event.id);
 	if (event.type === "native-draining") assert.ok(active.has(event.id));
 	if (event.type === "native-settled") assert.ok(active.delete(event.id));
-	if (event.type === "shutdown" || event.type === "command" && event.name === "swarm" && event.args === "pause" && event.ok) {
+	if (event.type === "shutdown" || event.type === "command" && ["swarm", "fixture-swarm"].includes(event.name) && event.args === "pause" && event.ok) {
 		assert.equal(active.size, 0, "Pause/reload/shutdown cannot complete before native streams settle");
 	}
 }
@@ -37,7 +37,6 @@ assert.equal(events("native-binding").length, 2, "Native reload constructs a fre
 assert.deepEqual(events("native-network-guard"), [{ type: "native-network-guard", attempts: 0 }]);
 assert.ok(requests.every(request => request.authVerified && request.headersVerified && request.provider === "terminal-native" &&
 	request.model === "native-scripted" && request.api === "openai-responses"));
-assert.equal(events("tls-request").length, 0);
 const toolResults = requests.flatMap(request => request.messages.filter(message => message.role === "toolResult"));
 assert.ok(toolResults.some(message => message.toolName === "bash" && !message.isError && JSON.stringify(message.content).includes("phase8-approved")), "Real approved stdout returned to native provider");
 assert.ok(toolResults.some(message => message.toolName === "bash" && message.isError), "Real denied tool result returned to native provider");

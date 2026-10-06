@@ -1,32 +1,11 @@
-import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { createReadToolDefinition, createWriteToolDefinition, createEditToolDefinition, createBashToolDefinition, defineTool } from "@earendil-works/pi-coding-agent";
 
 const object = (properties) => Type.Object(properties, { additionalProperties: false });
 const strings = () => Type.Array(Type.String());
 
-function codingDefinitions() {
-	return [
-		{
-			name: "read", label: "Read",
-			description: "Read a workspace file through the guarded runtime and record its current fingerprint.",
-			parameters: object({ path: Type.String() }),
-		},
-		{
-			name: "edit", label: "Edit",
-			description: "Apply exact replacements to a claimed, freshly read file. Matches refer to the original contents and must not overlap.",
-			parameters: object({ path: Type.String(), edits: Type.Array(object({ oldText: Type.String(), newText: Type.String() })) }),
-		},
-		{
-			name: "write", label: "Write",
-			description: "Write a claimed workspace file through the guarded runtime; reread after acquiring a new claim.",
-			parameters: object({ path: Type.String(), content: Type.String() }),
-		},
-		{
-			name: "bash", label: "Bash",
-			description: "Run one authorized command with exclusive workspace access, releasing your file claims before waiting. Returns actual execution evidence.",
-			parameters: object({ command: Type.String() }),
-		},
-	];
+export function codingDefinitions(cwd) {
+	return [createReadToolDefinition(cwd), createEditToolDefinition(cwd), createWriteToolDefinition(cwd), createBashToolDefinition(cwd)];
 }
 
 function collaborationDefinitions() {
@@ -82,9 +61,9 @@ function collaborationDefinitions() {
 }
 
 /** Uniform definitions only; the bound host invocation owns all authority and lifecycle checks. */
-export function makeSessionTools(invoke, codingTools = ["read", "edit", "write", "bash"]) {
+export function makeSessionTools(invoke, codingTools = ["read", "edit", "write", "bash"], cwd = process.cwd()) {
 	if (typeof invoke !== "function") throw new TypeError("A bound tool invocation function is required");
-	const coding = codingDefinitions();
+	const coding = codingDefinitions(cwd);
 	const supported = new Set(coding.map((tool) => tool.name));
 	if (!Array.isArray(codingTools) || Array.from(codingTools).some((name) => !supported.has(name))) {
 		throw new TypeError("Unsupported coding tools; expected a subset of read, edit, write, bash");
@@ -93,8 +72,9 @@ export function makeSessionTools(invoke, codingTools = ["read", "edit", "write",
 	const definitions = [...coding.filter((tool) => codingTools.includes(tool.name)), ...collaborationDefinitions()];
 	return definitions.map((definition) => defineTool({
 		...definition,
-		async execute(toolCallId, params, signal) {
-			const result = await invoke(definition.name, params, { toolCallId, signal });
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
+			const result = await invoke(definition.name, params, { toolCallId, signal, onUpdate, ctx });
+			if (supported.has(definition.name) && (result.nativeResult || Array.isArray(result.content))) return result.nativeResult ?? result;
 			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},
 	}));

@@ -66,7 +66,7 @@ export class SwarmDashboard {
 		this.signal.removeEventListener("abort", this.abort);
 	}
 
-	invalidate() {}
+	invalidate() { }
 
 	handleInput(data) {
 		if (this.closed) return;
@@ -112,12 +112,6 @@ export class SwarmDashboard {
 			this.searching = true; this.draft = "";
 		} else if ((data === "n" || data === "N") && this.section === 5) this.seekMatch(data === "n" ? 1 : -1);
 		else if (data === "f" && this.section === 5) this.follow = !this.follow;
-		const status = this.snapshot?.run?.status;
-		if (data === "p") return this.finish("pause");
-		if (data === "s") return this.finish("stop");
-		if (data === "C") return this.finish("reconcile");
-		if (data === "r" && status === "paused") return this.finish("resume");
-		if (data === "R" && ["paused", "stopped", "completed", "failed"].includes(status)) return this.finish("restart");
 		if (/^[1-6]$/.test(data)) this.openSection(Number(data) - 1);
 		else if (matchesKey(data, "tab") || data === "l") this.openSection((this.section + 1) % sections.length);
 		else if (data === "h") this.openSection(this.section === 5 ? 1 : Math.max(0, this.section - 1));
@@ -184,7 +178,7 @@ export class SwarmDashboard {
 
 	body() {
 		const { run, driver, workspace, errors = [] } = this.snapshot ?? {};
-		if (!run) return "No run attached. Close and use /swarm start <goal> or restore <run-id>.";
+		if (!run) return "No run attached. Ask the main agent to start or restore Swarm.";
 		if (this.error) return this.error;
 		const worker = run.workers[this.workerIndex];
 		switch (this.section) {
@@ -204,19 +198,18 @@ export class SwarmDashboard {
 	render(width) {
 		if (width <= 0) return [""];
 		this.width = width;
-		if ((this.tui.terminal.rows ?? 24) < 12) return [truncateToWidth("Resize terminal; q/Esc back, p pause, s stop.", width, "")];
+		if ((this.tui.terminal.rows ?? 24) < 12) return [truncateToWidth("Resize terminal; q/Esc back. /swarm stop is the emergency brake.", width, "")];
 		const status = this.snapshot?.run?.status ?? "unattached";
-		const continuation = status === "paused" ? "r resume | R restart" : ["stopped", "completed", "failed"].includes(status) ? "R restart" : "";
 		const transport = this.snapshot?.run?.hostApprovals?.at(-1)?.provider?.transport;
-		const providerLabel = !this.snapshot?.run ? "not selected" : transport === "pi-native" ? "Pi native provider" : transport === "https-chat-completions" ? "HTTPS provider" : "mock only";
+		const providerLabel = !this.snapshot?.run ? "not selected" : transport === "pi-native" ? "Pi native provider" : "mock only";
 		const header = [
 			`SWARM live / ${providerLabel} | ${status}`,
-			this.searching ? "SEARCH · Enter find | Esc cancel" : this.help ? "HELP · j/k scroll | ? back" : `p PAUSE | s STOP | q/Esc ${this.section === 5 ? "back" : "close"}`,
-			`${continuation}${continuation ? " | " : ""}C reconcile (approval required)`,
+			this.searching ? "SEARCH · Enter find | Esc cancel" : this.help ? "HELP · j/k scroll | ? back" : `Read-only | q/Esc ${this.section === 5 ? "back" : "close"}`,
+			"Ask the main agent for controls; /swarm stop stops immediately",
 			"1 Overview  2 Workers  3 Tasks  4 Claims  5 Mail  6 History",
 			this.section === 5 ? "Conversation | / search | n/N match | f follow | ? help" : `${sections[this.section]} | ? help | j/k move | Tab pane`,
 		];
-		const help = "NAVIGATION\nj/k or arrows: workers / scroll\nh/l: previous / next pane; Tab: next pane\ngg/G or Home/End: top / bottom\nCtrl-u/d: half page; PgUp/PgDn: page\nEnter on worker or c: conversation\nq/Esc: conversation back; otherwise close\nCONVERSATION\n/: local literal search; Enter applies; Esc cancels\nEmpty search clears; n/N: next / previous match\nf: toggle follow tail; scrolling stops following\nCONTROLS (outside search only)\np: pause; s: stop; r: resume; R: restart\nC: reconcile (approval required)\nCtrl-c: unchanged Pi global control\nInspection never starts a worker. ? closes help.";
+		const help = "NAVIGATION\nj/k or arrows: workers / scroll\nh/l: previous / next pane; Tab: next pane\ngg/G or Home/End: top / bottom\nCtrl-u/d: half page; PgUp/PgDn: page\nEnter on worker or c: conversation\nq/Esc: conversation back; otherwise close\nCONVERSATION\n/: local literal search; Enter applies; Esc cancels\nEmpty search clears; n/N: next / previous match\nf: toggle follow tail; scrolling stops following\nCONTROL\nAsk the main agent to change Swarm state.\nClose this view and use /swarm stop for an emergency stop.\nCtrl-c: unchanged Pi global control\nInspection never starts a worker. ? closes help.";
 		const lines = displayText(this.help ? help : this.body()).split("\n").flatMap(line => wrapTextWithAnsi(line, width));
 		this.lines = lines;
 		this.pageSize = Math.max(1, Math.min(18, (this.tui.terminal.rows ?? 24) - header.length - 5));
@@ -256,7 +249,7 @@ function taskText(task, run) {
 	].join("\n");
 }
 
-export async function showDashboard(ctx, source, signal, onMount = () => {}) {
+export async function showDashboard(ctx, source, signal, onMount = () => { }) {
 	if (signal.aborted) return undefined;
 	let component;
 	try {

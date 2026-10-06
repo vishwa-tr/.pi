@@ -1,6 +1,4 @@
 import { requireCondition as check } from "./errors.mjs";
-import { assertNativeRuntime } from "./native-binding.mjs";
-import { isConstrainedRuntime } from "./constrained-provider.mjs";
 
 // These categories describe the complete context, not a promise to filter sensitive text.
 export const PROVIDER_DATA_SCOPE = Object.freeze([
@@ -20,10 +18,10 @@ export function validateProviderDescriptor(value) {
 		check(typeof value[key] === "string" && identityPattern.test(value[key]),
 			"PROVIDER", "Invalid provider identity");
 	}
-	check(["scripted-memory", "https-unsupported", "https-chat-completions", "pi-native"].includes(value.transport), "PROVIDER", "Unknown transport");
+	check(["scripted-memory", "pi-native"].includes(value.transport), "PROVIDER", "Unknown transport");
 	check(Array.isArray(value.outboundData) && value.outboundData.length === PROVIDER_DATA_SCOPE.length &&
 		PROVIDER_DATA_SCOPE.every((scope, index) => value.outboundData[index] === scope),
-	"PROVIDER", "The complete worker context data scope must be declared");
+		"PROVIDER", "The complete worker context data scope must be declared");
 	if (value.transport === "scripted-memory") {
 		check(value.provider === "swarm-mock" && value.api === "swarm-mock" && value.endpoint === "https://swarm-mock.invalid",
 			"PROVIDER", "Scripted transport requires the offline mock identity and endpoint");
@@ -34,18 +32,8 @@ export function validateProviderDescriptor(value) {
 			try { endpoint = new URL(value.endpoint); } catch { check(false, "PROVIDER", "Invalid informational endpoint"); }
 			check(typeof value.endpoint === "string" && value.endpoint.length <= 2048 &&
 				["http:", "https:"].includes(endpoint.protocol) && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash && endpoint.href === value.endpoint,
-			"PROVIDER", "Invalid informational endpoint");
+				"PROVIDER", "Invalid informational endpoint");
 		}
-	} else {
-		check(typeof value.endpoint === "string" && value.endpoint.length <= 2048, "PROVIDER", "Invalid endpoint");
-		let endpoint;
-		try { endpoint = new URL(value.endpoint); } catch { check(false, "PROVIDER", "Invalid endpoint"); }
-		check(endpoint.protocol === "https:" && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash &&
-			endpoint.href === value.endpoint, "PROVIDER", "Endpoint must be canonical HTTPS without credentials, query, or fragment");
-	}
-	if (value.transport === "https-chat-completions") {
-		check(value.api === "openai-completions" && value.provider !== "swarm-mock" && new URL(value.endpoint).pathname.endsWith("/chat/completions"),
-			"PROVIDER", "Constrained transport requires an exact Chat Completions endpoint and API");
 	}
 	return value;
 }
@@ -71,18 +59,14 @@ export function assertProviderSelection(capability, selection, modelRuntime) {
 	const descriptor = providerDescriptor(capability);
 	// Keep this before ANY runtime method. Default SDK runtimes may resolve ambient auth,
 	// OAuth, proxies, provider overrides and request-level model substitutions.
-	check(descriptor.transport !== "https-unsupported", "UNSUPPORTED_TRANSPORT",
-		"Real provider transport is unsupported; no credentials or network execution are authorized");
 	check(selection?.provider === descriptor.provider && selection.modelId === descriptor.modelId,
 		"PROVIDER", "Model selection differs from the immutable provider agreement");
-	if (descriptor.transport === "pi-native") return assertNativeRuntime(modelRuntime, capability, selection);
-	if (descriptor.transport === "https-chat-completions") {
-		check(isConstrainedRuntime(modelRuntime, capability) && (!selection.thinkingLevel || selection.thinkingLevel === "off"),
-			"PROVIDER", "A matching branded constrained runtime with thinking off is required");
-	}
 	const model = modelRuntime?.getModel(descriptor.provider, descriptor.modelId);
-	check(model?.provider === descriptor.provider && model.id === descriptor.modelId && model.api === descriptor.api && model.baseUrl === descriptor.endpoint,
-		"PROVIDER", "Provider/model/API/endpoint substitution denied");
+	check(model?.provider === descriptor.provider && model.id === descriptor.modelId && model.api === descriptor.api,
+		"PROVIDER", "Provider/model/API substitution denied");
+	if (descriptor.transport === "pi-native") return model;
+	// The offline mock has one fixed catalog entry.
+	check(model.baseUrl === descriptor.endpoint, "PROVIDER", "Provider endpoint substitution denied");
 	check(model.headers === undefined && model.samplingParams === undefined && model.compat === undefined,
 		"PROVIDER", "Provider header, routing, and payload overrides are unsupported");
 	return model;

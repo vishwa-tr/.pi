@@ -1,17 +1,19 @@
+import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { requireCondition as check, SwarmError } from "./errors.mjs";
 import { WorkspaceFiles } from "./workspace-files.mjs";
+import { codingDefinitions } from "./session-tools.mjs";
 import { WorkspaceScheduler } from "./workspace-scheduler.mjs";
-import { runShell } from "./shell.mjs";
+import { requireCondition as check, SwarmError } from "./errors.mjs";
 
 const attached = new WeakSet();
 const construction = Symbol("trusted workspace runtime");
 
 /** Trusted, model-free host adapter. Never expose controller/system or runner injection to workers. */
 export class WorkspaceRuntime {
-	static async attach(controller, { authorize = async () => false, runner = runShell, admission } = {}) {
+	static async attach(controller, { authorize = async () => false, runner, admission } = {}) {
 		check(!attached.has(controller), "OWNERSHIP", "Controller already has workspace coordination");
-		check(typeof authorize === "function" && typeof runner === "function", "INPUT", "Host authorization and execution functions required");
+		check(typeof authorize === "function" && (runner === undefined || typeof runner === "function"), "INPUT", "Host authorization and execution functions required");
 		controller.assertOwned();
 		const state = controller.snapshot();
 		check(["paused", "pausing", "stopping", "failing", "stopped", "completed", "failed"].includes(state.status), "STATE", "Attach before resuming work");
@@ -30,6 +32,7 @@ export class WorkspaceRuntime {
 	#files;
 	#authorize;
 	#runner;
+	#tools;
 	#admission;
 	#scheduler = new WorkspaceScheduler();
 	#owners = new Map();
@@ -41,7 +44,15 @@ export class WorkspaceRuntime {
 		this.#controller = controller;
 		this.#files = files;
 		this.#authorize = authorize;
-		this.#runner = runner;
+		this.#tools = new Map(codingDefinitions(controller.snapshot().workspaceRoot).map(tool => [tool.name, tool]));
+		this.#runner = runner ?? (async ({ command, signal, call = {} }) => {
+			// Native Bash settles its child before resolving or rejecting. A custom test
+			// runner must report settlement explicitly, including on cancellation.
+			try {
+				const result = await this.#tools.get("bash").execute(call.toolCallId ?? randomUUID(), { command, timeout: call.timeout }, signal, call.onUpdate, call.ctx);
+				return { nativeResult: result, settled: true, exitCode: result.structuredContent?.exit_code ?? (result.isError ? 1 : 0) };
+			} catch (error) { error.settled = true; throw error; }
+		});
 		this.#admission = admission;
 	}
 
@@ -97,11 +108,16 @@ export class WorkspaceRuntime {
 		check(task, "OWNERSHIP", "Claim a task before using the workspace adapter");
 		const binding = { workerId, assignmentId: task.assignment.id, cycle: state.cycle, generation: state.generation };
 		return Object.freeze({
-			read: path => {
+			read: (path, call = {}, params = {}) => {
 				const context = this.#context(binding);
-				const result = this.#files.read(path);
-				this.#reads.get(context.owner).set(result.path, result.fingerprint);
-				return result;
+				const canonical = this.#files.path(path);
+				const fingerprint = this.#files.fingerprint(path);
+				return this.#tools.get("read").execute(call.toolCallId ?? randomUUID(), { ...params, path: canonical }, context.signal, call.onUpdate, call.ctx).then(result => {
+					this.#check(context);
+					check(this.#files.fingerprint(canonical) === fingerprint, "STALE", "File changed while being read");
+					this.#reads.get(context.owner).set(canonical, fingerprint);
+					return result;
+				});
 			},
 			claim: paths => {
 				const context = this.#context(binding);
@@ -116,9 +132,9 @@ export class WorkspaceRuntime {
 				this.#scheduler.releaseClaims(context.owner);
 				this.#reads.get(context.owner).clear();
 			},
-			write: (path, content) => this.#mutate(binding, "write", path, content),
-			edit: (path, edits) => this.#mutate(binding, "edit", path, structuredClone(edits)),
-			shell: command => this.#shell(binding, command),
+			write: (path, content, call) => this.#mutate(binding, "write", path, { path, content }, call),
+			edit: (path, edits, call) => this.#mutate(binding, "edit", path, { path, edits: structuredClone(edits) }, call),
+			shell: (command, call) => this.#shell(binding, command, call),
 			submit: (summary, receipts) => this.#submit(binding, summary, structuredClone(receipts)),
 			review: (approved, summary) => this.#review(binding, approved, summary),
 		});
@@ -139,29 +155,30 @@ export class WorkspaceRuntime {
 		return fingerprint;
 	}
 
-	async #mutate(binding, kind, path, input) {
+	async #mutate(binding, kind, path, params, call = {}) {
 		const context = this.#context(binding);
 		const canonical = this.#files.path(path);
-		const expected = this.#reads.get(context.owner).get(canonical);
+		const expected = this.#reads.get(context.owner).get(canonical) ?? (kind === "write" && !existsSync(resolve(this.#controller.snapshot().workspaceRoot, canonical)) ? this.#files.fingerprint(canonical) : undefined);
 		check(expected, "STALE", "Read the current file after acquiring its claim");
 		return this.#scheduler.withMutation(context.owner, [canonical], async signal => {
 			await this.#permission(context, kind, [canonical], null, signal);
-			const result = await this.#execute(context, kind, [canonical], null, signal, () => {
-				const file = kind === "write" ? this.#files.write(canonical, input, expected) : this.#files.edit(canonical, input, expected);
-				return { file, settled: true, exitCode: null };
+			const result = await this.#execute(context, kind, [canonical], null, signal, async () => {
+				check(this.#files.fingerprint(canonical) === expected, "STALE", "Reread the changed target before editing");
+				const nativeResult = await this.#tools.get(kind).execute(call.toolCallId ?? randomUUID(), { ...params, path: canonical }, signal, call.onUpdate, call.ctx);
+				return { nativeResult, settled: true, exitCode: null };
 			});
-			this.#reads.get(context.owner)?.set(canonical, result.file.fingerprint);
+			this.#reads.get(context.owner)?.set(canonical, this.#files.fingerprint(canonical));
 			return result;
 		}, { signal: context.signal });
 	}
 
-	async #shell(binding, command) {
+	async #shell(binding, command, call = {}) {
 		check(typeof command === "string" && command.trim(), "INPUT", "Command required");
 		const context = this.#context(binding);
 		return this.#scheduler.withExclusive(context.owner, async signal => {
 			this.#reads.get(context.owner)?.clear();
 			await this.#permission(context, "shell", [], command, signal);
-			return this.#execute(context, "shell", [], command, signal, () => this.#runner({ command, cwd: this.#controller.snapshot().workspaceRoot, signal }));
+			return this.#execute(context, "shell", [], command, signal, () => this.#runner({ command, cwd: this.#controller.snapshot().workspaceRoot, signal, call }));
 		}, { signal: context.signal });
 	}
 
@@ -190,7 +207,15 @@ export class WorkspaceRuntime {
 		await this.#controller.system("workspace.finish", { id, after, exitCode: result?.exitCode ?? null, outcome });
 		if (failure) throw failure;
 		check(!uncertain, "UNSETTLED", "Execution required reconciliation and is not verification evidence");
-		return { ...result, executionId: id };
+		return {
+			...result, executionId: id, ...(result.nativeResult ? {
+				nativeResult: {
+					...result.nativeResult,
+					details: { ...result.nativeResult.details, executionId: id },
+					content: [...result.nativeResult.content, { type: "text", text: `Swarm execution receipt: ${id}` }]
+				}
+			} : {})
+		};
 	}
 
 	async #holdUncertain(id) {

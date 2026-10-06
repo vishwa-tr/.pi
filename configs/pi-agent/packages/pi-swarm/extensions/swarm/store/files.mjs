@@ -1,9 +1,20 @@
 import {
-	closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync,
-	openSync, readFileSync, renameSync, unlinkSync, writeSync,
+	openSync,
+	closeSync,
+	constants,
+	fstatSync,
+	fsyncSync,
+	lstatSync,
+	mkdirSync,
+	writeSync,
+	existsSync,
+	renameSync,
+	unlinkSync,
+	realpathSync,
+	readFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
 
 export function invariant(condition, message) {
 	if (!condition) throw new Error(message);
@@ -14,27 +25,31 @@ export function validId(value) {
 }
 
 export function syncDirectory(path) {
+	if (process.platform === "win32") return;
 	const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
 	try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
 export function privateDirectory(path) {
+	const parent = dirname(path);
+	if (!existsSync(parent)) privateDirectory(parent);
+	invariant(realpathSync(parent) === resolve(parent), "Unsafe state directory ancestry");
 	try {
-		mkdirSync(path, { mode: 0o700 });
+		mkdirSync(path, { mode: 0o700, recursive: true });
 		syncDirectory(dirname(path));
 	} catch (error) {
 		if (error.code !== "EEXIST") throw error;
 	}
 	const stat = lstatSync(path);
 	invariant(stat.isDirectory() && !stat.isSymbolicLink(), "Unsafe state directory");
-	invariant(stat.uid === process.getuid() && (stat.mode & 0o077) === 0, "State directory must be private and owned by this user");
+	invariant(process.platform === "win32" || (stat.uid === process.getuid() && (stat.mode & 0o077) === 0), "State directory must be private and owned by this user");
 	return stat;
 }
 
 export function checkedFile(fd) {
 	const stat = fstatSync(fd);
 	invariant(stat.isFile() && stat.nlink === 1, "State file must be a regular, single-link file");
-	invariant(stat.uid === process.getuid() && (stat.mode & 0o077) === 0, "State file must be private and owned by this user");
+	invariant(process.platform === "win32" || (stat.uid === process.getuid() && (stat.mode & 0o077) === 0), "State file must be private and owned by this user");
 	return stat;
 }
 

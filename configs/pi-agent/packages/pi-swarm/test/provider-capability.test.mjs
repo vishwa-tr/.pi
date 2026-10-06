@@ -1,3 +1,4 @@
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import {
 	assertProviderSelection, createProviderCapability, PROVIDER_DATA_SCOPE, providerDescriptor, validateProviderDescriptor,
 } from "../extensions/swarm/provider-capability.mjs";
@@ -36,18 +37,6 @@ test("provider descriptors are strict, detached, immutable, and cannot be deseri
 	for (const patch of [{ version: 2 }, { token: "not-allowed" }, { headers: {} }, { outboundData: [] },
 		{ endpoint: "https://elsewhere.invalid" }, { transport: "trusted-runtime" }, { api: "openai-responses" }]) {
 		assert.throws(() => createProviderCapability({ ...descriptor(), ...patch }), { code: "PROVIDER" });
-	}
-});
-
-test("real descriptors fail closed before calling any supplied runtime method", () => {
-	let calls = 0;
-	const live = { ...descriptor(), provider: "example", api: "openai-responses", transport: "https-unsupported", endpoint: "https://example.invalid/v1" };
-	validateProviderDescriptor(live);
-	const cap = createProviderCapability(live);
-	assert.throws(() => assertProviderSelection(cap, { provider: "example", modelId: "scripted" }, { getModel() { calls++; } }), { code: "UNSUPPORTED_TRANSPORT" });
-	assert.equal(calls, 0);
-	for (const endpoint of ["http://example.invalid/", "https://user:pass@example.invalid/", "https://example.invalid/?token=x", "https://example.invalid/#x"]) {
-		assert.throws(() => createProviderCapability({ ...live, endpoint }), { code: "PROVIDER" });
 	}
 });
 
@@ -109,18 +98,18 @@ test("offline SDK launch, resume, restart, mode revocation and restore retain fr
 	await restored.close();
 });
 
-test("unsupported live host launch creates no storage, requests no approval, and reads no runtime", async t => {
+test("missing native model fails before approval or storage", async t => {
 	guardNetwork(t);
 	const root = repository(t);
 	const mode = bus();
 	let reads = 0; let approvals = 0;
-	const cap = createProviderCapability({ ...descriptor(), provider: "example", api: "openai-responses", transport: "https-unsupported", endpoint: "https://example.invalid/v1" });
+	const cap = createProviderCapability({ ...descriptor(), provider: "example", api: "openai-responses", transport: "pi-native", endpoint: "https://example.invalid/v1" });
 	const host = new SwarmHost({ events: mode.events, sessionId: "owner1", providerCapability: cap,
-		mainModel: { provider: "example", id: "scripted" }, modelRuntime: { getModel() { reads++; throw new Error("forbidden"); } },
+		mainModel: { provider: "example", id: "scripted" }, modelRuntime: { getModel() { reads++; return undefined; } },
 		requestApproval() { approvals++; return approve(); } });
-	await assert.rejects(host.launch({ workspace: root, runId: "run1", specification: spec }), { code: "UNSUPPORTED_TRANSPORT" });
-	assert.equal(reads, 0); assert.equal(approvals, 0);
-	assert.equal(existsSync(join(root, ".swarms")), false);
+	await assert.rejects(host.launch({ workspace: root, runId: "run1", specification: spec }), { code: "PROVIDER" });
+	assert.equal(reads, 1); assert.equal(approvals, 0);
+	assert.equal(existsSync(join(prepareLayout(root, "run1").stateRoot)), false);
 	await host.close();
 });
 
@@ -154,7 +143,7 @@ test("approval answers cannot replace provider bindings or revive cancellation",
 	const paused = host.pause();
 	assert.equal(request.signal.aborted, true);
 	release(approve()); await pending; await paused;
-	assert.equal(existsSync(join(root, ".swarms")), false);
+	assert.equal(existsSync(join(prepareLayout(root, "run1").stateRoot)), false);
 	assert.equal(mock.calls.length, 0);
 	await host.close();
 });

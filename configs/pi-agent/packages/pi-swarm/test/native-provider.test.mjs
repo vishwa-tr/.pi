@@ -2,7 +2,7 @@ import {
 	createAssistantMessageEventStream, createProvider, envApiKeyAuth, InMemoryCredentialStore,
 } from "@earendil-works/pi-ai";
 import { assertProviderSelection, createProviderCapability } from "../extensions/swarm/provider-capability.mjs";
-import { assertNativeRuntime, bindNativeRuntime, createNativeRuntime } from "../extensions/swarm/native-provider.mjs";
+import { createNativeRuntime } from "../extensions/swarm/native-provider.mjs";
 import { createNativeSwarmExtension } from "../extensions/swarm/extension.mjs";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import test from "node:test";
@@ -71,11 +71,7 @@ async function fixture(script = () => ({ text: "Native fixture answer" }), regis
 	const mainModel = source.getModel(model.provider, model.id);
 	const input = { ...(registry ? { modelRegistry: new ModelRegistry(source) } : { modelRuntime: source }), mainModel, thinkingLevel: "high" };
 	const native = await createNativeRuntime(input);
-	const cancel = new AbortController();
-	let admissions = 0;
-	const admission = { assert: async () => { admissions++; cancel.signal.throwIfAborted(); }, check: () => cancel.signal.throwIfAborted(), signal: () => cancel.signal };
-	return { source, input, native, calls, cancel, admissions: () => admissions,
-		bound: bindNativeRuntime(native.modelRuntime, native.providerCapability, admission) };
+	return { source, input, native, calls, bound: native.modelRuntime };
 }
 
 for (const registry of [false, true]) for (const method of ["stream", "streamSimple", "complete", "completeSimple"]) {
@@ -89,13 +85,13 @@ for (const registry of [false, true]) for (const method of ["stream", "streamSim
 		const result = await (value.result ? value.result() : value);
 		assert.equal(result.stopReason, "stop", result.errorMessage);
 		assert.equal(result.usage.totalTokens, 15);
-		assert.equal(f.calls.length, 1); assert.equal(f.admissions(), 1);
+		assert.equal(f.calls.length, 1);
 		assert.equal(f.calls[0].options.apiKey, "memory-fixture-key");
 		assert.equal(headersSeen["X-Fixture"], "host-configured");
 		assert.equal(f.calls[0].options.headers["X-Transform"], "preserved");
 		assert.equal(f.calls[0].options.headers["X-Request"], "fixture");
 		assert.equal(f.calls[0].options.reasoning, "high");
-		assert.ok(!JSON.stringify(f.native).includes("memory-fixture-key"));
+		assert.equal(f.native.modelRuntime, f.source);
 	});
 }
 
@@ -111,42 +107,22 @@ test("native construction and factory do not create runtimes, resolve credential
 	const handlers = new Map(); let command;
 	extension({ registerMessageRenderer() {}, registerTool() {}, on: (name, fn) => handlers.set(name, fn), registerCommand: (_name, value) => { command = value; } });
 	await command.handler("status", { hasUI: false });
-	await handlers.get("session_start")({ reason: "start" }, { sessionManager: { getEntries: () => [] } });
+	await handlers.get("session_start")({ reason: "start" }, { sessionManager: { getEntries: () => [], getBranch: () => [] } });
 	assert.equal(f.calls.length, 0);
 });
 
-test("native capability cannot be copied, minted from descriptors or substituted for legacy HTTPS", async t => {
-	guardNetwork(t);
-	const f = await fixture();
-	const selection = { provider: f.native.mainModel.provider, modelId: f.native.mainModel.id, thinkingLevel: "high" };
-	assert.equal(createProviderCapability({ ...f.native.providerCapability.descriptor, modelId: "@org/model+v1", endpoint: null }).descriptor.endpoint, null);
-	assert.throws(() => assertProviderSelection(structuredClone(f.native.providerCapability), selection, f.native.modelRuntime), { code: "PROVIDER" });
-	assert.throws(() => assertProviderSelection(createProviderCapability(f.native.providerCapability.descriptor), selection, f.native.modelRuntime), { code: "PROVIDER" });
-	assert.throws(() => assertProviderSelection(f.native.providerCapability, selection, { ...f.native.modelRuntime }), { code: "PROVIDER" });
-	assert.equal((await f.native.modelRuntime.completeSimple(f.native.mainModel, context)).stopReason, "error");
-	await assert.rejects(createNativeRuntime({ modelRuntime: {}, mainModel: f.native.mainModel }), { code: "PROVIDER" });
-	const legacy = createProviderCapability({ ...f.native.providerCapability.descriptor, transport: "https-unsupported" });
-	assert.throws(() => assertProviderSelection(legacy, selection, f.native.modelRuntime), { code: "UNSUPPORTED_TRANSPORT" });
-	assert.equal(f.calls.length, 0);
-});
-
-test("native selection snapshot rejects catalog routing metadata drift before dispatch", async t => {
-	guardNetwork(t);
-	for (const patch of [{ headers: { Changed: "routing" } }, { compat: {} }, { samplingParams: { model: "other" } }, { baseUrl: "https://other.invalid/" }]) {
-		const f = await fixture();
-		const actual = f.source.getModel(f.native.mainModel.provider, f.native.mainModel.id);
-		Object.assign(actual, patch);
-		assert.throws(() => assertNativeRuntime(f.native.modelRuntime, f.native.providerCapability), { code: "PROVIDER" });
-		assert.equal((await f.bound.completeSimple(f.native.mainModel, context)).stopReason, "error");
-		assert.equal(f.calls.length, 0);
-	}
-});
-
-test("native abort after auth/header transformation prevents provider dispatch", async t => {
-	guardNetwork(t);
-	const f = await fixture();
-	const result = await f.bound.completeSimple(f.native.mainModel, context, { transformHeaders(headers) { f.cancel.abort(); return headers; } });
-	assert.equal(result.stopReason, "aborted"); assert.equal(f.calls.length, 0);
+test("native capabilities retain selection checks without wrapping the host runtime", async t => {
+ guardNetwork(t);
+ const f = await fixture();
+ const selection = { provider: f.native.mainModel.provider, modelId: f.native.mainModel.id, thinkingLevel: "high" };
+ assert.throws(() => assertProviderSelection(structuredClone(f.native.providerCapability), selection, f.native.modelRuntime), { code: "PROVIDER" });
+ assert.equal(assertProviderSelection(f.native.providerCapability, selection, f.source).id, selection.modelId);
+ assert.throws(() => assertProviderSelection(f.native.providerCapability, { ...selection, modelId: "wrong" }, f.source), { code: "PROVIDER" });
+ await assert.rejects(createNativeRuntime({ modelRuntime: {}, mainModel: f.native.mainModel }), { code: "PROVIDER" });
+ for (const endpoint of ["https://user:secret@example.com/", "https://example.com/?secret=x", "https://example.com/#secret"]) {
+  assert.throws(() => createProviderCapability({ ...f.native.providerCapability.descriptor, endpoint }), { code: "PROVIDER" });
+ }
+ assert.equal(f.calls.length, 0);
 });
 
 test("native SDK follows tools, compacts and restores paused with fresh durable approvals", async t => {

@@ -1,10 +1,10 @@
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { acquireLease } from "../extensions/swarm/store/lease.mjs";
-import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import { privateDirectory } from "../extensions/swarm/store/files.mjs";
 import { openJournal } from "../extensions/swarm/store/journal.mjs";
 import { machine, repository } from "./helpers.mjs";
@@ -15,10 +15,10 @@ test("missing run and invalid launch do not reserve the checkout", async t => {
 	const root = repository(t);
 	const options = { workspace: root, runId: "missing", ownerSessionId: "session1" };
 	await assert.rejects(SwarmController.open(options), code("NOT_FOUND"));
-	assert.equal(existsSync(join(root, ".swarms", "reservation.json")), false);
+	assert.equal(existsSync(join(prepareLayout(root, "run1").stateRoot, "reservation.json")), false);
 	await assert.rejects(SwarmController.open({ ...options, create: { objective: "x", criteria: [], scope: ["src"] } }), code("INPUT"));
-	assert.equal(existsSync(join(root, ".swarms", "controller.lock")), false);
-	assert.equal(existsSync(join(root, ".swarms", "reservation.json")), false);
+	assert.equal(existsSync(join(prepareLayout(root, "run1").stateRoot, "controller.lock")), false);
+	assert.equal(existsSync(join(prepareLayout(root, "run1").stateRoot, "reservation.json")), false);
 });
 
 test("losing a durable reservation fences a still-live controller", t => {
