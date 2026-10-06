@@ -26,7 +26,7 @@ as phases land; when one is off, find the code by its name.
 Update this checklist as each phase lands. Put the commit SHA after the box, as it
 appears on `refactor/pi-swarm-native` (after the rebase, not the worktree SHA).
 
-- [ ] Phase 0 — target the managed Pi installation, and a Linux baseline
+- [ ] Phase 0 — target the managed Pi installation, and a Linux baseline (0A done — `b585765`; 0B pending)
 - [x] Phase 1 — delete the custom HTTPS transport — `7ba5819`
 - [ ] Phase 2 — native session files
 - [ ] Phase 3 — plain model runtime
@@ -44,7 +44,7 @@ appears on `refactor/pi-swarm-native` (after the rebase, not the worktree SHA).
 | D2 | Import `pi-teams` code, or copy its pattern? | Agreed | Copy, never import. Swarm must stay a standalone package: no imports from `pi-teams`, `pi-subagents` or any other package in this repo, only from Pi itself. |
 | D3 | Must a run survive a Pi crash and resume in a different session? | Agreed: yes | A run can be picked up and continued later, from any Pi session in the same project. Keep a durable store, but move it out of the user's checkout into Pi's per-project session directory, so the `git init` / `.gitignore` setup goes away. See Phase 5. |
 | D4 | Where does the cleanup land? | Agreed | `refactor/pi-swarm-native` from `main`. `feat/pi-swarm` is already fully merged. |
-| D5 | Keep retries and compaction disabled in worker settings? | Open | Re-enable Pi's defaults unless a test shows they break pause/stop. Settle in Phase 3. |
+| D5 | Keep retries and compaction disabled in worker settings? | Agreed: turn both on | Use Pi's defaults for worker sessions. Retries stop a transient provider error (rate limit, overload) from failing a turn and burning one of a task's 3 attempts. Automatic compaction keeps long-running workers going; today nothing ever compacts a worker (`host.compact()` has no caller), so long workers eventually overflow and fail. Swarm re-sends the authoritative run state every turn, which covers what a lossy summary drops. Proven by the Phase 3 tests in step 5; a setting stays off only if its test can't be made to pass, with the reason recorded. |
 | D6 | Keep the `swarm-mock` scripted provider for offline tests? | Agreed for Phase 1 | Keep `scripted-memory` for now. Phase 3 may move it to a test-only provider registered through `pi.registerProvider`. |
 | D7 | Can runs recorded with an HTTPS provider still be restored after Phase 1? | Agreed | No. That transport was never used outside test fixtures, and an unknown transport already fails closed in `validateProviderDescriptor`. |
 | D9 | Which Pi installation do tests, the harness and the docs target? | Agreed | The managed Pi installation (`<agent-dir>/install`, layout `releases-v1`), as Pi recommends. No global-npm fallback; `PI_SDK_DIR` / `PI_BIN` remain explicit overrides. See Phase 0A. |
@@ -202,9 +202,19 @@ there is no way to tell whether a change broke something.
 
 ### 0B — Linux baseline
 
-1. In WSL Ubuntu (Node 18 today), install Node ≥ 22.19, then install Pi with
-   **Pi's managed installer**, not `npm install -g`, so Linux uses the same layout
-   as Windows. This installs software, so it needs the user's approval first.
+1. In WSL Ubuntu, install Pi with **Pi's managed installer**
+   (`https://pi.dev/install.sh`), not `npm install -g`, so Linux uses the same
+   layout as Windows. Approved by the user on 2026-10-06.
+   - Node 22.23.3 is already installed at `~/.local/share/pi-node/current` (WSL
+     home), SHA256-verified, using the same method as the installer's standalone
+     Node step.
+   - **Run the installer with a Linux-only `PATH`**, for example
+     `PATH="$HOME/.local/share/pi-node/current/bin:/usr/local/bin:/usr/bin:/bin"`,
+     and under `setsid` with stdin from `/dev/null`, so it takes its
+     no-terminal path. WSL appends the Windows `PATH` by default. On the first
+     attempt the installer found the Windows `pi` under `/mnt/c/...` and
+     "reinstalled" it, rewriting the Windows `bin/pi` and `managed-install.json`
+     (since restored). Before running, check that `command -v pi` finds nothing.
 2. Run `npm test` with no `PI_SDK_DIR` (proves 0A), then `test/terminal/run.py`,
    `production.py` and `native.py` with no `PI_BIN`.
 3. Fill in the table.
@@ -508,9 +518,20 @@ is the real check. It is passed as `requestAdmission` to `createSdkSession`
    from the model directly. `approval-state.mjs` validates the persisted descriptor;
    keep the persisted shape readable, or accept that old runs can't be restored
    (as D7).
-5. D5: in `createSdkSession`, remove `retry: { enabled: false … }` and
-   `compaction: { enabled: false }` from `SettingsManager.inMemory`, then run the
-   pause/stop tests. If one fails, keep that setting and write down why.
+5. D5 (both on): in `createSdkSession`, remove `retry: { enabled: false … }` and
+   `compaction: { enabled: false }` from `SettingsManager.inMemory`, so workers use
+   Pi's defaults. Leave `cacheWarming: "off"` as it is; D5 doesn't cover it. Add
+   tests that prove:
+   - pausing or stopping during a retry back-off ends the turn promptly, with no
+     further model request;
+   - pausing during an automatic compaction ends the turn promptly
+     (`abortCompaction` is already wired in `sessions.mjs`);
+   - a turn that still fails after the retries are used up marks the task failed
+     exactly once (one attempt used);
+   - a worker whose context crosses the threshold compacts and keeps going,
+     without failing its task.
+   If a test can't be made to pass, keep that one setting off, and record why here
+   and in D5.
 6. Tests: `test/native-provider.test.mjs` and `test/provider-capability.test.mjs`
    cover the tamper checks; remove those cases. Keep the model-selection cases
    (virtual model rejected, unsupported thinking level rejected).
