@@ -84,6 +84,26 @@ test("persistent specialist retains identity and context through pause and reope
 	await driver.pause(); await driver.close();
 });
 
+test("history of an open specialist comes from memory and never writes its session file", async t => {
+	const f = await fixture(t, [{ text: "Live decision" }]);
+	await f.driver.recruit(specialist("builder"));
+	f.driver.wake("builder"); await f.driver.idle();
+	const binding = f.c.snapshot().sessions.workers.find(worker => worker.workerId === "builder");
+	const path = join(f.root, ".swarms", "run1", "sessions", binding.sessionFile);
+	const original = readFileSync(path, "utf8");
+	// A concurrent append caught midway: Pi's file loader would "repair" it by appending a newline.
+	const partial = original + '{"type":"message","id":"partial';
+	writeFileSync(path, partial);
+	try {
+		const history = await f.driver.history("builder", 100);
+		assert.ok(history.some(entry => entry.type === "message"));
+		history.find(entry => entry.type === "message").message.content = "Mutated inspection";
+		assert.notDeepEqual(await f.driver.history("builder", 100), history, "History is a detached copy");
+		assert.equal(readFileSync(path, "utf8"), partial, "Reading history must not write the session file");
+	} finally { writeFileSync(path, original); }
+	await shutdown(f);
+});
+
 test("restored unopened history is detached, bounded, validated and independent of the model runtime", async t => {
 	const f = await fixture(t, [{ text: "Persisted decision" }]);
 	await f.driver.recruit(specialist("builder"));
@@ -127,7 +147,8 @@ test("restored unopened history is detached, bounded, validated and independent 
 		writeFileSync(path, records.map(record => JSON.stringify(record)).join("\n") + "\n");
 		await assert.rejects(driver.history("builder"), /Session history identity changed/);
 		writeFileSync(path, original + "not-json\n");
-		await assert.rejects(driver.history("builder"));
+		// Pi skips a malformed line, as it does when it reopens the session.
+		assert.deepEqual(await driver.history("builder", 100), expected);
 	} finally { writeFileSync(path, original); }
 	assert.equal(runtimeReads, 1);
 	assert.equal(f.mock.calls.length, 1);

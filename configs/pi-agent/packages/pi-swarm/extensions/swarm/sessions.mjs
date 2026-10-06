@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { privateDirectory } from "./store/files.mjs";
@@ -87,7 +88,7 @@ export class SwarmSessions {
 			const binding = sessionWorker(state, workerId);
 			const tools = makeSessionTools((name, params, call) => this.#invoke(entry, name, params, call), state.sessions.codingTools);
 			const created = await createSdkSession({
-				cwd: state.workspaceRoot, sessionDir: this.#sessionDir,
+				cwd: state.workspaceRoot, sessionDir: this.#sessionDir, sessionId: binding?.sessionId,
 				sessionFile: binding ? join(this.#sessionDir, binding.sessionFile) : undefined,
 				modelRuntime: this.#modelRuntime, selection: state.sessions.selection,
 				providerCapability: this.#providerCapability,
@@ -292,7 +293,6 @@ export class SwarmSessions {
 					}
 				}
 			}
-			entry.sync();
 			await this.#controller.system("session.turn.end", { id: context.id, outcome });
 			entry.active = null;
 			const task = this.#controller.snapshot().tasks.find(task => task.assignment?.workerId === workerId);
@@ -375,7 +375,17 @@ export class SwarmSessions {
 		const state = this.#controller.snapshot();
 		const binding = sessionWorker(state, workerId);
 		if (!binding) return [];
-		return readSessionHistory(join(this.#sessionDir, binding.sessionFile), state.workspaceRoot, binding.sessionId).slice(-limit);
+		const entries = this.liveHistory(workerId) ?? readSessionHistory(join(this.#sessionDir, binding.sessionFile), state.workspaceRoot, binding.sessionId);
+		return entries.slice(-limit);
+	}
+
+	/** Active branch of an open specialist session, from memory. Reading its file instead could race the
+	 * session's own appends: Pi's loader repairs a missing final newline by writing to the file.
+	 * Until Pi first writes the file there is no persisted history, matching a restored session. */
+	liveHistory(workerId) {
+		const manager = this.#entries.get(workerId)?.manager;
+		if (!manager) return undefined;
+		return existsSync(manager.getSessionFile()) ? structuredClone(manager.getBranch()) : [];
 	}
 
 	async idle() {
@@ -400,7 +410,7 @@ export class SwarmSessions {
 		for (const entry of this.#entries.values()) {
 			await entry.ready;
 			check(entry.session.isIdle, "UNSETTLED", "SDK session is not idle");
-			entry.sync(); entry.session.dispose();
+			entry.session.dispose();
 		}
 		clearInterval(this.#timer);
 		this.#closed = true;

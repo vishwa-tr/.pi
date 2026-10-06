@@ -1,12 +1,12 @@
 import test from "node:test";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { repository } from "./helpers.mjs";
+import { createMockRuntime } from "./sdk-env.mjs";
 import { SwarmHost } from "../extensions/swarm/host.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
-import { createMockRuntime } from "./sdk-env.mjs";
-import { repository } from "./helpers.mjs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const code = expected => error => error.code === expected;
 const approved = request => ({ approved: true, existingChanges: "preserve", reconciled: request.requiresReconciliation });
@@ -27,7 +27,7 @@ async function fixture(t, options = {}) {
 	return { root, ...bus, mock, host, launch };
 }
 
-test("read-only host history does not create sessions or dispatch and validates persisted identity", async t => {
+test("read-only host history does not create sessions, files or dispatch", async t => {
 	const f = await fixture(t, { script: () => ({ text: "History evidence" }) });
 	await f.launch();
 	await f.host.recruit({ id: "worker", specialization: "Review", brief: "Inspect", reason: "Independent inspection" });
@@ -39,10 +39,10 @@ test("read-only host history does not create sessions or dispatch and validates 
 	assert.throws(() => f.host.history("missing"), { code: "NOT_FOUND" });
 	const binding = before.run.sessions.workers[0];
 	const path = join(f.root, ".swarms", "run1", "sessions", binding.sessionFile);
-	const original = readFileSync(path, "utf8");
-	writeFileSync(path, original.replace(binding.sessionId, "wrong-identity"));
-	assert.throws(() => f.host.history("worker"));
-	writeFileSync(path, original);
+	// The open, unprompted session has no persisted history, and reading it writes nothing.
+	// Persisted identity checks for unopened sessions are covered in sdk-driver.test.mjs.
+	assert.deepEqual(entries, []);
+	assert.equal(existsSync(path), false);
 	await f.host.close();
 });
 

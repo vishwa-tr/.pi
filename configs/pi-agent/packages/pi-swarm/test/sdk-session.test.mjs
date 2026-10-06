@@ -1,5 +1,5 @@
 import {
-	chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
+	chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
 	rmSync, statSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import test from "node:test";
@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { createMockRuntime } from "./sdk-env.mjs";
-import { createSdkSession } from "../extensions/swarm/sdk-session.mjs";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
+import { createSdkSession, readSessionHistory } from "../extensions/swarm/sdk-session.mjs";
 
 async function fixture(t, script = []) {
 	const root = mkdtempSync(join(tmpdir(), "swarm-sdk-"));
@@ -59,28 +59,47 @@ test("public custom messages with triggerTurn false persist idle and queue durin
 test("native session identity persists before first prompt and after idle/reopen", async (t) => {
 	const f = await fixture(t, [{ text: "First answer" }, { text: "Second answer" }]);
 	const first = await f.open();
-	assert.equal(statSync(first.sessionFile).mode & 0o777, 0o600);
+	const bound = { sessionId: first.sessionId, sessionFile: first.sessionFile };
+	assert.equal(existsSync(first.sessionFile), false, "Pi writes the session file at the first prompt");
 	assert.equal(statSync(f.options.sessionDir).mode & 0o777, 0o700);
-	const empty = await f.open({ sessionFile: first.sessionFile });
+	const empty = await f.open(bound);
 	assert.equal(empty.sessionId, first.sessionId);
 	empty.session.dispose();
 	const events = [];
 	first.session.subscribe((event) => events.push(event.type));
 	await first.session.prompt("First request");
 	await first.session.waitForIdle();
-	first.sync();
 	assert.equal(first.session.isStreaming, false);
 	assert.ok(events.includes("agent_end"));
 	assert.ok(events.indexOf("agent_settled") > events.indexOf("agent_end"));
 	assert.equal(first.session.isIdle, true);
 	assert.equal(f.calls.length, 1);
 	first.session.dispose();
-	const reopened = await f.open({ sessionFile: first.sessionFile });
+	const reopened = await f.open(bound);
 	assert.equal(reopened.sessionId, first.sessionId);
 	assert.equal(reopened.sessionFile, first.sessionFile);
 	assert.ok(reopened.session.messages.some((message) => message.content?.[0]?.text === "First request"));
 	await reopened.session.prompt("Second request");
-	reopened.sync();
+	assert.ok(f.calls[1].context.messages.some((message) => message.content?.[0]?.text === "First answer"));
+	assert.equal(readdirSync(f.options.sessionDir).length, 1);
+});
+
+test("a session reopened before its first prompt keeps its identity when Pi files it under a new name", async t => {
+	const f = await fixture(t, [{ text: "First answer" }, { text: "Second answer" }]);
+	const first = await f.open();
+	const bound = { sessionId: first.sessionId, sessionFile: first.sessionFile };
+	first.session.dispose();
+	assert.deepEqual(readSessionHistory(bound.sessionFile, f.options.cwd, bound.sessionId), []);
+	const reopened = await f.open(bound);
+	assert.equal(reopened.sessionId, bound.sessionId);
+	await reopened.session.prompt("First request");
+	reopened.session.dispose();
+	const again = await f.open(bound);
+	assert.equal(again.sessionId, bound.sessionId);
+	assert.equal(again.sessionFile, reopened.sessionFile);
+	assert.ok(again.session.messages.some((message) => message.content?.[0]?.text === "First request"));
+	assert.deepEqual(readSessionHistory(bound.sessionFile, f.options.cwd, bound.sessionId), again.manager.getBranch());
+	await again.session.prompt("Second request");
 	assert.ok(f.calls[1].context.messages.some((message) => message.content?.[0]?.text === "First answer"));
 	assert.equal(readdirSync(f.options.sessionDir).length, 1);
 });
@@ -95,11 +114,10 @@ test("explicit custom tools replace builtin names and unknown builtin calls neve
 		name: "read", label: "Guarded read", description: "Only the supplied read", parameters: Type.Object({ path: Type.String() }),
 		async execute() { reads++; return { content: [{ type: "text", text: "guarded" }], details: {} }; },
 	};
-	const { session, sync } = await f.open({ customTools: [read] });
+	const { session } = await f.open({ customTools: [read] });
 	assert.deepEqual(session.getActiveToolNames(), ["read"]);
 	assert.deepEqual(session.getAllTools().map((tool) => [tool.name, tool.sourceInfo.source]), [["read", "sdk"]]);
 	await session.prompt("Call the tools");
-	sync();
 	assert.equal(reads, 1);
 	assert.deepEqual(getCurrentTools(f.calls[0].context.messages).map((tool) => tool.name), ["read"]);
 	assert.ok(session.messages.some((message) => message.role === "toolResult" && message.toolName === "bash" && message.isError));
@@ -132,14 +150,13 @@ test("resource loader ignores project context, extensions, prompts, skills, and 
 
 test("abort reaches mock stream and real SDK becomes idle without retry", async (t) => {
 	const f = await fixture(t, [{ waitForAbort: true }]);
-	const { session, sync } = await f.open();
+	const { session } = await f.open();
 	const prompt = session.prompt("Wait");
 	await until(() => f.calls.length === 1);
 	assert.equal(session.isStreaming, true);
 	await session.abort();
 	await prompt;
 	await session.waitForIdle();
-	sync();
 	assert.equal(session.isStreaming, false);
 	assert.equal(f.calls[0].options.signal.aborted, true);
 	assert.equal(f.calls.length, 1);
@@ -151,7 +168,7 @@ test("Pi 1.0 abort and idle wait for agent_settled after an uncooperative provid
 	const held = new Promise(resolve => { release = resolve; });
 	t.after(() => release());
 	const f = await fixture(t, async () => { await held; return { text: "Must not escape abort" }; });
-	const { session, sync } = await f.open();
+	const { session } = await f.open();
 	const events = [];
 	session.subscribe(event => events.push(event.type));
 	const prompt = session.prompt("Hold the provider");
@@ -171,29 +188,6 @@ test("Pi 1.0 abort and idle wait for agent_settled after an uncooperative provid
 	assert.equal(session.isIdle, true);
 	assert.equal(session.messages.at(-1).stopReason, "aborted");
 	assert.ok(events.indexOf("agent_settled") > events.indexOf("agent_end"));
-	sync();
-});
-
-test("Pi 1.0 system history is validated on synchronization and reopen", async t => {
-	const f = await fixture(t, [{ text: "Answer" }]);
-	const first = await f.open();
-	await first.session.prompt("Persist structured system state");
-	first.sync();
-	first.session.dispose();
-	const records = readFileSync(first.sessionFile, "utf8").trimEnd().split("\n").map(JSON.parse);
-	const systemIndex = records.findIndex(entry => entry.type === "message" && entry.message.role === "system");
-	assert.ok(systemIndex > 0, "Actual Pi 1.0 must persist a system message");
-	for (const patch of [
-		{ content: [{ type: "image", data: "unsupported" }] }, { sections: { policy: 123 } },
-		{ replace: "yes" }, { replace: true }, { toolsAdded: [{ name: "bad" }] }, { toolsRemoved: [null] },
-	]) {
-		const corrupted = structuredClone(records);
-		Object.assign(corrupted[systemIndex].message, patch);
-		const text = corrupted.map(JSON.stringify).join("\n") + "\n";
-		writeFileSync(first.sessionFile, text);
-		await assert.rejects(f.open({ sessionFile: first.sessionFile }));
-		assert.equal(readFileSync(first.sessionFile, "utf8"), text);
-	}
 });
 
 test("Pi 1.0 branch context edits and retain-none checkpoints reopen without rewriting raw history", async t => {
@@ -205,18 +199,17 @@ test("Pi 1.0 branch context edits and retain-none checkpoints reopen without rew
 	const assistant = entries.find(entry => entry.type === "message" && entry.message.role === "assistant");
 	first.manager.appendContextEdit(user.id, { content: "Replacement request" });
 	first.manager.appendContextEdit(assistant.id, null);
-	first.sync();
 	first.session.dispose();
-	const reopened = await f.open({ sessionFile: first.sessionFile });
+	const bound = { sessionId: first.sessionId, sessionFile: first.sessionFile };
+	const reopened = await f.open(bound);
 	await reopened.session.prompt("Continue");
 	assert.match(JSON.stringify(f.calls[1].context), /Replacement request/);
 	assert.doesNotMatch(JSON.stringify(f.calls[1].context), /Original request|Omitted response/);
 	assert.equal(reopened.manager.getEntry(assistant.id).message.content[0].text, "Omitted response");
 	const checkpointId = reopened.manager.appendCompaction("Retain only this summary", null, 100);
 	assert.equal(reopened.manager.getEntry(checkpointId).firstKeptEntryId, checkpointId);
-	reopened.sync();
 	reopened.session.dispose();
-	const compacted = await f.open({ sessionFile: first.sessionFile });
+	const compacted = await f.open(bound);
 	assert.ok(compacted.session.messages.some(message => message.role === "compactionSummary"));
 	assert.ok(!compacted.session.messages.some(message => message.role === "assistant"));
 	assert.equal(compacted.manager.getEntry(assistant.id).message.content[0].text, "Omitted response");
@@ -227,12 +220,11 @@ test("manual native compaction preserves session, summary, and full durable hist
 		{ text: "Remember the original decision" }, { text: "Recent response" },
 		{ text: "## Goal\nPreserve the original decision." },
 	]);
-	const { session, manager, sync, sessionFile, sessionId } = await f.open();
+	const { session, manager, sessionFile, sessionId } = await f.open();
 	await session.prompt("We decided to preserve history.");
 	await session.prompt("Recent context. ".repeat(7000));
 	const before = manager.getEntries().filter((entry) => entry.type === "message").length;
 	const result = await session.compact("Keep the decision and current task");
-	sync();
 	assert.match(result.summary, /original decision/);
 	assert.equal(session.sessionId, sessionId);
 	assert.equal(manager.getEntries().filter((entry) => entry.type === "message").length, before);
@@ -244,16 +236,15 @@ test("manual native compaction preserves session, summary, and full durable hist
 	assert.equal(f.calls[2].model.provider, "swarm-mock");
 	assert.match(JSON.stringify(f.calls[2].context), /Keep the decision/);
 	session.dispose();
-	const reopened = await f.open({ sessionFile });
+	const reopened = await f.open({ sessionId, sessionFile });
 	assert.equal(reopened.sessionId, sessionId);
 	assert.ok(reopened.session.messages.some((message) => message.role === "compactionSummary"));
 });
 
 test("transient provider failures do not retry or compact automatically", async (t) => {
 	const f = await fixture(t, [{ error: "429 rate limit exceeded" }]);
-	const { session, manager, sync } = await f.open();
+	const { session, manager } = await f.open();
 	await session.prompt("Fail once");
-	sync();
 	assert.equal(f.calls.length, 1);
 	assert.equal(session.messages.at(-1).stopReason, "error");
 	assert.equal(manager.getEntries().some((entry) => entry.type === "compaction"), false);
@@ -261,7 +252,7 @@ test("transient provider failures do not retry or compact automatically", async 
 
 test("aborted native manual compaction retains original history and identity", async (t) => {
 	const f = await fixture(t, [{ text: "Old decision" }, { text: "Recent response" }, { waitForAbort: true }]);
-	const { session, manager, sync, sessionId } = await f.open();
+	const { session, manager, sessionId } = await f.open();
 	await session.prompt("Old decision");
 	await session.prompt("Recent context. ".repeat(7000));
 	const before = manager.getEntries();
@@ -270,7 +261,6 @@ test("aborted native manual compaction retains original history and identity", a
 	await until(() => f.calls.length === 3);
 	session.abortCompaction();
 	await rejected;
-	sync();
 	assert.equal(session.sessionId, sessionId);
 	assert.deepEqual(manager.getEntries(), before);
 	assert.equal(f.calls[2].options.signal.aborted, true);
@@ -279,12 +269,11 @@ test("aborted native manual compaction retains original history and identity", a
 
 test("failed native manual compaction does not retry or erase original history", async (t) => {
 	const f = await fixture(t, [{ text: "Old decision" }, { text: "Recent response" }, { error: "429 rate limit exceeded" }]);
-	const { session, manager, sync } = await f.open();
+	const { session, manager } = await f.open();
 	await session.prompt("Old decision");
 	await session.prompt("Recent context. ".repeat(7000));
 	const before = manager.getEntries();
 	await assert.rejects(session.compact("Keep the decision"), /429|rate limit/);
-	sync();
 	assert.deepEqual(manager.getEntries(), before);
 	assert.equal(f.calls.length, 3);
 });
@@ -302,53 +291,41 @@ test("approved thinking is uniform and not restored from a previous selection", 
 	const f = await fixture(t);
 	const first = await f.open({ selection: { ...f.selection, thinkingLevel: "high" } });
 	assert.equal(first.session.thinkingLevel, "high");
-	const second = await f.open({ sessionFile: first.sessionFile });
+	const second = await f.open({ sessionId: first.sessionId, sessionFile: first.sessionFile });
 	assert.equal(second.session.thinkingLevel, "off");
 	assert.equal(second.session.model.id, f.selection.modelId);
 });
 
-test("existing malformed JSONL is rejected unchanged, never repaired or reset", async (t) => {
+test("reopen rejects a session file from another session or workspace and leaves it unchanged", async (t) => {
 	const f = await fixture(t, [{ text: "Valid response" }]);
 	const first = await f.open();
 	await first.session.prompt("Valid request");
-	first.sync();
 	first.session.dispose();
-	const original = readFileSync(first.sessionFile, "utf8");
-	const lines = original.trimEnd().split("\n");
-	const header = JSON.parse(lines[0]);
-	const entry = JSON.parse(lines[1]);
-	const cases = [
-		"", original.slice(0, -1), original + "{broken\n", original + "\n", "not-json\n" + original,
-		JSON.stringify({ ...header, version: 1 }) + "\n",
-		JSON.stringify({ ...header, cwd: f.root }) + "\n",
-		original + JSON.stringify(entry) + "\n",
-		original + JSON.stringify({ ...entry, id: "new", parentId: "missing" }) + "\n",
-	];
-	for (const text of cases) {
+	const bound = { sessionId: first.sessionId, sessionFile: first.sessionFile };
+	const [line, ...rest] = readFileSync(first.sessionFile, "utf8").split("\n");
+	const header = JSON.parse(line);
+	for (const changed of [{ ...header, id: "other-session" }, { ...header, cwd: f.root }]) {
+		const text = [JSON.stringify(changed), ...rest].join("\n");
 		writeFileSync(first.sessionFile, text);
-		await assert.rejects(f.open({ sessionFile: first.sessionFile }));
+		await assert.rejects(f.open(bound), /identity/);
+		assert.throws(() => readSessionHistory(bound.sessionFile, f.options.cwd, bound.sessionId), /identity/);
 		assert.equal(readFileSync(first.sessionFile, "utf8"), text);
 	}
 });
 
-test("session paths reject symlinks, hardlinks, traversal, outside files and public permissions", async (t) => {
-	const f = await fixture(t);
+test("session paths reject symlinks, traversal, outside files and a public directory", async (t) => {
+	const f = await fixture(t, [{ text: "Persisted response" }]);
 	const first = await f.open();
+	await first.session.prompt("Persist the session file");
+	const bound = { sessionId: first.sessionId, sessionFile: first.sessionFile };
 	const symlink = join(f.options.sessionDir, "alias.jsonl");
 	symlinkSync(first.sessionFile, symlink);
-	await assert.rejects(f.open({ sessionFile: symlink }), /aliases|symlinks/);
+	await assert.rejects(f.open({ ...bound, sessionFile: symlink }), /aliases|symlinks/);
 	const aliasDir = join(f.root, "alias-dir");
 	symlinkSync(f.options.sessionDir, aliasDir);
 	await assert.rejects(f.open({ sessionDir: aliasDir }));
-	await assert.rejects(f.open({ sessionFile: join(f.root, "outside.jsonl") }), /inside/);
-	await assert.rejects(f.open({ sessionFile: `${f.options.sessionDir}/../sessions/${first.sessionFile.split("/").at(-1)}` }), /inside|canonical/);
-	const hardlink = join(f.options.sessionDir, "hardlink.jsonl");
-	linkSync(first.sessionFile, hardlink);
-	await assert.rejects(f.open({ sessionFile: first.sessionFile }), /single-link/);
-	rmSync(hardlink);
-	chmodSync(first.sessionFile, 0o644);
-	await assert.rejects(f.open({ sessionFile: first.sessionFile }), /private/);
-	chmodSync(first.sessionFile, 0o600);
+	await assert.rejects(f.open({ ...bound, sessionFile: join(f.root, "outside.jsonl") }), /inside/);
+	await assert.rejects(f.open({ ...bound, sessionFile: `${f.options.sessionDir}/../sessions/${first.sessionFile.split("/").at(-1)}` }), /inside|canonical/);
 	chmodSync(f.options.sessionDir, 0o755);
-	await assert.rejects(f.open({ sessionFile: first.sessionFile }), /private/);
+	await assert.rejects(f.open(bound), /private/);
 });

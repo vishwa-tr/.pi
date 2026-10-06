@@ -117,7 +117,7 @@ export class SwarmHost {
 		check(run?.workers.some(worker => worker.id === workerId), "NOT_FOUND", "Worker does not exist");
 		const binding = run.sessions?.workers.find(worker => worker.workerId === workerId);
 		if (!binding) return [];
-		return readSessionHistory(join(run.workspaceRoot, ".swarms", run.runId, "sessions", binding.sessionFile), run.workspaceRoot, binding.sessionId);
+		return this.#driver?.liveHistory(workerId) ?? readSessionHistory(join(run.workspaceRoot, ".swarms", run.runId, "sessions", binding.sessionFile), run.workspaceRoot, binding.sessionId);
 	}
 
 	#invalidate() {

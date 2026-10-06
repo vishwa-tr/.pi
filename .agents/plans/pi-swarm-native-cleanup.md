@@ -489,6 +489,68 @@ around lines 900–960: `SessionManager.open(latest, instanceDir, cwd)` /
 **Done when** `grep -rn "JSON.parse\|split(\"\\\\n\")" extensions/swarm/sdk-session.mjs`
 finds nothing, and nothing in the package reads Pi session JSONL directly.
 
+### Found during
+
+- **When Pi writes the file (step 3).** Pi 1.0.4's `SessionManager` writes a new
+  session file once it holds a user or assistant message (`_hasConversation`, then
+  `openSync(path, "wx")`), so at the first prompt, before the model request, not at
+  the first reply. Until then `getSessionFile()` is only the name Pi will use.
+- **A bound session can have no file, and that is normal.** `recruit` binds the
+  worker straight away, so a worker recruited and never woken before a pause or Pi
+  exit has a binding and no file. `SessionManager.open` on a missing path starts a
+  session with a *new random ID* at that path, so it can't restore the identity.
+  `SessionManager.create(cwd, dir, { id })` keeps the ID but files it under a new
+  timestamped name. A rebind is not possible either: `session.bind` rejects a second
+  binding for the worker (`session-state.mjs`), and changing the reducer is outside
+  this phase.
+  Decision: the binding stays as recorded. Reopen and history use the bound file if
+  it exists; otherwise `SessionManager.findById(cwd, sessionId, sessionDir)` (which
+  also checks the header `cwd`); otherwise reopen creates the session with the bound
+  ID and history returns `[]`. So `binding.sessionFile` can name a file that never
+  appears, when the worker was reopened before its first prompt. The PTY assertion
+  scripts (`assert-native.mjs`, `assert-production.mjs`) still read
+  `binding.sessionFile` directly; they pass because their flows prompt before any
+  reload. Phase 5, which moves storage, may want to store only the ID.
+- **Session file mode.** Pi creates session files with the default mode (0644 under
+  umask 022), not 0600, so the per-file private / single-link checks went with
+  `validateSession` and `sync`. The 0700 session directory check (`privateDirectory`)
+  and the canonical / no-symlink check on the file (`canonicalPath`) stay.
+- **What Pi does with a damaged file.** It skips malformed lines and blank lines,
+  repairs a missing final newline, and migrates older versions; Swarm now accepts
+  all of those. A non-empty file whose header doesn't parse is rejected by Pi. An
+  empty (0-byte) bound file is rewritten by Pi with a fresh header and random ID
+  before Swarm's identity check rejects it, so it is rejected but not left unchanged.
+  Swarm's own checks after open: session ID and `getCwd()` match the binding.
+- **History is now the active branch** (`getBranch()`), not every entry in file order.
+- **Step 1:** `THINKING_LEVELS` is still used by `createSdkSession`'s selection check,
+  so it stays (Phase 3 reworks model selection).
+- **Step 6:** `createAgentSessionServices` builds a `DefaultResourceLoader` from
+  options and can't take the isolated loader, so it would not remove code. Kept
+  `createAgentSession`.
+- `SwarmSessions.close()` also called `entry.sync()`; removed with the per-turn call.
+- **Review fix: history of an open session comes from memory.** Pi's
+  `loadEntriesFromFile` *writes* to the file when the last line has no final newline
+  (it appends `"
+"`). That is exactly what a reader sees while a live worker
+  session is midway through an append, and the dashboard and `swarm_history` read
+  history while other workers run. So `SwarmSessions.liveHistory()` returns a
+  detached copy of the open session's `getBranch()` (or `[]` until Pi has written
+  the file), and both `SwarmSessions.history` and `SwarmHost.history` use it before
+  falling back to the file. The file path is now only used for unopened sessions,
+  which have no live writer (the run lease keeps other processes out). New test:
+  "history of an open specialist comes from memory and never writes its session
+  file"; it fails with the fix disabled.
+- `test/host.test.mjs` "read-only host history…": its worker's session is open in
+  memory, so a planted wrong-identity file is (correctly) never read. The test now
+  checks that history is `[]` and creates no file. Persisted-identity rejection for
+  unopened sessions stays covered in `sdk-driver.test.mjs`.
+
+**Result:** Linux 524 tests, 523 pass, only the known `ctime` flake fails; PTY
+`run.py`, `production.py`, `native.py` pass. Windows 524 / 360 / 164: the five new or
+renamed `sdk-session`, `sdk-driver` and `host` test names fail with the same
+directory-fsync `EPERM` as the rest of those files; the four names gone from the
+baseline were deleted, replaced or renamed.
+
 ## Phase 3 — plain model runtime
 
 **Why:** `native-binding.mjs` (90 lines) and `native-provider.mjs` (45 lines) wrap
