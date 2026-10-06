@@ -40,5 +40,6 @@
   "skills": [
     "./skills"
   ],
-  "lastChangelogVersion": "0.85.1"
+  "lastChangelogVersion": "0.85.1",
+  "enableInstallTelemetry": false
 }
