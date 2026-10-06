@@ -30,7 +30,7 @@ When configuration and legacy examples disagree, follow the active tooling for m
 
 - Let the configured formatter decide indentation, quotes, semicolons, trailing commas, and line wrapping.
 - Preserve import grouping and ordering used by nearby files or enforced by lint rules.
-- When the repository provides no import-order convention, put wrapped multi-line import blocks first, alphabetize imported members, then arrange single-line imports roughly from shortest to longest.
+- When the repository provides no import-order convention, put wrapped multi-line import blocks first, order their member lines by character length from shortest to longest, then arrange single-line imports roughly from shortest to longest.
 - Keep directives such as `"use client"` or shebangs in their required positions.
 - Remove unused imports and avoid introducing aliases that obscure module ownership.
 - Do not reorder or reformat untouched code merely to make the whole file uniform.
