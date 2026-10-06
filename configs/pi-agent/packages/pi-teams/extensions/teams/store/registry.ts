@@ -11,13 +11,12 @@
  * from IO (read/write) so it unit-tests without a filesystem.
  */
 
-import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { formatAgentAddress, GENERATION_ID_RE } from "../mail/envelope.ts";
+import { randomBytes } from "node:crypto";
 import { atomicWriteJson } from "./atomic.ts";
+import { formatAgentAddress, GENERATION_ID_RE } from "../mail/envelope.ts";
 
 export type AgentState = "queued" | "running" | "dormant" | "waiting";
-export type Lifetime = "persistent" | "oneshot";
 
 /** The one definition of "working" — what the fleet-wide stop brake targets. */
 export function isWorking(state: AgentState): boolean {
@@ -36,7 +35,6 @@ export interface AgentVitals {
 export interface AgentRecord {
 	type: string;
 	id: string;
-	lifetime: Lifetime;
 	/** Optional display-only label ("what is this one doing") — never part of the address. */
 	label?: string;
 	/** Incarnation fence `gen_<32hex>` — bumped when the session handle is rebuilt. */
@@ -73,7 +71,6 @@ export function defaultVitals(state: AgentState = "dormant"): AgentVitals {
 export interface UpsertInput {
 	type: string;
 	id: string;
-	lifetime: Lifetime;
 	typeFileHash: string;
 	now: string;
 	/** Display-only label; on re-spawn a provided label replaces the old one. */
@@ -93,7 +90,6 @@ export function upsertAgent(registry: Registry, input: UpsertInput): { record: A
 	const record: AgentRecord = {
 		type: input.type,
 		id: input.id,
-		lifetime: input.lifetime,
 		...(input.label !== undefined ? { label: input.label } : {}),
 		generationId: newGenerationId(),
 		typeFileHash: input.typeFileHash,
@@ -122,7 +118,6 @@ export function removeAgent(registry: Registry, address: string): boolean {
 }
 
 export interface AgentPatch {
-	lifetime?: Lifetime;
 	generationId?: string;
 	typeFileHash?: string;
 	lastActiveAt?: string;
@@ -158,7 +153,6 @@ function hasValidIdentity(value: unknown): value is AgentRecord {
 	if (typeof value !== "object" || value === null) return false;
 	const r = value as Record<string, unknown>;
 	if (typeof r.type !== "string" || typeof r.id !== "string") return false;
-	if (r.lifetime !== "persistent" && r.lifetime !== "oneshot") return false;
 	if (typeof r.generationId !== "string" || !GENERATION_ID_RE.test(r.generationId)) return false;
 	if (typeof r.typeFileHash !== "string") return false;
 	if (typeof r.createdAt !== "string" || typeof r.lastActiveAt !== "string") return false;
@@ -191,6 +185,9 @@ export function readRegistry(path: string): Registry {
 		if (typeof agents === "object" && agents !== null) {
 			for (const [address, record] of Object.entries(agents)) {
 				if (!hasValidIdentity(record) || formatAgentAddress(record.type, record.id) !== address) continue;
+				// Older registries carry a lifetime flag. Keep their identity and memory;
+				// all team agents now persist until explicitly retired.
+				delete (record as unknown as Record<string, unknown>).lifetime;
 				if (!vitalsAreValid((record as AgentRecord).vitals)) {
 					(record as AgentRecord).vitals = defaultVitals("dormant");
 				}

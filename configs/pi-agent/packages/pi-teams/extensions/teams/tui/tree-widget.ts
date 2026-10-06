@@ -18,11 +18,11 @@
  * events + a poll without calling setWidget again.
  */
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type Component, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import type { SubagentsCore } from "../core.ts";
 import type { AgentActivityRow } from "../runtime/types.ts";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { fitThinkingSummary, THINKING_PLACEHOLDER } from "../text.ts";
+import { truncateToWidth, type Component, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 
 /**
  * The human brake: stop every working agent (D22). Bound in index.ts and shown in
@@ -80,7 +80,7 @@ export function renderTreeLines(
 		const last = i === rows.length - 1;
 		const branch = last ? "└─" : "├─";
 		const cont = last ? "   " : "│  ";
-		// The display label makes anonymous oneshots readable: worker/tmp-3f9a “lint sweep”.
+		// The display label describes the work: worker/lint “lint sweep”.
 		const label = row.label ? ` “${row.label}”` : "";
 		const context = row.ctxPercent === null ? "?" : `${row.ctxPercent.toFixed(1)}%`;
 		const metrics = [

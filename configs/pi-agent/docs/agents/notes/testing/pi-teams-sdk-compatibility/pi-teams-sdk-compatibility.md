@@ -2,7 +2,18 @@
 
 ## Outcome
 
-The current `pi-teams` extension passes its strict typecheck, all 11 end-to-end harnesses (114 checks), and a live step-by-step validation in Pi.
+The persistent-only `pi-teams` implementation passes its strict typecheck and all
+13 scripted-provider harnesses (2026-10-06). The live validation below records
+the earlier SDK migration.
+
+## Current lifetime contract (2026-10-06)
+
+Teams now supports persistent agents only. The spawn lifetime option and automatic
+retirement have been removed. Final reports still complete anchored assignments;
+agents remain available for follow-up mail until explicit retirement. Legacy
+registry entries retain their identity and session memory when loaded, with the
+obsolete lifetime field dropped. Pi Subagents retains its independent lifetimes.
+The historical live validation below predates this removal.
 
 ## Root Cause
 
@@ -48,7 +59,7 @@ The live pass verified:
 - Steering and interruption
 - Structured collection
 - Await outcomes: `completed`, `attention`, `timeout`, and `retired`
-- One-shot automatic retirement
+- One-shot automatic retirement (historical; removed from Teams on 2026-10-06)
 - Peer delivery, peer questions/answers, peer mode controls, and bounce behavior
 - Idle-main auto-wake and burst coalescing
 - Pi Safety approval and denial in `max` mode
@@ -66,4 +77,5 @@ The live pass verified:
 configs/pi-agent/packages/pi-teams/test/e2e/run.sh
 ```
 
-Result: strict typecheck clean; all 11 harnesses green; 114 checks passed.
+Current result (2026-10-06): strict typecheck clean; all 13 harnesses green.
+The earlier SDK migration also passed 114 checks across its original 11 harnesses.

@@ -1,18 +1,18 @@
-import { systemPromptText } from "../../../../test/runtime.mjs";
 import { dependencyRoot } from "../../../../test/runtime.mjs";
+import { systemPromptText } from "../../../../test/runtime.mjs";
 /**
  * Phase-2 runtime e2e for pi-teams: a REAL agent turn through
  * createAgentSession with a stubbed LLM (in-memory ModelRegistry, scripted
  * streamSimple — no network). Verifies spawn/get-or-create, JSONL persistence +
  * memory, vitals, status/peek, context composition (native project-context
- * ordering + body + identity), and the oneshot lifetime rule.
+ * ordering + body + identity), and persistent default identity.
  *
  * Run: node phase2-runtime.mjs
  */
-import { strict as assert } from "node:assert";
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { strict as assert } from "node:assert";
 import { EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 
 const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
 const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
@@ -277,12 +277,20 @@ await test("handle-build failure notifies main and leaves task pending for retry
 	assert.equal(detail?.unread, 1, "original task remains pending for a fixed-model retry");
 });
 
-console.log("lifetime:");
-await test("oneshot must not take an id; anonymous gets tmp-<hex>", async () => {
-	await assert.rejects(core.spawn({ type: "greeter", id: "x", lifetime: "oneshot" }));
-	const one = await core.spawn({ type: "greeter", lifetime: "oneshot", task: "quick" });
-	assert.match(one.address, /^greeter\/tmp-[0-9a-f]+$/);
+console.log("persistent identity:");
+await test("omitting id reuses main; explicit ids create independent instances", async () => {
+	const first = await core.spawn({ type: "greeter", task: "quick" });
+	assert.equal(first.address, "greeter/main");
 	await core.whenIdle();
+	const generation = getAgent(readRegistry(layout.registryFile), first.address).generationId;
+	const again = await core.spawn({ type: "greeter", task: "follow up" });
+	await core.whenIdle();
+	assert.equal(again.address, first.address);
+	assert.equal(again.created, false);
+	assert.equal(getAgent(readRegistry(layout.registryFile), first.address).generationId, generation);
+	const separate = await core.spawn({ type: "greeter", id: "separate" });
+	assert.equal(separate.created, true);
+	assert.notEqual(separate.address, first.address);
 });
 
 await test("unknown type lists the catalog", async () => {

@@ -1,9 +1,9 @@
-import { dependencyRoot } from "../../../../test/runtime.mjs";
-import { strict as assert } from "node:assert";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { strict as assert } from "node:assert";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 import { createTestModelRuntime, EXT, PI_PKG, jiti } from "./env.mjs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 const sdk = await jiti.import(join(PI_PKG, "dist/index.js"));
 const ai = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 const { createSubagentTools } = await jiti.import(join(EXT, "tools/sub-agent.ts"));
@@ -69,18 +69,25 @@ for (const [name, args, terminate] of cases) {
 }
 delivered = true; disposition = "main";
 
-// Exercise the real retirement mutation, including a failed or throwing durable write.
+// Final-report correlation and delivery outcomes stay intact without retiring the sender.
 const runtime = Object.create(InProcessRuntime.prototype);
-const handle = { trigger: null, assignment: null, retireAfterTurn: false };
+const handle = { trigger: null, assignment: "msg_task" };
 runtime.handles = new Map([["worker/main", handle]]);
-runtime.registry = { agents: { "worker/main": { lifetime: "oneshot" } } };
-runtime.deliverer = { send };
-const report = () => teams ? runtime.sendFromAgent("worker/main", { to: "main", type: "report", text: "final", final: true })
-	: runtime.reportFromAgent("worker/main", { text: "final", final: true });
-for (disposition of ["bounced", "dropped"]) { delivered = false; report(); assert.equal(handle.retireAfterTurn, false); }
+let sent;
+runtime.deliverer = { send: (envelope) => { sent = envelope; return send(); } };
+const report = () => runtime.sendFromAgent("worker/main", { to: "main", type: "report", text: "final", final: true });
+for (disposition of ["bounced", "dropped"]) {
+	delivered = false;
+	assert.equal(report().delivered, false);
+	assert.equal(sent.correlationId, "msg_task");
+}
 runtime.deliverer.send = () => { throw Error("disk failure"); };
-assert.throws(report, /disk failure/); assert.equal(handle.retireAfterTurn, false);
-runtime.deliverer.send = send; delivered = true; report(); assert.equal(handle.retireAfterTurn, true);
+assert.throws(report, /disk failure/);
+runtime.deliverer.send = (envelope) => { sent = envelope; return send(); };
+delivered = true;
+assert.equal(report().delivered, true);
+assert.equal(sent.correlationId, "msg_task");
+assert.deepEqual(handle, { trigger: null, assignment: "msg_task" });
 
 const quiet = { name: "ordinary", label: "ordinary", description: "ordinary", parameters: { type: "object", properties: {} },
 	execute: async () => ({ content: [{ type: "text", text: "ok" }] }) };

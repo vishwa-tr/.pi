@@ -7,10 +7,10 @@
  *
  * Run: node phase6-tui.mjs
  */
-import { strict as assert } from "node:assert";
-import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
 import { EXT, WORLDS, jiti } from "./env.mjs";
+import { strict as assert } from "node:assert";
 
 const picker = await jiti.import(join(EXT, "tui/picker.ts"));
 const textHelpers = await jiti.import(join(EXT, "text.ts"));
@@ -30,8 +30,8 @@ async function testAsync(name, fn) {
 
 console.log("picker rows:");
 const roster = [
-	{ address: "refactorer/auth", type: "refactorer", id: "auth", state: "running", lifetime: "persistent", purview: "auth", vitals: { state: "running", ctxPercent: 60, tokens: 100, cost: 0, turns: 3 }, unread: 0, updatedAt: "" },
-	{ address: "docs/main", type: "docs", id: "main", state: "dormant", lifetime: "persistent", purview: "main", vitals: { state: "dormant", ctxPercent: null, tokens: 0, cost: 0, turns: 0 }, unread: 0, updatedAt: "" },
+	{ address: "refactorer/auth", type: "refactorer", id: "auth", state: "running", purview: "auth", vitals: { state: "running", ctxPercent: 60, tokens: 100, cost: 0, turns: 3 }, unread: 0, updatedAt: "" },
+	{ address: "docs/main", type: "docs", id: "main", state: "dormant", purview: "main", vitals: { state: "dormant", ctxPercent: null, tokens: 0, cost: 0, turns: 0 }, unread: 0, updatedAt: "" },
 ];
 test("flat rows sorted by address; no team headers (D12)", () => {
 	const rows = picker.buildPickerRows(roster, [], { archiveExpanded: false, unread: () => 0 });
@@ -42,7 +42,7 @@ test("flat rows sorted by address; no team headers (D12)", () => {
 	assert.ok(rows.every((r) => r.kind !== "team-header"));
 });
 test("archive section collapses/expands", () => {
-	const archived = [{ address: "oneshot/tmp-ab", retiredAt: "2026-07-14T00:00:00Z" }];
+	const archived = [{ address: "worker/retired", retiredAt: "2026-07-14T00:00:00Z" }];
 	const collapsed = picker.buildPickerRows(roster, archived, { archiveExpanded: false, unread: () => 0 });
 	assert.ok(collapsed.some((r) => r.kind === "archive-header"));
 	assert.ok(!collapsed.some((r) => r.kind === "archived"));
@@ -114,14 +114,14 @@ test("main and per-agent unread mail use the mail icon", () => {
 });
 test("a display label renders next to the address in tree and picker rows", () => {
 	const lines = tree.renderTreeLines(
-		[{ address: "worker/tmp-3f9a", label: "lint sweep", tool: "bash", summary: "Bash: eslint", toolUses: 2, ctxPercent: 8, tokens: 1_250, unread: 0 }],
+		[{ address: "worker/lint", label: "lint sweep", tool: "bash", summary: "Bash: eslint", toolUses: 2, ctxPercent: 8, tokens: 1_250, unread: 0 }],
 		0,
 		plainTheme,
 	);
-	assert.ok(lines.some((l) => l.includes("worker/tmp-3f9a “lint sweep”")), `tree row shows the label: ${lines[1]}`);
-	const entry = { address: "worker/tmp-3f9a", type: "worker", id: "tmp-3f9a", state: "running", lifetime: "oneshot", purview: "lint sweep", label: "lint sweep", vitals: { state: "running", ctxPercent: null, tokens: 0, cost: 0, turns: 1 }, unread: 0, updatedAt: "" };
+	assert.ok(lines.some((l) => l.includes("worker/lint “lint sweep”")), `tree row shows the label: ${lines[1]}`);
+	const entry = { address: "worker/lint", type: "worker", id: "lint", state: "running", purview: "lint sweep", label: "lint sweep", vitals: { state: "running", ctxPercent: null, tokens: 0, cost: 0, turns: 1 }, unread: 0, updatedAt: "" };
 	const text = picker.pickerRowText({ kind: "agent", entry, unread: 0 });
-	assert.ok(text.includes("worker/tmp-3f9a “lint sweep”"), `picker row shows the label: ${text}`);
+	assert.ok(text.includes("worker/lint “lint sweep”"), `picker row shows the label: ${text}`);
 	const noLabel = picker.pickerRowText({ kind: "agent", entry: { ...entry, label: undefined }, unread: 0 });
 	assert.ok(!noLabel.includes("“"), "no quotes when there is no label");
 });

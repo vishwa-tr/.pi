@@ -4,8 +4,8 @@
  * Not part of run.sh. Prints ANSI to stdout; `--json` emits {name, lines[]}.
  */
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
 import { EXT, jiti } from "./env.mjs";
+import { readFileSync } from "node:fs";
 
 const tree = await jiti.import(join(EXT, "tui/tree-widget.ts"));
 const picker = await jiti.import(join(EXT, "tui/picker.ts"));
@@ -42,8 +42,8 @@ panels.push({
 	name: "tree widget (above the editor, while agents work)",
 	lines: tree.renderTreeLines(
 		[
-			{ address: "scout/tmp-91c2", label: "find flaky tests", tool: "grep", summary: "Grep: retry markers in CI logs", toolUses: 6, ctxPercent: 11.3, tokens: 12_000, unread: 2 },
-			{ address: "worker/tmp-3f9a", label: "lint sweep", tool: "bash", summary: "Bash: eslint src/", toolUses: 4, ctxPercent: 8, tokens: 6_000, unread: 0 },
+			{ address: "scout/flaky-tests", label: "find flaky tests", tool: "grep", summary: "Grep: retry markers in CI logs", toolUses: 6, ctxPercent: 11.3, tokens: 12_000, unread: 2 },
+			{ address: "worker/lint", label: "lint sweep", tool: "bash", summary: "Bash: eslint src/", toolUses: 4, ctxPercent: 8, tokens: 6_000, unread: 0 },
 		],
 		1,
 		theme,
@@ -52,10 +52,10 @@ panels.push({
 
 // --- picker (/teams) ---
 const roster = [
-	{ address: "planner/main", type: "planner", id: "main", state: "dormant", lifetime: "persistent", purview: "main", vitals: { state: "dormant", ctxPercent: 22, tokens: 41_000, cost: 0, turns: 9 }, unread: 0, updatedAt: "" },
-	{ address: "scout/tmp-91c2", type: "scout", id: "tmp-91c2", state: "running", lifetime: "oneshot", purview: "find flaky tests", label: "find flaky tests", vitals: { state: "running", ctxPercent: 11, tokens: 12_000, cost: 0, turns: 2 }, unread: 0, updatedAt: "" },
-	{ address: "worker/auth", type: "worker", id: "auth", state: "waiting", lifetime: "persistent", purview: "auth", vitals: { state: "waiting", ctxPercent: 55, tokens: 90_000, cost: 0, turns: 14 }, unread: 2, updatedAt: "" },
-	{ address: "worker/tmp-3f9a", type: "worker", id: "tmp-3f9a", state: "running", lifetime: "oneshot", purview: "lint sweep", label: "lint sweep", vitals: { state: "running", ctxPercent: 8, tokens: 6_000, cost: 0, turns: 1 }, unread: 0, updatedAt: "" },
+	{ address: "planner/main", type: "planner", id: "main", state: "dormant", purview: "main", vitals: { state: "dormant", ctxPercent: 22, tokens: 41_000, cost: 0, turns: 9 }, unread: 0, updatedAt: "" },
+	{ address: "scout/flaky-tests", type: "scout", id: "flaky-tests", state: "running", purview: "find flaky tests", label: "find flaky tests", vitals: { state: "running", ctxPercent: 11, tokens: 12_000, cost: 0, turns: 2 }, unread: 0, updatedAt: "" },
+	{ address: "worker/auth", type: "worker", id: "auth", state: "waiting", purview: "auth", vitals: { state: "waiting", ctxPercent: 55, tokens: 90_000, cost: 0, turns: 14 }, unread: 2, updatedAt: "" },
+	{ address: "worker/lint", type: "worker", id: "lint", state: "running", purview: "lint sweep", label: "lint sweep", vitals: { state: "running", ctxPercent: 8, tokens: 6_000, cost: 0, turns: 1 }, unread: 0, updatedAt: "" },
 ];
 const archived = [{ address: "scout/tmp-77aa", retiredAt: "2026-07-14T09:00:00Z" }];
 const pickerComponent = picker.createPicker({
@@ -81,7 +81,7 @@ pickerComponent.dispose();
 const viewerComponent = viewer.createViewer({
 	core: {
 		peek: async () => ({
-			address: "worker/tmp-3f9a",
+			address: "worker/lint",
 			label: "lint sweep",
 			state: "running",
 			vitals: { state: "running", ctxPercent: 41, tokens: 23_000, cost: 0, turns: 3 },
@@ -93,7 +93,7 @@ const viewerComponent = viewer.createViewer({
 	},
 	tui: { requestRender: () => {} },
 	theme,
-	address: "worker/tmp-3f9a",
+	address: "worker/lint",
 	cwd: process.cwd(),
 	onDone: () => {},
 });

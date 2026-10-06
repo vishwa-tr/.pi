@@ -12,100 +12,98 @@
  * spawn `task` is just the first envelope (from `main`) into the mailbox.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
+	SessionManager,
+	resolveCliModel,
 	type AgentSession,
-	createAgentSessionFromServices,
-	createAgentSessionServices,
-	type CreateAgentSessionFromServicesOptions,
-	type CreateAgentSessionServicesOptions,
 	type ModelRegistry,
 	parseSessionEntries,
-	resolveCliModel,
-	type SessionMessageEntry,
-	SessionManager,
 	type SettingsManager,
+	type SessionMessageEntry,
+	createAgentSessionServices,
+	createAgentSessionFromServices,
+	type CreateAgentSessionServicesOptions,
+	type CreateAgentSessionFromServicesOptions,
 } from "@earendil-works/pi-coding-agent";
-import { composeContext, type IdentityOptions, type PeerInfo } from "../context/compose.ts";
-import { Deliverer, type DelivererHooks, type DeliveryOutcome, type HopsGuard } from "../mail/deliver.ts";
-import { composeWakeDigest, type DigestItem } from "../mail/digest.ts";
 import {
 	type Address,
-	type Envelope,
-	type EnvelopeType,
-	formatAgentAddress,
-	isValidIdSegment,
 	MAIN_ADDRESS,
 	makeEnvelope,
 	parseAddress,
-	seedUlidClock,
 	USER_ADDRESS,
+	type Envelope,
+	seedUlidClock,
+	isValidIdSegment,
+	type EnvelopeType,
+	formatAgentAddress,
 } from "../mail/envelope.ts";
 import {
+	markDone,
+	readPending,
+	pendingCount,
 	beginDelivery,
+	maxEnvelopeId,
+	writeEnvelope,
 	deleteSentQuestion,
 	lookupSentQuestion,
-	markDone,
-	maxEnvelopeId,
 	peekCollectRequest,
-	pendingCount,
-	readPending,
-	recordCollectRequest,
 	takeCollectRequest,
-	writeEnvelope,
+	recordCollectRequest,
 } from "../mail/mailbox.ts";
-import { validateAgainstSchema } from "../mail/collect.ts";
-import { archiveAgentDir, type ArchivedInfo, readArchived } from "../store/archive.ts";
 import {
-	type AgentRecord,
-	type AgentState,
-	type AgentVitals,
 	getAgent,
 	listAgents,
 	patchAgent,
-	type Registry,
-	readRegistry,
 	removeAgent,
 	upsertAgent,
+	readRegistry,
+	type Registry,
 	writeRegistry,
+	type AgentState,
+	type AgentRecord,
+	type AgentVitals,
 } from "../store/registry.ts";
-import type { Layout } from "../store/layout.ts";
-import { resolveTypeDef } from "../typedefs/discover.ts";
-import type { TypeDefinition } from "../typedefs/parse.ts";
-import { createSubagentTools, type SubagentMailPort } from "../tools/sub-agent.ts";
-import { collapseWhitespace, flattenMessageContent, liveThinkingSummary, retainLatestThought } from "../text.ts";
-import { toolSummary } from "../tui/activity.ts";
-import { buildSandboxedTools } from "../sandbox/tools-filter.ts";
-import { makeCommandDenyCheck, makeSystemDenyCheck } from "../sandbox/system-deny.ts";
-import { type ConfirmFn, denyAllConfirm } from "../sandbox/safety-bridge.ts";
 import type {
-	AgentActivity,
-	AgentActivityRow,
-	AgentDetail,
-	AwaitEnvelopeView,
-	AwaitOptions,
-	AwaitResult,
-	CollectResult,
-	InheritedDefaults,
-	InterruptResult,
 	PeerMode,
-	RetireResult,
-	RosterEntry,
-	RuntimeEvent,
-	RuntimeEventListener,
-	SendOptions,
 	SendResult,
-	SpawnOptions,
+	AgentDetail,
+	AwaitResult,
+	RosterEntry,
+	SendOptions,
 	SpawnResult,
 	SteerResult,
+	AwaitOptions,
+	RetireResult,
+	RuntimeEvent,
+	SpawnOptions,
+	AgentActivity,
+	CollectResult,
+	InterruptResult,
 	SubagentRuntime,
 	TranscriptEntry,
+	AgentActivityRow,
+	AwaitEnvelopeView,
+	InheritedDefaults,
+	RuntimeEventListener,
 } from "./types.ts";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { Scheduler } from "./scheduler.ts";
-
-const TMP_ID_BYTES = 4;
+import type { Layout } from "../store/layout.ts";
+import { toolSummary } from "../tui/activity.ts";
+import { resolveTypeDef } from "../typedefs/discover.ts";
+import { validateAgainstSchema } from "../mail/collect.ts";
+import type { TypeDefinition } from "../typedefs/parse.ts";
+import { buildSandboxedTools } from "../sandbox/tools-filter.ts";
+import { composeWakeDigest, type DigestItem } from "../mail/digest.ts";
+import { type ConfirmFn, denyAllConfirm } from "../sandbox/safety-bridge.ts";
+import { createSubagentTools, type SubagentMailPort } from "../tools/sub-agent.ts";
+import { makeCommandDenyCheck, makeSystemDenyCheck } from "../sandbox/system-deny.ts";
+import { archiveAgentDir, type ArchivedInfo, readArchived } from "../store/archive.ts";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { composeContext, type IdentityOptions, type PeerInfo } from "../context/compose.ts";
+import { Deliverer, type DelivererHooks, type DeliveryOutcome, type HopsGuard } from "../mail/deliver.ts";
+import { collapseWhitespace, flattenMessageContent, liveThinkingSummary, retainLatestThought } from "../text.ts";
 
 type ModelRuntime = NonNullable<CreateAgentSessionServicesOptions["modelRuntime"]>;
 
@@ -134,8 +132,6 @@ interface Handle {
 	trigger: Envelope[] | null;
 	/** The current task anchor (an uncorrelated message id) for final-report correlation (D26'). */
 	assignment: string | null;
-	/** Set when the agent sent a final report this turn; a oneshot auto-retires after (D13). */
-	retireAfterTurn: boolean;
 	/** This type's frontmatter peer default (D12); the effective setting layers user/main over it. */
 	peersDefault: boolean;
 }
@@ -213,11 +209,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 	async spawn(options: SpawnOptions): Promise<SpawnResult> {
 		if (this.disposed) throw new Error("runtime disposed");
 		const type = options.type;
-		const lifetime = options.lifetime ?? "persistent";
-		if (lifetime === "oneshot" && options.id !== undefined) {
-			throw new Error("oneshot spawns must not pass an id (named = persistent, anonymous = disposable).");
-		}
-		const id = options.id ?? (lifetime === "oneshot" ? this.freshTmpId(type) : "main");
+		const id = options.id ?? "main";
 		if (!isValidIdSegment(id)) throw new Error(`Invalid instance id ${JSON.stringify(id)}.`);
 
 		const resolved = resolveTypeDef(this.layout, type, { projectTrusted: this.projectTrusted() });
@@ -230,7 +222,6 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		const { record, created } = upsertAgent(this.registry, {
 			type,
 			id,
-			lifetime,
 			typeFileHash: resolved.resolved.hash,
 			now,
 			...(label ? { label } : {}),
@@ -319,8 +310,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		}
 		const causedBy = handle?.trigger && handle.trigger.length > 0 ? handle.trigger.reduce((a, b) => (b.hops > a.hops ? b : a)) : null;
 		// A final report with no explicit correlation is correlated to the current
-		// assignment so an await on the task anchor can match it (D26'). A oneshot
-		// auto-retires after its final report (D13).
+		// assignment so an await on the task anchor can match it (D26').
 		let correlationId = opts.correlationId ?? null;
 		if (opts.type === "report" && opts.final && correlationId === null && handle?.assignment) {
 			correlationId = handle.assignment;
@@ -335,10 +325,6 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			correlationId,
 			causedBy,
 		});
-		if (outcome.delivered && opts.type === "report" && opts.final && handle) {
-			const record = getAgent(this.registry, from);
-			if (record?.lifetime === "oneshot") handle.retireAfterTurn = true;
-		}
 		return outcome;
 	}
 
@@ -406,10 +392,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			this.inheritCache.delete(to);
 			this.activity.delete(to);
 			this.pendingInterrupt.delete(to);
-			// NB: we deliberately do NOT await this.chains.get(to) — a oneshot
-			// auto-retire calls retire() from inside that very turn's tail, so
-			// awaiting it would deadlock. The `retiring` flag + abort() above make
-			// any in-flight/next turn stand down.
+			// The `retiring` flag and abort above make any in-flight/next turn stand down.
 			// Bounce pending PEER mail so peers don't strand (D26); owner/user mail is dropped quietly.
 			const mailboxDir = this.layout.mailboxDir(record.type, record.id);
 			for (const p of readPending(mailboxDir)) {
@@ -577,13 +560,6 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		return this.options.projectTrusted ? this.options.projectTrusted() : true;
 	}
 
-	private freshTmpId(type: string): string {
-		for (;;) {
-			const id = `tmp-${randomHex(TMP_ID_BYTES)}`;
-			if (!getAgent(this.registry, formatAgentAddress(type, id)) && !existsSync(this.layout.agentInstanceDir(type, id))) return id;
-		}
-	}
-
 	private persist(): void {
 		writeRegistry(this.layout.registryFile, this.registry);
 	}
@@ -618,7 +594,6 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			type: record.type,
 			id: record.id,
 			state: record.vitals.state,
-			lifetime: record.lifetime,
 			purview: record.label ?? record.id,
 			...(record.label !== undefined ? { label: record.label } : {}),
 			vitals: record.vitals,
@@ -631,7 +606,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		const peers: PeerInfo[] = listAgents(this.registry)
 			.filter((other) => formatAgentAddress(other.type, other.id) !== address)
 			.map((other) => ({ address: formatAgentAddress(other.type, other.id), purview: other.label ?? other.id }));
-		return { address, purview: record.label ?? record.id, peers, lifetime: record.lifetime };
+		return { address, purview: record.label ?? record.id, peers };
 	}
 
 	private latestSessionFile(type: string, id: string): string | undefined {
@@ -691,7 +666,6 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		this.setState(address, "queued");
 		const release = await this.scheduler.acquire();
 		let leavePending = false;
-		let turnHandle: Handle | undefined;
 		try {
 			// A retire/dispose that arrived while we waited for a scheduler slot must be
 			// observed here — otherwise we'd build + prompt a to-be-retired agent.
@@ -735,10 +709,8 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 				this.emit({ type: "turn-finished", address, vitals: getAgent(this.registry, address)?.vitals ?? vitalsFrom(handle.session, "dormant") });
 				return;
 			}
-			turnHandle = handle;
 			handle.trigger = pending.map((p) => p.envelope);
 			handle.aborted = false;
-			handle.retireAfterTurn = false;
 			// The current assignment (for final-report correlation, D26'): the first
 			// uncorrelated task message (from main or a peer) driving this turn.
 			const task = pending.find((p) => p.envelope.type === "message" && p.envelope.correlationId === null && p.envelope.from !== USER_ADDRESS);
@@ -857,13 +829,6 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			release();
 		}
 
-		// A oneshot that sent its final report this turn auto-retires (D13). Read the
-		// flag off the LOCAL handle we ran — not this.handles, which may have been
-		// replaced/cleared during the turn (M5).
-		if (!leavePending && turnHandle?.retireAfterTurn) {
-			await this.retire(address);
-			return;
-		}
 		// More mail arrived during the turn (held, never interrupts) → drain again.
 		if (!leavePending && !this.disposed && pendingCount(mailboxDir) > 0) this.scheduleMailTurn(address);
 	}
@@ -957,7 +922,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		if (thinkingLevel !== undefined) sessionOptions.thinkingLevel = thinkingLevel;
 
 		const { session } = await createAgentSessionFromServices(sessionOptions);
-		return { session, aborted: false, trigger: null, assignment: null, retireAfterTurn: false, peersDefault };
+		return { session, aborted: false, trigger: null, assignment: null, peersDefault };
 	}
 
 	private resolveModel(
@@ -995,12 +960,6 @@ function toSendResult(outcome: DeliveryOutcome): SendResult {
 		envelopeId: outcome.envelopeId,
 		...(outcome.bounceReason ? { bounceReason: outcome.bounceReason } : {}),
 	};
-}
-
-function randomHex(bytes: number): string {
-	let out = "";
-	for (let i = 0; i < bytes; i++) out += Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
-	return out;
 }
 
 function readTranscriptTail(sessionFile: string, n: number): TranscriptEntry[] {

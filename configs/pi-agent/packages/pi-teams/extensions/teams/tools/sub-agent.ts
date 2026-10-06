@@ -9,11 +9,11 @@
  * escalation/error envelopes are runtime-emitted, not tools.
  */
 
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { DeliveryOutcome } from "../mail/deliver.ts";
-import type { EnvelopeType } from "../mail/envelope.ts";
 import { errorResult, jsonResult } from "./results.ts";
+import type { EnvelopeType } from "../mail/envelope.ts";
+import type { DeliveryOutcome } from "../mail/deliver.ts";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 /** The narrow seam the runtime implements for subagent-originated mail. */
 export interface SubagentMailPort {
@@ -35,7 +35,7 @@ const SendParams = Type.Object({
 
 const ReportParams = Type.Object({
 	text: Type.String({ maxLength: MAX_REPORT_TEXT_CHARS }),
-	final: Type.Optional(Type.Boolean({ description: "true = this task is complete. (A oneshot auto-retires after its final report.)" })),
+	final: Type.Optional(Type.Boolean({ description: "true = this task is complete. You remain available for follow-up tasks." })),
 	data: Type.Optional(Type.Any({ description: "Structured result (e.g. a collect result). Kept on disk; summarized in the main agent's digest." })),
 	correlationId: Type.Optional(Type.String({ description: "The collect-request id when fulfilling team_collect." })),
 });

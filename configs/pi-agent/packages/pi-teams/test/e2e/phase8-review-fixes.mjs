@@ -7,10 +7,10 @@
  *
  * Run: node phase8-review-fixes.mjs
  */
-import { strict as assert } from "node:assert";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { EXT, WORLDS, jiti } from "./env.mjs";
+import { strict as assert } from "node:assert";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 
 const systemDeny = await jiti.import(join(EXT, "sandbox/system-deny.ts"));
 const { parseTypeFile } = await jiti.import(join(EXT, "typedefs/parse.ts"));
@@ -171,7 +171,6 @@ ok("a record with corrupt vitals is repaired, not dropped", () => {
 				"worker/main": {
 					type: "worker",
 					id: "main",
-					lifetime: "persistent",
 					generationId: gen,
 					typeFileHash: "abc",
 					createdAt: "2026-01-01T00:00:00Z",

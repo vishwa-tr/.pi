@@ -4,10 +4,10 @@
  *
  * Run: node phase1-data-layer.mjs
  */
-import { strict as assert } from "node:assert";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXT, WORLDS, jiti } from "./env.mjs";
+import { strict as assert } from "node:assert";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 
 const { createLayout, cwdSlug } = await jiti.import(join(EXT, "store/layout.ts"));
 const envelope = await jiti.import(join(EXT, "mail/envelope.ts"));
@@ -142,16 +142,16 @@ console.log("registry:");
 const regFile = join(scratch, "registry.json");
 ok("upsert = get-or-create", () => {
 	const reg = registry.emptyRegistry();
-	const first = registry.upsertAgent(reg, { type: "refactorer", id: "auth", lifetime: "persistent", typeFileHash: "h1", now: "t1" });
+	const first = registry.upsertAgent(reg, { type: "refactorer", id: "auth", typeFileHash: "h1", now: "t1" });
 	assert.equal(first.created, true);
-	const again = registry.upsertAgent(reg, { type: "refactorer", id: "auth", lifetime: "persistent", typeFileHash: "h2", now: "t2" });
+	const again = registry.upsertAgent(reg, { type: "refactorer", id: "auth", typeFileHash: "h2", now: "t2" });
 	assert.equal(again.created, false);
 	assert.equal(again.record.generationId, first.record.generationId, "same instance keeps generation");
 	assert.equal(again.record.typeFileHash, "h2", "type hash refreshed (live-resolve)");
 });
 ok("atomic write + read round-trip; malformed dropped", () => {
 	const reg = registry.emptyRegistry();
-	registry.upsertAgent(reg, { type: "docs", id: "main", lifetime: "persistent", typeFileHash: "h", now: "t" });
+	registry.upsertAgent(reg, { type: "docs", id: "main", typeFileHash: "h", now: "t" });
 	registry.writeRegistry(regFile, reg);
 	const back = registry.readRegistry(regFile);
 	assert.ok(registry.getAgent(back, "docs/main"));
@@ -160,6 +160,18 @@ ok("atomic write + read round-trip; malformed dropped", () => {
 	const repaired = registry.readRegistry(regFile);
 	assert.equal(registry.getAgent(repaired, "x/y"), undefined);
 	assert.ok(registry.getAgent(repaired, "docs/main"));
+});
+ok("legacy lifetime records preserve identity and memory references without the flag", () => {
+	for (const lifetime of ["persistent", "oneshot"]) {
+		const reg = registry.emptyRegistry();
+		const { record } = registry.upsertAgent(reg, { type: "worker", id: "tmp-ab", typeFileHash: "h", now: "t", label: "Existing work" });
+		record.vitals.turns = 3;
+		writeFileSync(regFile, JSON.stringify({ version: 1, agents: { "worker/tmp-ab": { ...record, lifetime } } }));
+		const back = registry.readRegistry(regFile);
+		assert.deepEqual(registry.getAgent(back, "worker/tmp-ab"), record);
+		registry.writeRegistry(regFile, back);
+		assert.ok(!("lifetime" in JSON.parse(readFileSync(regFile, "utf8")).agents["worker/tmp-ab"]));
+	}
 });
 ok("generation ids are gen_<32hex>", () => {
 	assert.match(registry.newGenerationId(), /^gen_[0-9a-f]{32}$/);

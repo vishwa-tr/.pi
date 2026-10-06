@@ -2,14 +2,14 @@
  * store/archive.ts — retirement (move-not-delete) + N-day GC (D13).
  *
  * Retire moves an agent's instance dir into `.archive/<type>/<id>/` with a
- * `.retired-at` marker, so a retired oneshot is still viewable post-mortem until
+ * `.retired-at` marker, so a retired agent is still viewable post-mortem until
  * GC. Retirement is the only destructive lifecycle op; the move preserves memory
  * on disk (the address is deregistered separately by the runtime).
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mailboxDoneDirOf, type Layout } from "./layout.ts";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 
 export const RETIREMENT_MARKER = ".retired-at";
 

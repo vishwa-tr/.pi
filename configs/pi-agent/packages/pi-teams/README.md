@@ -3,14 +3,28 @@
 Persistent team agents with optional peer messaging, disk-backed mail, anchored
 `team_await`, and a `/teams` roster and transcript viewer.
 
+## Agent lifetime
+
+All Teams agents are persistent. `team_spawn` gets or creates `<type>/<id>`,
+with `id` defaulting to `main`; use separate IDs for separate instances of a type.
+There is no lifetime option. A final report completes the assignment and leaves
+the agent dormant, ready for follow-up mail. Use `team_retire` (or the roster's
+retire action) when an agent is no longer needed; its memory is archived.
+
+Existing registry entries retain their addresses, sessions, and mail across
+reload, including agents created with the former one-shot option. Their obsolete
+lifetime field is removed on load, and they now persist until explicitly retired.
+Already archived agents remain archived. Pi Subagents' lifetimes are independent.
+
 ## Delivery and completion
 
 Tool results use compact JSON. Successfully delivered final reports, `ask`, and
 `send_message { expectReply: true }` terminate the automatic follow-up only when
 all finalized results in the tool batch terminate. Progress reports, ordinary
 messages, answers, and delivery failures never terminate. Questions resume with
-their correlated answers; one-shot retirement is armed only after successful
-final-report delivery.
+their correlated answers. Final reports complete assignments while keeping agents
+available for follow-up work with their memory intact; only explicit retirement
+removes an agent.
 
 Idle completions coalesce for 300 ms from the first event without extending the
 deadline for later arrivals. Input, a new run, or shutdown cancels the timer.
@@ -38,8 +52,8 @@ position. **PageUp/PageDown** scroll its transcript. Live main-agent work contin
 in the background. Opening a native dialog returns focus to main.
 
 The focused editor sends text mail only to the selected agent: dormant persistent
-agents wake and busy agents queue it. One-shot workers remain subject to their
-normal retirement rules; unavailable recipients report a delivery failure. Drafts
+agents wake and busy agents queue it. Unavailable recipients report a delivery
+failure. Drafts
 are retained while cycling, and failed mail is retained for retry when reopening
 the agent. Images are unsupported and are explicitly rejected. Paste text using
 your terminal's text-paste command. Commands beginning with `/` or `!` return to

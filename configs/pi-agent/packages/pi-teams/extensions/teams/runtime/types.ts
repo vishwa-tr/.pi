@@ -14,9 +14,9 @@
  */
 
 import type { ArchivedInfo } from "../store/archive.ts";
-import type { AgentState, AgentVitals, Lifetime } from "../store/registry.ts";
 import type { PeerControl } from "../store/settings.ts";
 import type { ThinkingLevel } from "../typedefs/parse.ts";
+import type { AgentState, AgentVitals } from "../store/registry.ts";
 
 /**
  * Peer-messaging control (D12). "llm" = the main agent decides via team_peers.
@@ -61,16 +61,13 @@ export interface InheritedDefaults {
 export interface SpawnOptions {
 	/** Type name — resolved live against the type libraries at wake (D6). */
 	type: string;
-	/** Instance id (purview slug). Persistent defaults to "main"; oneshots must NOT pass one. */
+	/** Persistent instance id (purview slug); defaults to "main". */
 	id?: string;
-	/** Default "persistent" (D13). */
-	lifetime?: Lifetime;
 	/** Optional first message — spawn + assign in one call. */
 	task?: string;
 	/**
 	 * Optional display-only label ("what is this one doing"), shown in the TUI and
-	 * roster. NOT part of the address — especially useful for oneshots, whose
-	 * tmp-<hex> ids say nothing.
+	 * roster. NOT part of the address or the agent's persistent identity.
 	 */
 	label?: string;
 	/** Session defaults for fields the frontmatter leaves unset. */
@@ -162,7 +159,6 @@ export interface RosterEntry {
 	type: string;
 	id: string;
 	state: AgentState;
-	lifetime: Lifetime;
 	purview: string;
 	/** Display-only label from spawn, if one was given. */
 	label?: string;
@@ -199,10 +195,9 @@ export type RuntimeEventListener = (event: RuntimeEvent) => void;
 
 export interface SubagentRuntime {
 	/**
-	 * Get-or-create on `<type>/<id>` (D4/D5): existing persistent agents wake
-	 * with memory intact. Enforces the lifetime rule (explicit id on a oneshot =
-	 * error). With a `task`, the turn runs asynchronously — spawn returns once
-	 * the agent is registered and queued/running.
+	 * Get-or-create on `<type>/<id>` (D4/D5): existing agents wake with memory
+	 * intact. The id defaults to "main". With a `task`, the turn runs
+	 * asynchronously — spawn returns once the agent is registered and queued/running.
 	 */
 	spawn(options: SpawnOptions): Promise<SpawnResult>;
 

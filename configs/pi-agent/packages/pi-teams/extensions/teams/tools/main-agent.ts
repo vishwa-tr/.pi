@@ -6,12 +6,11 @@
  * Tools talk ONLY to the core facade.
  */
 
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { SubagentsCore } from "../core.ts";
 import { parseAddress } from "../mail/envelope.ts";
-import type { Lifetime } from "../store/registry.ts";
 import { errorResult, jsonResult } from "./results.ts";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 type GetCore = () => SubagentsCore;
 
@@ -23,20 +22,12 @@ function agentTargetError(address: string): ReturnType<typeof errorResult> | nul
 
 const SpawnParams = Type.Object({
 	type: Type.String({ description: "Type definition name from global or project subagents." }),
-	id: Type.Optional(
-		Type.String({ description: "Persistent instance id; defaults to main. Omit for oneshots." }),
-	),
-	lifetime: Type.Optional(
-		Type.Union([Type.Literal("persistent"), Type.Literal("oneshot")], {
-			description:
-				"persistent (default) keeps memory until team_retire; oneshot auto-retires. Use oneshot without id for single tasks.",
-		}),
-	),
+	id: Type.Optional(Type.String({ description: "Persistent instance id; defaults to main." })),
 	task: Type.Optional(Type.String({ description: "Optional initial asynchronous task." })),
 	label: Type.Optional(
 		Type.String({
 			maxLength: 80,
-			description: "Short roster/TUI label; recommended for oneshots.",
+			description: "Short roster/TUI label describing this agent's work.",
 		}),
 	),
 });
@@ -46,8 +37,8 @@ export function createSpawnTool(getCore: GetCore): ToolDefinition<typeof SpawnPa
 		name: "team_spawn",
 		label: "Spawn subagent",
 		description:
-			"Spawn or wake a typed agent. Persistent addresses are get-or-create and require later team_retire; oneshots " +
-			"auto-retire. Use oneshot without id for single tasks.",
+			"Spawn or wake a persistent typed agent. Addresses are get-or-create on <type>/<id>; id defaults to main. " +
+			"Memory survives task completion until explicitly removed with team_retire.",
 		parameters: SpawnParams,
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const core = getCore();
@@ -55,7 +46,6 @@ export function createSpawnTool(getCore: GetCore): ToolDefinition<typeof SpawnPa
 				const result = await core.spawn({
 					type: params.type,
 					...(params.id !== undefined ? { id: params.id } : {}),
-					...(params.lifetime !== undefined ? { lifetime: params.lifetime as Lifetime } : {}),
 					...(params.task !== undefined ? { task: params.task } : {}),
 					...(params.label !== undefined ? { label: params.label } : {}),
 					inherit: { ...(ctx.model ? { modelRef: `${ctx.model.provider}/${ctx.model.id}` } : {}) },
@@ -218,8 +208,7 @@ export function createRetireTool(getCore: GetCore): ToolDefinition<typeof Retire
 		name: "team_retire",
 		label: "Retire subagent",
 		description:
-			"Permanently remove an address and archive its memory. Use only for finished persistent agents; oneshots " +
-			"retire automatically.",
+			"Permanently remove an address and archive its memory. Use only when the team agent is no longer needed.",
 		parameters: RetireParams,
 		async execute(_toolCallId, params) {
 			const badTarget = agentTargetError(params.to);

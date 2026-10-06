@@ -5,10 +5,10 @@
  *
  * Run: node loadcheck.mjs
  */
-import { strict as assert } from "node:assert";
-import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { mkdirSync, rmSync } from "node:fs";
+import { strict as assert } from "node:assert";
 import { EXT, PI_PKG, WORLDS } from "./env.mjs";
 
 const emptyAgentDir = join(WORLDS, "loadcheck-empty");
@@ -31,6 +31,10 @@ assert.deepEqual(
 	"the eight team_* tools",
 );
 assert.deepEqual(keysOf(ext.commands), ["teams"], "/teams command");
+
+const spawn = ext.tools.get("team_spawn").definition;
+assert.deepEqual(Object.keys(spawn.parameters.properties).sort(), ["id", "label", "task", "type"], "spawn only exposes persistent-agent options");
+assert.match(spawn.description, /team_retire/, "explicit retirement is the only lifecycle end");
 
 const peers = ext.tools.get("team_peers").definition;
 assert.match(peers.description, /blocks peer delivery immediately/, "team_peers documents immediate delivery enforcement");

@@ -1,15 +1,15 @@
-import { systemPromptText } from "../../../../test/runtime.mjs";
 import { dependencyRoot } from "../../../../test/runtime.mjs";
+import { systemPromptText } from "../../../../test/runtime.mjs";
 /**
  * Phase-7 completion e2e for pi-teams: explicit team_await (completed /
- * attention / timeout), oneshot auto-retire on final report, manual retire +
+ * attention / timeout), persistent reuse after final reports, manual retire +
  * archive, collect validation on arrival, and the main-mail digest drain.
  *
  * Run: node phase7-completion.mjs
  */
-import { strict as assert } from "node:assert";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { strict as assert } from "node:assert";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createTestModelRuntime, EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
@@ -69,7 +69,7 @@ const { modelRuntime, modelRegistry } = await createTestModelRuntime(piSdk, {
 });
 
 const layout = createLayout(project, { home, sessionId: "sess-7" });
-const core = createCore({ layout, modelRuntime, modelRegistry, settingsManager, maxConcurrent: 3 });
+let core = createCore({ layout, modelRuntime, modelRegistry, settingsManager, maxConcurrent: 3 });
 
 let passed = 0;
 async function test(name, fn) {
@@ -112,23 +112,61 @@ await test("a spawn label is sanitized, stored, and becomes the roster purview",
 	await core.retire("worker/labelled");
 });
 
-console.log("oneshot auto-retire:");
-await test("a oneshot's identity block explains final-report = sign-off; a persistent one is not told that", () => {
-	const oneshot = composeIdentityBlock({ address: "w/tmp-ab", purview: "tmp-ab", peers: [], lifetime: "oneshot" });
-	assert.ok(oneshot.includes("ONESHOT"), "oneshot is told what it is");
-	assert.ok(oneshot.includes("automatically retired"), "…and that the final report retires it");
-	const persistent = composeIdentityBlock({ address: "w/main", purview: "main", peers: [], lifetime: "persistent" });
-	assert.ok(!persistent.includes("ONESHOT"), "persistent agents don't get the oneshot prose");
+console.log("persistent completion:");
+await test("the identity block explains completion and continued availability", () => {
+	const identity = composeIdentityBlock({ address: "w/main", purview: "main", peers: [] });
+	assert.ok(identity.includes("FINAL report"));
+	assert.ok(identity.includes("available for follow-up work"));
+	assert.ok(identity.includes("explicitly retire"));
 });
-await test("a oneshot auto-retires after its final report", async () => {
-	scripts.push({ match: (c) => c.address.startsWith("worker/tmp-"), reply: () => ({ tools: [{ name: "report", args: { text: "quick done", final: true } }] }) });
-	const spawn = await core.spawn({ type: "worker", lifetime: "oneshot", task: "quick" });
+await test("final reports retain the agent and later mail completes a new assignment", async () => {
+	scripts.push({ match: (c) => c.address === "worker/main", reply: () => ({ tools: [{ name: "report", args: { text: "first task done", final: true } }] }) });
+	const spawn = await core.spawn({ type: "worker", task: "first task" });
 	const result = await core.awaitResult({ to: spawn.address, waitFor: "final", anchorId: spawn.taskEnvelopeId, timeoutSeconds: 10 });
 	assert.equal(result.status, "completed");
 	await core.whenIdle();
-	const roster = await core.status();
-	assert.ok(!roster.some((r) => r.address === spawn.address), "oneshot gone from roster");
-	assert.ok(core.archived().some((a) => a.address.startsWith("worker/tmp-")), "oneshot in .archive");
+	const entry = (await core.status()).find((r) => r.address === spawn.address);
+	assert.equal(entry.state, "dormant");
+	assert.ok(!("lifetime" in entry));
+	assert.ok(!core.archived().some((a) => a.address === spawn.address));
+
+	scripts.push({ match: (c) => c.address === spawn.address, reply: () => ({ tools: [{ name: "report", args: { text: "follow-up done", final: true } }] }) });
+	const followUp = await core.send({ to: spawn.address, text: "follow-up task" });
+	assert.equal(followUp.disposition, "woken");
+	const next = await core.awaitResult({ to: spawn.address, waitFor: "final", anchorId: followUp.envelopeId, timeoutSeconds: 10 });
+	assert.equal(next.status, "completed");
+	assert.equal(next.report.text, "follow-up done");
+	assert.notEqual(followUp.envelopeId, spawn.taskEnvelopeId);
+	await core.whenIdle();
+	const detail = await core.peek(spawn.address, 100);
+	assert.ok(detail.tail.some((e) => e.text.includes("first task")), "first task remains in memory");
+	assert.ok(detail.tail.some((e) => e.text.includes("follow-up task")), "follow-up remains in memory");
+	assert.ok(readFileSync(detail.sessionFile, "utf8").includes("first task done"), "first final report is persisted");
+});
+await test("legacy agents survive reload and final reports with their session memory intact", async () => {
+	const address = "worker/main";
+	const before = await core.peek(address, 100);
+	await core.dispose();
+	const legacy = JSON.parse(readFileSync(layout.registryFile, "utf8"));
+	legacy.agents[address].lifetime = "oneshot";
+	writeFileSync(layout.registryFile, JSON.stringify(legacy));
+	core = createCore({ layout, modelRuntime, modelRegistry, settingsManager, maxConcurrent: 3 });
+	const restored = await core.peek(address, 100);
+	assert.equal(restored.sessionFile, before.sessionFile);
+	assert.deepEqual(restored.tail, before.tail);
+	scripts.push({ match: (c) => c.address === address, reply: () => ({ tools: [{ name: "report", args: { text: "resumed task done", final: true } }] }) });
+	const assignment = await core.spawn({ type: "worker", task: "task after reload" });
+	assert.equal(assignment.created, false);
+	const result = await core.awaitResult({ to: address, waitFor: "final", anchorId: assignment.taskEnvelopeId, timeoutSeconds: 10 });
+	assert.equal(result.status, "completed");
+	await core.whenIdle();
+	assert.ok((await core.status()).some((r) => r.address === address));
+	assert.ok(!core.archived().some((a) => a.address === address));
+	const detail = await core.peek(address, 100);
+	assert.ok(detail.tail.some((e) => e.text.includes("first task")));
+	assert.ok(detail.tail.some((e) => e.text.includes("task after reload")));
+	await core.retire(address);
+	assert.ok(core.archived().some((a) => a.address === address), "explicit retirement still archives memory");
 });
 
 console.log("retire:");
