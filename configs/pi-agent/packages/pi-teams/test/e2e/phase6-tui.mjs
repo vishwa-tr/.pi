@@ -169,7 +169,7 @@ await testAsync("the advertised stop key is the one index.ts actually binds", as
 		registerCommand: () => {},
 		registerShortcut: (key, opts) => shortcuts.push({ key, opts }),
 		on: () => {},
-		events: { emit: () => {}, on: () => {} },
+		events: { emit: () => {}, on: () => () => {} },
 		sendMessage: () => {},
 	};
 	const ext = await jiti.import(join(EXT, "index.ts"));
@@ -198,7 +198,7 @@ await testAsync("no footer status is ever published — the tree widget is the o
 		registerCommand: () => {},
 		registerShortcut: () => {},
 		on: (event, handler) => handlers.set(event, handler),
-		events: { emit: () => {}, on: () => {} },
+		events: { emit: () => {}, on: () => () => {} },
 		sendMessage: () => {},
 	};
 	const ext = await jiti.import(join(EXT, "index.ts"));

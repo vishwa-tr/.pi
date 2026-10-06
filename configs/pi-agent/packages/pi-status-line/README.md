@@ -6,13 +6,16 @@ Owns Pi's shared status layout:
   thinking level from `pi-model-thinking` on the right. This status row stays
   below content widgets; late-mounted widgets may emit `status-line:pin-header`
   to request an immediate re-pin.
-- **Footer line 1** — the active `pi-plan` restricted mode (`󰍩 discuss mode`,
-  ` plan mode`, or `󱐋 quick mode`) appears on the left in mode-specific yellow,
-  green, or blue, followed by subagent activity when present; otherwise
-  tool-monitor moves up into that space.
-  Context and other extension statuses stay right.
-- **Footer line 2** — tool-monitor moves here when subagent status occupies line 1;
-  session token/cost usage (plus trailing 1h) stays right.
+- **Footer line 1** — Plan mode and tool activity left; context and extension statuses right.
+- **Footer line 2** — agent navigation left; session token/cost usage right.
+
+**Alt+N** cycles through available subagents and team agents in a full-screen chat
+view, then back to main. **Escape** returns to main; **PageUp/PageDown** scroll the
+focused transcript. The indicator shows `[N]` at main and `[n/N] Name` when focused.
+Text goes to the selected agent; image attachments are explicitly unsupported.
+Slash and shell commands return to the main editor for normal submission. Native
+dialogs clear agent focus, and background main-agent work continues. The producers
+remain standalone and coordinate using plain-data events, without package imports.
 
 The producer extensions publish plain values. This extension owns positioning,
 ANSI-aware truncation/alignment, producer styling, theme-aware thinking colors,
@@ -22,17 +25,16 @@ generic extension segment.
 ## Segments
 
 Every segment has a stable id used by the config file and the `/status-line`
-command. Most segments render in a fixed slot. Tool-monitor dynamically uses line 1-left
-when subagent status is absent and line 2-left when it is present. `order`
+command. All segments render in fixed slots. `order`
 reorders segments within their effective slot and sets narrow-width drop priority.
 
 | id | slot | verbose | compact |
 |----|------|---------|---------|
 | `plan-mode` | line 1, left | Discuss yellow, Plan green, Quick blue | same |
-| `subagents` | line 1, left | activity from `pi-agents`, dimmed | same |
+| `subagents` | line 2, left | available-agent count or focused-agent label | same |
 | `context` | line 1, right | hard-drive icon + `NN%` context usage, colored by fullness | `NN%` (icon dropped) |
 | `extension-statuses` | line 1, right | every other extension's `setStatus()` text, ` \| `-joined | space-joined |
-| `tool-monitor` | line 1-left alone; line 2-left with subagents | running-tool indicator with themed activity band | same |
+| `tool-monitor` | line 1, left | running-tool indicator with themed activity band | same |
 | `tokens` | line 2, right | ` 12k  3.4k` session tokens | same |
 | `cost` | line 2, right | `$0.123` session cost | `$0.12` |
 | `hourly` | line 2, right | ` last 1h: 42k` | ` 1h 42k` |

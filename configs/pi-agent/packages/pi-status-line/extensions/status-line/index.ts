@@ -1,18 +1,10 @@
 /**
  * Shared status layout for Pi:
  *   above editor: project/Git status on the left; model + thinking on the right
- *   footer line 1: Plan mode + subagent status on the left; otherwise tool activity;
- *                  context + extension statuses on the right
- *   footer line 2: tool activity on the left when subagents occupy line 1;
- *                  token/cost usage on the right
+ *   footer line 1: Plan mode and tool activity left; context/statuses right
+ *   footer line 2: agent navigation left; token/cost usage right
  *
- * pi-git-status, pi-model-thinking, pi-agents, and pi-tool-monitor publish plain
- * status values. This extension owns their positioning and theme presentation.
- *
- * The context gauge and generic extension statuses stay on line 1-right; token/cost
- * usage stays on line 2-right. Subagents claim line 1-left only while visible, so
- * tool-monitor can move up from line 2-left when that space is vacant. This extension
- * owns separators and truncation; left sides yield first so right data stays visible.
+ * Producers publish plain data; this extension owns positioning and styling.
  *
  * Configurable via ~/.pi/agent/status-line.json:
  *   { "order": [segment ids], "hidden": [segment ids], "mode": "verbose" | "compact" }
@@ -32,29 +24,30 @@
  * Reload: /reload
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
+	footerFits,
+	composeSides,
+	GIT_STATUS_KEY,
+	buildSegmentTexts,
+	MODEL_THINKING_STATUS_KEY,
+} from "./segments.ts";
+import {
+	loadConfig,
+	saveConfig,
 	CONFIG_PATH,
+	isSegmentId,
+	SEGMENT_IDS,
+	isFooterMode,
+	NARROW_WIDTH,
 	defaultConfig,
 	effectiveOrder,
 	type FooterMode,
-	isFooterMode,
-	isSegmentId,
-	loadConfig,
-	NARROW_WIDTH,
-	saveConfig,
-	SEGMENT_IDS,
 	type StatusLineConfig,
 } from "./config.ts";
-import {
-	buildSegmentTexts,
-	composeSides,
-	footerFits,
-	GIT_STATUS_KEY,
-	MODEL_THINKING_STATUS_KEY,
-} from "./segments.ts";
+import type { TUI } from "@earendil-works/pi-tui";
+import { createAgentFocus } from "./agent-focus.ts";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const HEADER_WIDGET_KEY = "status-line-header";
 
@@ -149,6 +142,8 @@ export default function (pi: ExtensionAPI) {
 	const requestRender = () => {
 		activeTui?.requestRender();
 	};
+
+	const agentFocus = createAgentFocus(pi, requestRender);
 
 	pi.on("turn_end", () => {
 		requestRender();
@@ -262,6 +257,7 @@ export default function (pi: ExtensionAPI) {
 		// Reload from disk in case the file changed between sessions in this process.
 		currentConfig = loadConfig();
 		pinHeader = undefined;
+		agentFocus.reset();
 
 		if (ctx.mode !== "tui") return;
 
@@ -284,7 +280,7 @@ export default function (pi: ExtensionAPI) {
 					// a bare space in compact mode, so individual extensions emit bare content.
 					const separator = mode === "compact" ? " " : theme.fg("dim", " | ");
 					const extensionStatuses = footerData.getExtensionStatuses();
-					const texts = buildSegmentTexts(ctx, theme, extensionStatuses, mode, separator);
+					const texts = buildSegmentTexts(ctx, theme, extensionStatuses, agentFocus.indicator(), mode, separator);
 
 					const hidden = new Set(currentConfig.hidden);
 					let active = effectiveOrder(currentConfig).filter((id) => !hidden.has(id) && texts[id].length > 0);

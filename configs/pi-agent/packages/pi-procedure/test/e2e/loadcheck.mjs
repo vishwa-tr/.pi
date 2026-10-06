@@ -95,6 +95,7 @@ await test("procedure mount immediately re-pins the project/Git status row below
 	};
 	statusLineExtension.default({
 		events,
+		registerShortcut: () => {},
 		registerCommand: () => {},
 		on: (event, handler) => extensionHandlers.set(event, handler),
 	});
