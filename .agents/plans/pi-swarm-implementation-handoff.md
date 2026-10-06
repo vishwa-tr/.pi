@@ -105,6 +105,13 @@ Historical results from the specification, not newly rerun guarantees:
 - Phase 6's original report calls it finished; review and combined-state verification
   remained incomplete when work stopped. Phase 3 was interrupted before completion.
 
+Publication checks on the combined branch:
+- All 14 changed JavaScript/Python files eligible for syntax checks passed.
+- The targeted `ui-disclosure.test.mjs` suite passed all 16 tests.
+- `native-provider.test.mjs` failed during module loading because `assertNativeRuntime`
+  is no longer exported, confirming the immediate integration blocker above.
+- The complete package suite and POSIX PTY flows were not rerun for this combined state.
+
 Use the managed Pi installation (original audit: Pi 1.0.4; revalidate newer versions).
 Package tests: `npm --prefix configs/pi-agent/packages/pi-swarm test`.
 The `.agents/scripts/swarm-wsl-test.sh` runner is optional and has replacement side effects
