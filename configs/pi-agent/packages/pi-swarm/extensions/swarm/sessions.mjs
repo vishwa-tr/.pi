@@ -92,11 +92,7 @@ export class SwarmSessions {
 				sessionFile: binding ? join(this.#sessionDir, binding.sessionFile) : undefined,
 				modelRuntime: this.#modelRuntime, selection: state.sessions.selection,
 				providerCapability: this.#providerCapability,
-				requestAdmission: {
-					assert: async () => { await this.#controller.system("run.tick"); this.#requestGuard(entry); },
-					check: () => this.#requestGuard(entry),
-					signal: () => entry.active?.signal ?? AbortSignal.abort(),
-				},
+				admitRequest: async () => { await this.#controller.system("run.tick"); this.#requestGuard(entry); },
 				systemPrompt: buildSpecialistPrompt(state, worker), customTools: tools,
 			});
 			Object.assign(entry, created);
@@ -259,15 +255,13 @@ export class SwarmSessions {
 		let failure;
 		let outcome = "settled";
 		try {
-			this.#admission?.assert();
-			check(!context.signal.aborted, "FENCED", "Execution changed before prompt acceptance");
+			this.#requestGuard(entry);
 			const prompt = buildTurnPrompt(state, worker, { messages, reason });
 			if (kind === "compaction") await entry.session.compact(`${buildSpecialistPrompt(state, worker)}\n\nPreserve decisions, questions, references, and focus. Authoritative state:\n${prompt}`);
 			else {
 				// This packet is the only model input admitted for this generation.
 				await context.worker.dispatch("worker.ack", { revision: state.guidanceRevision });
-				this.#admission?.assert();
-				check(!context.signal.aborted, "FENCED", "Guidance changed before dispatch");
+				this.#requestGuard(entry);
 				await entry.session.prompt(prompt, { expandPromptTemplates: false });
 			}
 			await entry.session.waitForIdle();

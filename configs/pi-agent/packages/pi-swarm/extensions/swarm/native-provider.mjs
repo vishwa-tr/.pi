@@ -1,38 +1,28 @@
 import { isDeepStrictEqual } from "node:util";
-import { createNativeFacade } from "./native-binding.mjs";
 import { requireCondition as check } from "./errors.mjs";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createProviderCapability, PROVIDER_DATA_SCOPE } from "./provider-capability.mjs";
-import { createAssistantMessageEventStream, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 
-export { assertNativeRuntime, bindNativeRuntime, isNativeRuntime } from "./native-binding.mjs";
-
-/** Host-only injection. Reuses a public Pi runtime/registry; never constructs or refreshes one.
+/** Host-only model selection. Reuses the host's Pi runtime as is; never constructs or refreshes one.
  * Static public imports let Pi's normal loader supply its own SDK identity; dynamic bare
- * imports from native ESM bypass that mapping. Foundation bookkeeping remains SDK-free.
+ * imports from native ESM bypass that mapping.
  */
 export async function createNativeRuntime({ modelRuntime, modelRegistry, mainModel, thinkingLevel = "off", override } = {}) {
 	check((modelRuntime instanceof ModelRuntime && modelRegistry === undefined) ||
 		(modelRegistry instanceof ModelRegistry && modelRuntime === undefined), "PROVIDER", "Supply one public Pi ModelRuntime or ModelRegistry");
-	const source = modelRuntime ?? modelRegistry;
-	const lookup = modelRuntime ? "getModel" : "find";
+	// Extensions only receive the registry; Pi 1.0 sessions need the ModelRuntime behind it.
+	const runtime = modelRuntime ?? modelRegistry.runtime;
+	check(runtime instanceof ModelRuntime, "PROVIDER", "The model registry does not expose a Pi ModelRuntime");
 	const selected = override?.model ?? mainModel;
-	const model = source[lookup](selected?.provider, selected?.id);
+	const model = runtime.getModel(selected?.provider, selected?.id);
 	check(model && model.api !== "pi-virtual" && (!model.type || model.type === "chat"), "PROVIDER", "An explicit physical chat model is required; automatic routing is disabled");
 	check(isDeepStrictEqual(model, selected), "PROVIDER", "Selected model differs from the host catalog");
 	const level = override?.thinkingLevel ?? thinkingLevel;
-	const thinkingLevels = getSupportedThinkingLevels(model);
-	check(thinkingLevels.includes(level), "MODEL", "Unsupported thinking selection");
-	const snapshot = structuredClone(model);
-	const capability = createProviderCapability({ version: 1, provider: model.provider, modelId: model.id,
+	check(getSupportedThinkingLevels(model).includes(level), "MODEL", "Unsupported thinking selection");
+	const providerCapability = createProviderCapability({ version: 1, provider: model.provider, modelId: model.id,
 		api: model.api, endpoint: informationalEndpoint(model.baseUrl), transport: "pi-native", outboundData: [...PROVIDER_DATA_SCOPE] });
-	const methods = [lookup, "getProvider", "stream", "streamSimple", ...(modelRuntime ? ["getAuth"] : [])];
-	const binding = { source, lookup, model: snapshot, capability, thinkingLevels, createAssistantMessageEventStream,
-		methods, references: methods.map(name => source[name]), provider: source.getProvider(model.provider) };
-	check(binding.provider, "PROVIDER", "Selected provider unavailable");
-	binding.providerMethods = [binding.provider.stream, binding.provider.streamSimple];
-	const runtime = createNativeFacade(binding);
-	return Object.freeze({ modelRuntime: runtime, mainModel: structuredClone(snapshot), thinkingLevel: level, providerCapability: capability });
+	return Object.freeze({ modelRuntime: runtime, mainModel: structuredClone(model), thinkingLevel: level, providerCapability });
 }
 
 // Informational catalog URL only. Omit credential-bearing/opaque routing metadata.

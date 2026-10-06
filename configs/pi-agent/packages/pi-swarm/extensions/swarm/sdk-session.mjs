@@ -4,8 +4,7 @@ import {
 import { dirname, isAbsolute, resolve } from "node:path";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { invariant, privateDirectory } from "./store/files.mjs";
-import { assertProviderSelection } from "./provider-capability.mjs";
-import { bindNativeRuntime, isNativeRuntime } from "./native-provider.mjs";
+import { assertProviderSelection, providerDescriptor } from "./provider-capability.mjs";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -61,10 +60,11 @@ function findSessionFile(sessionDir, cwd, sessionId, sessionFile) {
 	return found === undefined ? undefined : canonicalPath(found);
 }
 
-/** Non-discovering SDK factory: offline mocks or the branded per-request-fenced native adapter. */
-export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile, modelRuntime, selection, systemPrompt, customTools, providerCapability, requestAdmission }) {
+/** Non-discovering SDK factory for offline mocks or the host's own Pi model runtime.
+ * `admitRequest` runs before every model request the session makes. */
+export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile, modelRuntime, selection, systemPrompt, customTools, providerCapability, admitRequest }) {
 	// Gate before directories, sessions, authentication lookup, or fallback selection.
-	const native = isNativeRuntime(modelRuntime, providerCapability);
+	const native = providerCapability !== undefined && providerDescriptor(providerCapability).transport === "pi-native";
 	if (providerCapability) assertProviderSelection(providerCapability, selection, modelRuntime);
 	invariant(native || selection?.provider === "swarm-mock", "This phase only supports the swarm-mock provider");
 	invariant(typeof selection.modelId === "string" && THINKING_LEVELS.has(selection.thinkingLevel), "Explicit model and thinking selection required");
@@ -72,7 +72,7 @@ export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile
 	const model = modelRuntime.getModel(selection.provider, selection.modelId);
 	invariant(native || (model?.provider === "swarm-mock" && model.api === "swarm-mock" && model.id === selection.modelId),
 		"Selected swarm-mock model/API unavailable; fallback is disabled");
-	if (native) modelRuntime = bindNativeRuntime(modelRuntime, providerCapability, requestAdmission);
+	invariant(admitRequest === undefined || typeof admitRequest === "function", "Invalid request admission");
 	invariant(typeof systemPrompt === "string" && systemPrompt.trim().length > 0, "Explicit system prompt required");
 	invariant(Array.isArray(customTools), "Explicit custom tools required");
 	const names = customTools.map((tool) => {
@@ -89,17 +89,22 @@ export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile
 	privateDirectory(sessionDir);
 	canonicalPath(sessionDir);
 	const manager = openManager(cwd, sessionDir, sessionId, sessionFile);
-	const settingsManager = SettingsManager.inMemory({
-		cacheWarming: "off",
-		compaction: { enabled: false },
-		retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0, maxRetryDelayMs: 0 } },
-	});
+	const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" });
 	const { session, modelFallbackMessage } = await createAgentSession({
 		cwd, agentDir: sessionDir, modelRuntime, model, thinkingLevel: selection.thinkingLevel,
 		scopedModels: [{ model, thinkingLevel: selection.thinkingLevel }],
 		sessionManager: manager, settingsManager, resourceLoader: isolatedLoader(systemPrompt),
 		tools: names, customTools,
 	});
+	if (admitRequest) {
+		// Every model request (prompt, tool follow-up, retry, compaction summary) goes through
+		// the agent's stream function, and Pi's loop does not check for abort before calling it.
+		const stream = session.agent.streamFunction;
+		session.agent.streamFunction = async (...request) => {
+			await admitRequest();
+			return stream(...request);
+		};
+	}
 	try {
 		invariant(!modelFallbackMessage && session.model?.id === model.id && session.model?.api === model.api &&
 			session.model?.provider === model.provider && session.thinkingLevel === selection.thinkingLevel,

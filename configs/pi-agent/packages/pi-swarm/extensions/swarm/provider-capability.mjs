@@ -1,5 +1,4 @@
 import { requireCondition as check } from "./errors.mjs";
-import { assertNativeRuntime } from "./native-binding.mjs";
 
 // These categories describe the complete context, not a promise to filter sensitive text.
 export const PROVIDER_DATA_SCOPE = Object.freeze([
@@ -62,10 +61,12 @@ export function assertProviderSelection(capability, selection, modelRuntime) {
 	// OAuth, proxies, provider overrides and request-level model substitutions.
 	check(selection?.provider === descriptor.provider && selection.modelId === descriptor.modelId,
 		"PROVIDER", "Model selection differs from the immutable provider agreement");
-	if (descriptor.transport === "pi-native") return assertNativeRuntime(modelRuntime, capability, selection);
 	const model = modelRuntime?.getModel(descriptor.provider, descriptor.modelId);
-	check(model?.provider === descriptor.provider && model.id === descriptor.modelId && model.api === descriptor.api && model.baseUrl === descriptor.endpoint,
-		"PROVIDER", "Provider/model/API/endpoint substitution denied");
+	check(model?.provider === descriptor.provider && model.id === descriptor.modelId && model.api === descriptor.api,
+		"PROVIDER", "Provider/model/API substitution denied");
+	if (descriptor.transport === "pi-native") return model;
+	// The offline mock has one fixed catalog entry.
+	check(model.baseUrl === descriptor.endpoint, "PROVIDER", "Provider endpoint substitution denied");
 	check(model.headers === undefined && model.samplingParams === undefined && model.compat === undefined,
 		"PROVIDER", "Provider header, routing, and payload overrides are unsupported");
 	return model;
