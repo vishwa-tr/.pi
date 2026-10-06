@@ -28,7 +28,7 @@ appears on `refactor/pi-swarm-native` (after the rebase, not the worktree SHA).
 
 - [x] Phase 0 — target the managed Pi installation, and a Linux baseline — 0A `b585765`, 0B recorded in the baseline table
 - [x] Phase 1 — delete the custom HTTPS transport — `7ba5819`
-- [ ] Phase 2 — native session files
+- [x] Phase 2 — native session files — `bcf8644`
 - [ ] Phase 3 — plain model runtime
 - [ ] Phase 4 — built-in coding tools for workers
 - [ ] Phase 4b — run without `pi-plan` and `pi-safety`
