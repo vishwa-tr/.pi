@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Offline POSIX PTY acceptance. Requires installed pi, Node 22+, Python 3 and Git.
 Creates and removes only disposable fixtures; no installs or personal config reads.
-Run from any directory. PI_SDK_DIR selects the installed SDK, PI_BIN the CLI.
+Run from any directory. Pi comes from its managed installation; PI_SDK_DIR overrides
+the SDK package directory and PI_BIN the JavaScript CLI script.
 """
 import codecs
 import fcntl
@@ -21,6 +22,60 @@ import time
 
 HERE = Path(__file__).resolve().parent
 ANSI = re.compile(r"\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[=>]")
+MANAGED_MARKER = {"kind": "pi-managed-install", "schemaVersion": 1, "layout": "releases-v1"}
+MANAGED_VERSION = re.compile(r"[0-9A-Za-z._+-]+")
+
+
+def pi_cli():
+    """Pi's JavaScript CLI script, run as `node <script>`: PI_BIN, else the package's pi bin."""
+    override = os.environ.get("PI_BIN")
+    if override:
+        cli = Path(os.path.abspath(override))
+        if not cli.is_file() or cli.suffix not in (".js", ".mjs", ".cjs"):
+            raise RuntimeError(f"PI_BIN must name Pi's JavaScript CLI script, not the pi wrapper: {override}")
+        return cli
+    package_dir = pi_package_dir()
+    manifest = json.loads((package_dir / "package.json").read_text(encoding="utf-8"))
+    bin_path = manifest.get("bin")
+    if isinstance(bin_path, dict):
+        bin_path = bin_path.get("pi")
+    if not isinstance(bin_path, str) or not bin_path:
+        raise RuntimeError(f"Pi package does not declare a pi bin: {package_dir}")
+    # Like Pi's launcher: the bin must stay inside the package directory.
+    cli = Path(os.path.abspath(package_dir / bin_path))
+    if not cli.is_relative_to(package_dir) or not cli.is_file():
+        raise RuntimeError(f"Pi executable is invalid: {cli}")
+    return cli
+
+
+def pi_package_dir():
+    """Mirror of test/pi-install.mjs: PI_SDK_DIR, else Pi's managed installation. No npm-global fallback."""
+    if os.environ.get("PI_SDK_DIR"):
+        return require_package(Path(os.path.abspath(os.environ["PI_SDK_DIR"])), "PI_SDK_DIR has no package.json")
+    agent_dir = os.environ.get("PI_CODING_AGENT_DIR") or str(Path.home() / ".pi" / "agent")
+    root = Path(os.path.abspath(os.environ.get("PI_MANAGED_INSTALL_ROOT", "").strip() or os.path.join(agent_dir, "install")))
+    marker_path = root / "managed-install.json"
+    if not marker_path.exists():
+        raise RuntimeError(f"No managed Pi installation found at {root}; install Pi with its installer, or set PI_SDK_DIR.")
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except ValueError:
+        marker = None
+    if not isinstance(marker, dict) or any(type(marker.get(key)) is not type(value) or marker.get(key) != value
+                                           for key, value in MANAGED_MARKER.items()):
+        raise RuntimeError(f"Managed Pi install marker is invalid: {marker_path}")
+    version_path = root / "current-version"
+    version = version_path.read_text(encoding="utf-8").strip() if version_path.exists() else ""
+    if version in ("", ".", "..") or not MANAGED_VERSION.fullmatch(version):
+        raise RuntimeError(f"Managed Pi version file is invalid: {version_path}")
+    package_dir = root / "releases" / version / "node_modules" / "@earendil-works" / "pi-coding-agent"
+    return require_package(package_dir, "Managed Pi release is missing")
+
+
+def require_package(package_dir, problem):
+    if not (package_dir / "package.json").is_file():
+        raise RuntimeError(f"{problem}: {package_dir}")
+    return package_dir
 
 
 class Terminal:
@@ -182,8 +237,9 @@ class DisposableFixture:
 
 
 def main():
-    pi = shutil.which(os.environ.get("PI_BIN", "pi"))
-    assert pi and shutil.which("node") and shutil.which("git"), "Installed pi, node and git required"
+    # Resolve before PI_CODING_AGENT_DIR is swapped for the disposable one below.
+    pi, sdk = pi_cli(), pi_package_dir()
+    assert shutil.which("node") and shutil.which("git"), "node and git required"
     with DisposableFixture() as fixture:
         root = fixture.root
         home, agent, project = [root / name for name in ("home", "agent", "project")]
@@ -193,14 +249,13 @@ def main():
                "LANG": "C.UTF-8", "PI_CODING_AGENT_DIR": str(agent), "PI_OFFLINE": "1",
                "PI_TELEMETRY": "0", "PI_SKIP_VERSION_CHECK": "1", "GIT_CONFIG_NOSYSTEM": "1",
                "GIT_CONFIG_GLOBAL": os.devnull, "SWARM_TERMINAL_FIXTURE": str(root / "events.jsonl")}
-        if os.environ.get("PI_SDK_DIR"):
-            env["PI_SDK_DIR"] = os.environ["PI_SDK_DIR"]
+        env["PI_SDK_DIR"] = str(sdk)  # The child's sdk-register cannot see the real agent dir.
         (agent / "settings.json").write_text(json.dumps({"quietStartup": True, "enableInstallTelemetry": False,
             "compaction": {"enabled": False}, "retry": {"enabled": False}}))
         subprocess.run(["git", "init", "-q", str(project)], env=env, check=True)
         (project / ".git" / "info" / "exclude").write_text(".swarms/\n")
         (project / "user.txt").write_text("preserve this work\n")
-        command = [shutil.which("node"), "--experimental-import-meta-resolve", "--import", str(HERE.parent / "sdk-register.mjs"), str(Path(pi).resolve()), "--no-extensions", "-e", str(HERE / "fixture.ts"), "--no-skills",
+        command = [shutil.which("node"), "--experimental-import-meta-resolve", "--import", str(HERE.parent / "sdk-register.mjs"), str(pi), "--no-extensions", "-e", str(HERE / "fixture.ts"), "--no-skills",
                    "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve", "--no-tools"]
         terminal = fixture.terminal = Terminal(command, project, env)
         event_file = root / "events.jsonl"

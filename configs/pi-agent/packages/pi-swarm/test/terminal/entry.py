@@ -3,16 +3,15 @@
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import time
-from run import DisposableFixture, Terminal, HERE
+from run import DisposableFixture, Terminal, HERE, pi_cli
 
 
 def main(scripted=False, package_root=False):
-    pi = shutil.which(os.environ.get("PI_BIN", "pi"))
-    assert pi and shutil.which("node") and shutil.which("git")
+    pi = pi_cli()
+    assert shutil.which("node") and shutil.which("git")
     with DisposableFixture() as fixture:
         home, agent, project = [fixture.root / name for name in ("home", "agent", "project")]
         for path in (home, agent, project):
@@ -31,7 +30,7 @@ def main(scripted=False, package_root=False):
             (project / ".gitignore").write_bytes(b"# Preserve existing rules\r\n")
             (project / ".gitignore").chmod(0o640)
         entry = HERE.parent.parent if package_root else HERE.parent.parent / "extensions" / "index.ts"
-        command = [shutil.which("node"), str(Path(pi).resolve()), "--no-extensions",
+        command = [shutil.which("node"), str(pi), "--no-extensions",
                    "-e", str(entry),
                    "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
                    "--no-approve"]

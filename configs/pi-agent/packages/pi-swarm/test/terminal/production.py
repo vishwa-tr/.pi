@@ -4,17 +4,17 @@ Uses the existing bounded child cleanup guard; no installs, keys, or global acti
 """
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import time
 
-from run import ANSI, HERE, DisposableFixture, Terminal
+from run import ANSI, HERE, DisposableFixture, Terminal, pi_cli, pi_package_dir
 
 
 def main(native=False):
-    pi = shutil.which(os.environ.get("PI_BIN", "pi"))
-    assert pi and shutil.which("node") and shutil.which("git"), "Installed pi, node and git required"
+    # Resolve before PI_CODING_AGENT_DIR is swapped for the disposable one below.
+    pi, sdk = pi_cli(), pi_package_dir()
+    assert shutil.which("node") and shutil.which("git"), "node and git required"
     with DisposableFixture() as fixture:
         root = fixture.root
         home, agent, project = [root / name for name in ("home", "agent", "project")]
@@ -29,8 +29,7 @@ def main(native=False):
             env["SWARM_TERMINAL_NATIVE"] = "1"
         label = "Pi native provider" if native else "mock only"
         scope = "Disposable project only; no network"
-        if os.environ.get("PI_SDK_DIR"):
-            env["PI_SDK_DIR"] = os.environ["PI_SDK_DIR"]
+        env["PI_SDK_DIR"] = str(sdk)  # The child's sdk-register cannot see the real agent dir.
         settings = {"quietStartup": True, "enableInstallTelemetry": False,
                     "compaction": {"enabled": False}, "retry": {"enabled": False}}
         (agent / "settings.json").write_text(json.dumps(settings))
@@ -38,7 +37,7 @@ def main(native=False):
         (project / ".git" / "info" / "exclude").write_text(".swarms/\n")
         (project / "user.txt").write_text("preserve this work\n")
         command = [shutil.which("node"), "--experimental-import-meta-resolve", "--import",
-                   str(HERE.parent / "sdk-register.mjs"), str(Path(pi).resolve()), "--no-extensions",
+                   str(HERE.parent / "sdk-register.mjs"), str(pi), "--no-extensions",
                    "-e", str(HERE / "production-fixture.ts"), "--no-skills", "--no-prompt-templates",
                    "--no-themes", "--no-context-files", "--no-approve", "--no-tools",
                    "--provider", "swarm-mock", "--model", "scripted"]

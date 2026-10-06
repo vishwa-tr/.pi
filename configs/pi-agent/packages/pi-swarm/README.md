@@ -47,9 +47,10 @@ Requires Node 22.19+, Git, and a local Unix filesystem that supports the synchro
 and no-follow operations used by the storage layer. The complete suite also requires the
 installed Pi SDK/CLI **1.0.0 or newer** (1.0.0 is the original verified baseline;
 1.0.1 also passes the current suite and dashboard/normal-entry PTY checks). Pi 1.0 requires Node 22.19+. Older Pi releases are no longer supported by
-this package; historical phase results below describe their original verification. The test bootstrap resolves public package exports;
-set `PI_SDK_DIR` if automatic discovery does not locate the installation. No install fallback
-is provided. `npm run test:foundation` runs the non-SDK tests separately.
+this package; historical phase results below describe their original verification. The test bootstrap resolves public package exports
+from Pi's managed installation (`~/.pi/agent/install`, or `PI_CODING_AGENT_DIR`'s `install`) automatically;
+set `PI_SDK_DIR` to a Pi package directory to override it. There is no npm-global or install fallback.
+`npm run test:foundation` runs the non-SDK tests separately.
 
 From the repository root:
 
@@ -688,8 +689,9 @@ Run with installed Pi 1.0.0, Node 22.19+, Python 3, and Git on POSIX:
 python3 configs/pi-agent/packages/pi-swarm/test/terminal/run.py
 ```
 
-`PI_BIN` selects the installed Node-based Pi CLI; `PI_SDK_DIR` selects its SDK package
-when needed. There is no install fallback. The harness creates a disposable Git project,
+The harness runs the CLI script of Pi's managed installation with `node`, resolved before it swaps
+in the disposable agent directory. `PI_SDK_DIR` overrides the SDK package directory and `PI_BIN`
+the CLI; `PI_BIN` must name the JavaScript CLI script, not the `pi` wrapper. There is no install fallback. The harness creates a disposable Git project,
 HOME, and `PI_CODING_AGENT_DIR`, checks that Pi resolves that agent directory, disables
 startup network operations and resource discovery, and explicitly loads only the test
 factory. It forwards no credentials or personal configuration. Temporary sessions,

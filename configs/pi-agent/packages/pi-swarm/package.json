@@ -8,6 +8,12 @@
 	"pi": {
 		"extensions": ["./extensions/index.ts"]
 	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
+	},
 	"scripts": {
 		"test": "node --experimental-import-meta-resolve --import ./test/sdk-register.mjs --test test/*.test.mjs",
 		"test:foundation": "node --test test/core.test.mjs test/state.test.mjs test/storage.test.mjs test/regressions.test.mjs test/shell.test.mjs test/workspace*.test.mjs test/session-state.test.mjs test/specializations.test.mjs"

@@ -1,12 +1,11 @@
 // Test-only installed-SDK resolver. Production code imports public package roots normally.
-import { existsSync } from "node:fs";
-import { register } from "node:module";
 import { resolve } from "node:path";
+import { register } from "node:module";
 import { pathToFileURL } from "node:url";
+import { resolvePiPackageDir } from "./pi-install.mjs";
 
-const sdkDir = process.env.PI_SDK_DIR ?? "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent";
+const sdkDir = resolvePiPackageDir();
 const manifest = resolve(sdkDir, "package.json");
-if (!existsSync(manifest)) throw new Error("Installed Pi SDK missing; set PI_SDK_DIR to its package directory");
 if (!process.execArgv.includes("--experimental-import-meta-resolve")) {
 	throw new Error("SDK tests require --experimental-import-meta-resolve");
 }
