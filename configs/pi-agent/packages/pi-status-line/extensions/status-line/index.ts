@@ -55,6 +55,7 @@ import {
 	GIT_STATUS_KEY,
 	MODEL_THINKING_STATUS_KEY,
 } from "./segments.ts";
+import { createAgentFocus } from "./agent-focus.ts";
 
 const HEADER_WIDGET_KEY = "status-line-header";
 
@@ -149,6 +150,8 @@ export default function (pi: ExtensionAPI) {
 	const requestRender = () => {
 		activeTui?.requestRender();
 	};
+
+	const agentFocus = createAgentFocus(pi, requestRender);
 
 	pi.on("turn_end", () => {
 		requestRender();
@@ -262,6 +265,7 @@ export default function (pi: ExtensionAPI) {
 		// Reload from disk in case the file changed between sessions in this process.
 		currentConfig = loadConfig();
 		pinHeader = undefined;
+		agentFocus.reset();
 
 		if (ctx.mode !== "tui") return;
 
@@ -284,7 +288,7 @@ export default function (pi: ExtensionAPI) {
 					// a bare space in compact mode, so individual extensions emit bare content.
 					const separator = mode === "compact" ? " " : theme.fg("dim", " | ");
 					const extensionStatuses = footerData.getExtensionStatuses();
-					const texts = buildSegmentTexts(ctx, theme, extensionStatuses, mode, separator);
+					const texts = buildSegmentTexts(ctx, theme, extensionStatuses, agentFocus.indicator(), mode, separator);
 
 					const hidden = new Set(currentConfig.hidden);
 					let active = effectiveOrder(currentConfig).filter((id) => !hidden.has(id) && texts[id].length > 0);

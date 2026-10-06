@@ -46,7 +46,7 @@ interface ViewerComponent {
 }
 
 /** Build transcript components from a session file's message entries. */
-function buildComponents(sessionFile: string | null, tui: TUI, cwd: string): Component[] {
+export function buildComponents(sessionFile: string | null, tui: TUI, cwd: string): Component[] {
 	if (!sessionFile) return [];
 	let content: string;
 	try {
