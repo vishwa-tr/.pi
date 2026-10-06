@@ -51,6 +51,10 @@ available count; the focused full-screen view shows the selected agent and its
 position. **PageUp/PageDown** scroll its transcript. Live main-agent work continues
 in the background. Opening a native dialog returns focus to main.
 
+The themed heading sits above a padded **History** frame with space between
+messages. A separate **Message agent** composer stays below history. Small
+terminals use a compact layout, retaining the active cursor when drafts resize.
+
 The focused editor sends text mail only to the selected agent: dormant persistent
 agents wake and busy agents queue it. Unavailable recipients report a delivery
 failure. Drafts

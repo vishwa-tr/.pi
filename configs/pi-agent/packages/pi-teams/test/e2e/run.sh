@@ -38,6 +38,7 @@ TESTS=(
 	phase8-review-fixes.mjs
 	phase9-auto-wake.mjs
 	phase10-peers.mjs
+	phase10-focus.mjs
 	lifecycle-runtime.mjs
 	wake-policy.mjs
 	loadcheck.mjs
