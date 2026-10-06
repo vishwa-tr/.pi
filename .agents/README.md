@@ -2,6 +2,7 @@
 
 ## Plans
 
+- [Swarm implementation handoff](plans/pi-swarm-implementation-handoff.md) — partial implementation, blockers, remaining phases, and temporary-document cleanup for the native cleanup PR.
 - [pi-swarm native cleanup](plans/pi-swarm-native-cleanup.md) — phased plan to replace pi-swarm's custom transport, tools, session handling and storage with native Pi features.
 
 ## Scripts
