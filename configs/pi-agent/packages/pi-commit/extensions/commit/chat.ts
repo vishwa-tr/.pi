@@ -21,7 +21,7 @@ import type {
 	KeybindingsManager,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { Input, Key, matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ReviewGroup } from "./classify.ts";
 import { type AnswerState, spawnSubagentAnswer } from "./subagent.ts";
@@ -98,7 +98,7 @@ interface ChatPanelOptions {
 	onDone: (result: void) => void;
 }
 
-function createChatPanel(opts: ChatPanelOptions): Component {
+function createChatPanel(opts: ChatPanelOptions): Component & Focusable {
 	const { pi, ctx, group, diffText, target, tui, theme, keybindings, onDone } = opts;
 
 	const turns: Turn[] = [];

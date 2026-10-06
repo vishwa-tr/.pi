@@ -1,5 +1,6 @@
+import { piInvocation } from "../../../test/runtime.mjs";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -11,12 +12,12 @@ const PACKAGE_ROOT = resolve(HERE, "..");
 const PACKAGES_ROOT = resolve(PACKAGE_ROOT, "..");
 const EXTENSION = join(PACKAGE_ROOT, "extensions", "timers", "index.ts");
 const INTROSPECT = join(HERE, "fixtures", "introspect-tools.ts");
-const PI = "/opt/pi/pi";
+const PI = piInvocation();
 
 function runRpc() {
 	const directory = mkdtempSync(join(tmpdir(), "pi-timers-rpc-test-"));
 	const introspectionPath = join(directory, "tools.json");
-	const result = spawnSync(PI, [
+	const result = spawnSync(PI.command, [...PI.args,
 		"--mode", "rpc",
 		"--no-session",
 		"--offline",
@@ -29,7 +30,7 @@ function runRpc() {
 		"-e", INTROSPECT,
 	], {
 		cwd: PACKAGE_ROOT,
-		env: { ...process.env, PI_TIMERS_INTROSPECT_FILE: introspectionPath },
+		env: { ...process.env, PI_CODING_AGENT_DIR: join(directory, "agent"), PI_TIMERS_INTROSPECT_FILE: introspectionPath },
 		input: '{"id":"timers-load","type":"get_state"}\n',
 		encoding: "utf8",
 		timeout: 30_000,
@@ -57,7 +58,7 @@ function runRpc() {
 	}
 }
 
-test("registers the main-agent timer tool and command in the installed Pi runtime", { skip: !existsSync(PI) }, () => {
+test("registers the main-agent timer tool and command in the installed Pi runtime", () => {
 	const state = runRpc();
 	const tool = state.all.find((candidate) => candidate.name === "manage_timers");
 	assert.ok(tool);

@@ -84,7 +84,7 @@ row, not a toast, editor widget, or duplicate model-context message.
 
 ## Activation
 
-This package is enabled through the repository's root `settings.json`. Run
+This package is enabled through the repository's `agent/settings.json`. Run
 `/reload` or restart Pi after changing it.
 
 ## Verification

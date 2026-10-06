@@ -8,6 +8,7 @@
 /trust.json*
 /models-store.json*
 /npm/
+/install/
 /git/
 /bin/
 /tools/
@@ -25,6 +26,7 @@
 /agent/trust.json*
 /agent/models-store.json*
 /agent/npm/
+/agent/install/
 /agent/git/
 /agent/bin/
 /agent/tools/

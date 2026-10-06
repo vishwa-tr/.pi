@@ -1,3 +1,5 @@
+import { systemPromptText } from "../../../../test/runtime.mjs";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * Phase-5 sandbox e2e for pi-teams: the non-overridable system-deny guard, the
  * pi.events safety bridge (fail-closed + claim), and end-to-end sandboxed
@@ -11,7 +13,7 @@ import { join, sep } from "node:path";
 import { createTestModelRuntime, EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-const piAi = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 const { createLayout } = await jiti.import(join(EXT, "store/layout.ts"));
 const { makeSystemDenyCheck, realpathDeep } = await jiti.import(join(EXT, "sandbox/system-deny.ts"));
 const { makeSafetyConfirm } = await jiti.import(join(EXT, "sandbox/safety-bridge.ts"));
@@ -106,7 +108,7 @@ let scriptedCall = null;
 function mockStream(model, context) {
 	const stream = piAi.createAssistantMessageEventStream();
 	(async () => {
-		const sp = context.systemPrompt ?? "";
+		const sp = systemPromptText(context);
 		const lastRole = context.messages.at(-1)?.role;
 		const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 		const base = { role: "assistant", api: model.api, provider: model.provider, model: model.id, usage, timestamp: Date.now() };

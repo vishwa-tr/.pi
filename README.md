@@ -228,6 +228,15 @@ example when portable configuration is genuinely needed.
 Pi can update `agent/settings.json` through interactive configuration. Review every
 settings diff before committing and keep the tracked file portable.
 
+## Managed Pi compatibility
+
+The 32 enabled packages have automated compatibility coverage for managed Pi 1.0.4 on Linux.
+See [runtime compatibility and verification](configs/pi-agent/docs/agents/notes/ops/standalone-extension-compatibility/standalone-extension-compatibility.md)
+for the supported contracts, full suite, compiler prerequisites, and untested runtime boundaries.
+`PI_SDK_DIR` can select another SDK; otherwise the test tooling follows the managed install's
+current version and resolves its hoisted dependencies. Updating Pi does not update a separate
+copy of this configuration repository.
+
 ## Validation
 
 Run:

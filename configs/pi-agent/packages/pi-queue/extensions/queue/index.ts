@@ -3,9 +3,9 @@ import {
 	InteractiveMode,
 	type ExtensionAPI,
 	type ExtensionContext,
-	type ImageContent,
 	type Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { Box, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
 	combineQueuedContent,
@@ -186,7 +186,7 @@ export default function queueExtension(pi: ExtensionAPI): void {
 					return withOuterPadding(box.render(width));
 				},
 			}),
-			{ placement: "aboveWorking" },
+			{ placement: "aboveEditor" },
 		);
 	}
 
@@ -286,7 +286,7 @@ export default function queueExtension(pi: ExtensionAPI): void {
 		restoreCompactionQueue = null;
 		restoreEditor?.();
 		restoreEditor = null;
-		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined, { placement: "aboveWorking" });
+		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_KEY, undefined, { placement: "aboveEditor" });
 	});
 	pi.on("session_tree", (_event, ctx) => {
 		restore(ctx);

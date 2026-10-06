@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { dependencyRoot, findPiPackage } from "../../../test/runtime.mjs";
 
 import { strict as assert } from "node:assert";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,19 +15,6 @@ function importPath(...segments) {
 	return import(pathToFileURL(join(...segments)).href);
 }
 
-function findPiPackage() {
-	const home = process.env.HOME ?? "";
-	const candidates = [
-		process.env.PI_SDK_DIR,
-		join(home, ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
-		"/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
-		"/usr/lib/node_modules/@earendil-works/pi-coding-agent",
-	].filter(Boolean);
-	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "dist", "cli.js"))) return candidate;
-	}
-	throw new Error("@earendil-works/pi-coding-agent not found; install Pi globally or set PI_SDK_DIR");
-}
 
 const PI_PACKAGE = findPiPackage();
 const scratch = mkdtempSync(join(tmpdir(), "void-agent-"));
@@ -54,7 +42,7 @@ try {
 	interactiveModePrototype = InteractiveMode.prototype;
 	originalShowStatusIndicator = interactiveModePrototype.showStatusIndicator;
 	const { visibleWidth } = await importPath(
-		PI_PACKAGE, "node_modules", "@earendil-works", "pi-tui", "dist", "index.js"
+		dependencyRoot("@earendil-works/pi-tui", PI_PACKAGE), "dist", "index.js"
 	);
 
 	const theme = loadThemeFromPath(THEME, "truecolor");

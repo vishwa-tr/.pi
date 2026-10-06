@@ -1,41 +1,14 @@
+import { createPiJiti, findPiPackage } from "../../../test/runtime.mjs";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
-function findPiPackage(source: NodeJS.ProcessEnv = process.env): string {
-	const home = source.HOME?.trim();
-	const appData = source.APPDATA?.trim();
-	const packagePath = join("@earendil-works", "pi-coding-agent");
-	const candidates = [
-		source.PI_SDK_DIR?.trim(),
-		home ? join(home, ".local", "lib", "node_modules", packagePath) : undefined,
-		appData ? join(appData, "npm", "node_modules", packagePath) : undefined,
-		join("/usr/local/lib/node_modules", packagePath),
-		join("/usr/lib/node_modules", packagePath),
-	].filter((candidate): candidate is string => Boolean(candidate));
-	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "dist", "index.js"))) return candidate;
-	}
-	throw new Error("@earendil-works/pi-coding-agent not found; install Pi globally or set PI_SDK_DIR");
-}
 
-const piPackage = findPiPackage();
-const jitiUrl = pathToFileURL(join(piPackage, "node_modules", "jiti", "lib", "jiti.mjs"));
-const { createJiti } = await import(jitiUrl.href);
 const codingAgentStub = fileURLToPath(new URL("./fixtures/pi-coding-agent.mjs", import.meta.url));
-const jiti = createJiti(import.meta.url, {
-	interopDefault: true,
-	moduleCache: true,
-	alias: {
-		"@earendil-works/pi-coding-agent": codingAgentStub,
-		"@earendil-works/pi-ai": join(piPackage, "node_modules", "@earendil-works", "pi-ai", "dist", "index.js"),
-		"@earendil-works/pi-tui": join(piPackage, "node_modules", "@earendil-works", "pi-tui", "dist", "index.js"),
-		typebox: join(piPackage, "node_modules", "typebox", "build", "index.mjs"),
-	},
-});
+const jiti = await createPiJiti(import.meta.url, { alias: { "@earendil-works/pi-coding-agent": codingAgentStub } });
 
 test("discovers a Windows npm-global Pi installation without HOME", (t) => {
 	const appData = mkdtempSync(join(tmpdir(), "pi-web-search-appdata-test-"));
@@ -43,8 +16,9 @@ test("discovers a Windows npm-global Pi installation without HOME", (t) => {
 	const expected = join(appData, "npm", "node_modules", "@earendil-works", "pi-coding-agent");
 	mkdirSync(join(expected, "dist"), { recursive: true });
 	writeFileSync(join(expected, "dist", "index.js"), "");
+	writeFileSync(join(expected, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent" }));
 
-	assert.equal(findPiPackage({ APPDATA: appData }), expected);
+	assert.equal(findPiPackage({ env: { APPDATA: appData }, home: appData }), expected);
 });
 
 test("loads the extension and wires compact transcript rendering", async () => {

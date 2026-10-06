@@ -1,10 +1,11 @@
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 import { strict as assert } from "node:assert";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createTestModelRuntime, EXT, PI_PKG, jiti } from "./env.mjs";
 const sdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-const ai = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+const ai = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 const { createSubagentTools } = await jiti.import(join(EXT, "tools/sub-agent.ts"));
 const { createLayout } = await jiti.import(join(EXT, "store/layout.ts"));
 const { createCore } = await jiti.import(join(EXT, "core.ts"));

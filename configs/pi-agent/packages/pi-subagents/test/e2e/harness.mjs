@@ -1,3 +1,5 @@
+import { systemPromptText } from "../../../../test/runtime.mjs";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * test/e2e/harness.mjs — shared world + scripted mock LLM for the phase files.
  *
@@ -15,7 +17,7 @@ import { join } from "node:path";
 import { createTestModelRuntime, EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 export const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-export const piAi = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+export const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 
 const { createLayout } = await jiti.import(join(EXT, "store/layout.ts"));
 const { createCore } = await jiti.import(join(EXT, "core.ts"));
@@ -59,8 +61,8 @@ export async function makeWorld(name) {
 		const stream = piAi.createAssistantMessageEventStream();
 		(async () => {
 			const call = {
-				address: addressOf(context.systemPrompt ?? ""),
-				systemPrompt: context.systemPrompt ?? "",
+				address: addressOf(systemPromptText(context)),
+				systemPrompt: systemPromptText(context),
 				lastUserText: lastUserText(context.messages),
 				messageCount: context.messages.length,
 				historyText: JSON.stringify(context.messages),

@@ -1,3 +1,5 @@
+import { systemPromptText } from "../../../../test/runtime.mjs";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * Phase-3 mail e2e for pi-teams: mailbox IO, delivery/dispositions/bounce,
  * the deterministic wake digest, non-blocking questions (Q→dormant→A→wake with
@@ -13,7 +15,7 @@ import { join } from "node:path";
 import { createTestModelRuntime, EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-const piAi = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 const { createLayout } = await jiti.import(join(EXT, "store/layout.ts"));
 const { readPending } = await jiti.import(join(EXT, "mail/mailbox.ts"));
 const { composeWakeDigest } = await jiti.import(join(EXT, "mail/digest.ts"));
@@ -56,7 +58,7 @@ function addressOf(systemPrompt) {
 function mockStream(model, context) {
 	const stream = piAi.createAssistantMessageEventStream();
 	(async () => {
-		const call = { address: addressOf(context.systemPrompt ?? ""), systemPrompt: context.systemPrompt ?? "", lastUserText: lastUserText(context.messages), lastRole: context.messages.at(-1)?.role };
+		const call = { address: addressOf(systemPromptText(context)), systemPrompt: systemPromptText(context), lastUserText: lastUserText(context.messages), lastRole: context.messages.at(-1)?.role };
 		llmCalls.push(call);
 		let spec = { text: `MOCK_DEFAULT_${llmCalls.length}` };
 		for (let i = 0; i < scripts.length; i++) {

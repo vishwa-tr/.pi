@@ -1,3 +1,5 @@
+import { systemPromptText } from "../../../../test/runtime.mjs";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * Phase-2 runtime e2e for pi-teams: a REAL agent turn through
  * createAgentSession with a stubbed LLM (in-memory ModelRegistry, scripted
@@ -8,12 +10,12 @@
  * Run: node phase2-runtime.mjs
  */
 import { strict as assert } from "node:assert";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-const piAi = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 const { createLayout } = await jiti.import(join(EXT, "store/layout.ts"));
 const { readRegistry, getAgent } = await jiti.import(join(EXT, "store/registry.ts"));
 const { Scheduler } = await jiti.import(join(EXT, "runtime/scheduler.ts"));
@@ -61,7 +63,7 @@ function mockStream(model, context) {
 	const stream = piAi.createAssistantMessageEventStream();
 	(async () => {
 		const userText = lastUserText(context.messages);
-		llmCalls.push({ systemPrompt: context.systemPrompt ?? "", model: `${model.provider}/${model.id}` });
+		llmCalls.push({ systemPrompt: systemPromptText(context), model: `${model.provider}/${model.id}` });
 		let spec;
 		if (userText.includes("Exercise thinking lifecycle")) {
 			lifecycleCalls++;

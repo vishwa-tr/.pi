@@ -1,3 +1,5 @@
+import { systemPromptText } from "../../../../test/runtime.mjs";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * test/e2e/harness.mjs — shared world + scripted mock LLM for the phase files.
  *
@@ -21,7 +23,7 @@ import { join } from "node:path";
 import { EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 export const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-export const piAi = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+export const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 
 const { createProcedureLayout } = await jiti.import(join(EXT, "journal/layout.ts"));
 const { ProcedureRun } = await jiti.import(join(EXT, "run.ts"));
@@ -68,8 +70,8 @@ export async function makeWorld(name) {
 			maxObservedConcurrent = Math.max(maxObservedConcurrent, concurrent);
 			try {
 				const call = {
-					label: labelOf(context.systemPrompt ?? ""),
-					systemPrompt: context.systemPrompt ?? "",
+					label: labelOf(systemPromptText(context)),
+					systemPrompt: systemPromptText(context),
 					lastUserText: lastUserText(context.messages),
 					messageCount: context.messages.length,
 				};

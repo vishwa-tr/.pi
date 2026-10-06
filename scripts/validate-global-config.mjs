@@ -510,7 +510,7 @@ const forbiddenExact = new Set([
   "teams.json",
   "procedures.json",
 ]);
-const forbiddenRuntimeDirs = /^(sessions|npm|git|bin|tools|tmp)\//;
+const forbiddenRuntimeDirs = /^(sessions|npm|install|git|bin|tools|tmp)\//;
 function isPrivateRuntimePath(path) {
   if (forbiddenExact.has(path) || forbiddenRuntimeDirs.test(path)) return true;
   if (!path.startsWith("agent/")) return false;
@@ -591,6 +591,7 @@ for (const ignoredPath of [
   "trust.json",
   "models-store.json",
   "npm/probe",
+  "install/probe",
   "git/probe",
   "bin/probe",
   "tmp/pi-global-config-migration/probe",
@@ -610,6 +611,7 @@ for (const ignoredPath of [
   "agent/trust.json",
   "agent/models-store.json",
   "agent/npm/probe",
+  "agent/install/probe",
   "agent/git/probe",
   "agent/bin/probe",
   "agent/tmp/probe",

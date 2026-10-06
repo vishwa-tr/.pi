@@ -1,3 +1,4 @@
+import { createPiJiti, dependencyRoot, findPiPackage } from "../../../test/runtime.mjs";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -6,34 +7,10 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
-function findPiPackage(): string {
-	const home = process.env.HOME ?? "";
-	const candidates = [
-		process.env.PI_SDK_DIR,
-		join(home, ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
-		"/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
-		"/usr/lib/node_modules/@earendil-works/pi-coding-agent",
-	].filter((candidate): candidate is string => Boolean(candidate));
-	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "dist", "index.js"))) return candidate;
-	}
-	throw new Error("@earendil-works/pi-coding-agent not found; install Pi globally or set PI_SDK_DIR");
-}
 
 const piPackage = findPiPackage();
-const jitiModuleUrl = pathToFileURL(join(piPackage, "node_modules", "jiti", "lib", "jiti.mjs"));
-const { createJiti } = await import(jitiModuleUrl.href);
 const codingAgentStub = fileURLToPath(new URL("./fixtures/pi-coding-agent.mjs", import.meta.url));
-const jiti = createJiti(import.meta.url, {
-	interopDefault: true,
-	moduleCache: true,
-	alias: {
-		"@earendil-works/pi-coding-agent": codingAgentStub,
-		"@earendil-works/pi-ai": join(piPackage, "node_modules", "@earendil-works", "pi-ai", "dist", "index.js"),
-		"@earendil-works/pi-tui": join(piPackage, "node_modules", "@earendil-works", "pi-tui", "dist", "index.js"),
-		typebox: join(piPackage, "node_modules", "typebox", "build", "index.mjs"),
-	},
-});
+const jiti = await createPiJiti(import.meta.url, { alias: { "@earendil-works/pi-coding-agent": codingAgentStub } });
 const extensionPath = fileURLToPath(new URL("../extensions/codex-image-generation/index.ts", import.meta.url));
 const fixturePath = fileURLToPath(new URL("./fixtures/fake-codex-app-server.mjs", import.meta.url));
 
@@ -107,7 +84,7 @@ test("returns text-only generation/edit metadata in every mode, with a TUI-only 
 		assert.ok(updates.every((update) => update.content.every((part) => part.type === "text")));
 
 		const { createReadTool } = await import(pathToFileURL(join(piPackage, "dist/core/tools/read.js")).href);
-		const { Image, getCapabilities, setCapabilities } = await import(pathToFileURL(join(piPackage, "node_modules/@earendil-works/pi-tui/dist/index.js")).href);
+		const { Image, getCapabilities, setCapabilities } = await import(pathToFileURL(join(dependencyRoot("@earendil-works/pi-tui", piPackage), "dist/index.js")).href);
 		const theme = { fg: (_color: string, text: string) => text };
 		for (const mode of ["print", "json", "rpc", "tui"]) {
 			for (const editing of [false, true]) {

@@ -30,7 +30,7 @@ label with `getLabel` — the same source `/bookmark` writes to. No extra state 
 
 ## Install
 
-This repository enables the package from root `settings.json` with the portable
+This repository enables the package from `agent/settings.json` with the portable
 relative path below. Run `/reload` after changing package activation:
 
 ```json

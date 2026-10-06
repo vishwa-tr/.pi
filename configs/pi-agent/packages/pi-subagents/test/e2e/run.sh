@@ -6,7 +6,7 @@
 # Runs a strict typecheck of extensions/ then every phase harness, in order.
 # Exits non-zero on the first failure.
 #
-# Prereqs: node >= 22 and a global install of @earendil-works/pi-coding-agent.
+# Prereqs: node >= 22 and an installed Pi SDK and TypeScript compiler.
 # Set PI_SDK_DIR if the SDK lives somewhere unusual. Optional: NODE, TSC,
 # SKIP_TYPECHECK=1.
 set -euo pipefail
@@ -18,32 +18,7 @@ NODE="${NODE:-node}"
 # 1. Strict typecheck
 # ---------------------------------------------------------------------------
 if [ "${SKIP_TYPECHECK:-0}" != "1" ]; then
-	PI_PKG="$("$NODE" print-pi-pkg.mjs)"
-	PKG_ROOT="$("$NODE" -e 'console.log(require("node:path").resolve("../.."))')"
-	GEN_DIR="$(mktemp -d)"
-	trap 'rm -rf "$GEN_DIR"' EXIT
-	"$NODE" --input-type=module - "$PI_PKG" "$PKG_ROOT" "$GEN_DIR/tsconfig.json" <<'NODE'
-import { readFileSync, writeFileSync } from "node:fs";
-
-const [piPackage, packageRoot, outputPath] = process.argv.slice(2);
-const jsonPath = (value) => JSON.stringify(value.replaceAll("\\", "/")).slice(1, -1);
-const config = readFileSync("tsconfig.template.json", "utf8")
-	.replaceAll("__PI_PKG__", jsonPath(piPackage))
-	.replaceAll("__PKG_ROOT__", jsonPath(packageRoot));
-writeFileSync(outputPath, config);
-NODE
-
-	if [ -z "${TSC:-}" ]; then
-		if command -v tsc >/dev/null 2>&1; then
-			TSC=tsc
-		else
-			echo "== typescript not found — installing on demand =="
-			npm install --prefix "$GEN_DIR" --no-audit --no-fund --silent typescript
-			TSC="$GEN_DIR/node_modules/.bin/tsc"
-		fi
-	fi
-	echo "== typecheck (strict) =="
-	$TSC -p "$GEN_DIR/tsconfig.json"
+	PI_TSC="${TSC:-${PI_TSC:-tsc}}" "$NODE" ../../../../test/typecheck.mjs pi-subagents
 	echo "typecheck clean"
 else
 	echo "== typecheck skipped (SKIP_TYPECHECK=1) =="

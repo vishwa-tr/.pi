@@ -1,3 +1,5 @@
+import { systemPromptText } from "../../../../test/runtime.mjs";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * Phase-4 rails e2e for pi-teams: the chain-hops rail (D21). Pure-unit checks
  * of makeHopsGuard/isMainEscape, then a forced peer ping-pong that must die at
@@ -11,7 +13,7 @@ import { join } from "node:path";
 import { createTestModelRuntime, EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-const piAi = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 const { createLayout } = await jiti.import(join(EXT, "store/layout.ts"));
 const { makeEnvelope } = await jiti.import(join(EXT, "mail/envelope.ts"));
 const { makeHopsGuard, isMainEscape, DEFAULT_MAX_HOPS } = await jiti.import(join(EXT, "rails/hops.ts"));
@@ -55,7 +57,7 @@ function otherOf(address) {
 function mockStream(model, context) {
 	const stream = piAi.createAssistantMessageEventStream();
 	(async () => {
-		const sp = context.systemPrompt ?? "";
+		const sp = systemPromptText(context);
 		const address = (sp.match(/address `([^`]+)`/) || [])[1] ?? "?";
 		const lastUser = (() => {
 			for (let i = context.messages.length - 1; i >= 0; i--) if (context.messages[i].role === "user") {

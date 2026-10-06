@@ -387,9 +387,9 @@ export class ToolMonitorComponent {
 		} else if (matchesKey(data, "down") || data === "j") {
 			this.selectedIndex = items.length === 0 ? 0 : (this.selectedIndex + 1) % items.length;
 			this.listFollowSelection = true;
-		} else if (matchesKey(data, "pageup")) {
+		} else if (matchesKey(data, "pageUp")) {
 			this.scrollListPage(-1);
-		} else if (matchesKey(data, "pagedown")) {
+		} else if (matchesKey(data, "pageDown")) {
 			this.scrollListPage(1);
 		} else if (matchesKey(data, "home") || data === "g") {
 			this.selectedIndex = 0;
@@ -431,8 +431,8 @@ export class ToolMonitorComponent {
 		const maxScroll = Math.max(0, this.detailLineCount - viewport);
 		if (matchesKey(data, "up") || data === "k") this.detailScroll = Math.max(0, this.detailScroll - 1);
 		else if (matchesKey(data, "down") || data === "j") this.detailScroll = Math.min(maxScroll, this.detailScroll + 1);
-		else if (matchesKey(data, "pageup")) this.detailScroll = Math.max(0, this.detailScroll - viewport);
-		else if (matchesKey(data, "pagedown")) this.detailScroll = Math.min(maxScroll, this.detailScroll + viewport);
+		else if (matchesKey(data, "pageUp")) this.detailScroll = Math.max(0, this.detailScroll - viewport);
+		else if (matchesKey(data, "pageDown")) this.detailScroll = Math.min(maxScroll, this.detailScroll + viewport);
 		else if (data === "g") this.detailScroll = 0;
 		else if (data === "G") this.detailScroll = maxScroll;
 		else if (data === "x") this.attemptAbort(this.selectedId ? this.runs.get(this.selectedId) : undefined);

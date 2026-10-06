@@ -24,7 +24,7 @@ const SOURCE = `const v = await agent('judge this', {label: 'judge', schema: ${J
 return v
 `;
 
-world.scripts.push({ match: (c) => c.label === "judge" && c.messageCount <= 1, reply: () => ({ text: "I think it is real." }) });
+world.scripts.push({ match: (c) => c.label === "judge" && c.lastUserText === "judge this", reply: () => ({ text: "I think it is real." }) });
 world.scripts.push({
 	match: (c) => c.label === "judge",
 	reply: () => ({ tools: [{ name: "structured_output", args: { output: { verdict: "maybe", extra: 1 } } }] }),

@@ -1,41 +1,14 @@
+import { createPiJiti } from "../../../test/runtime.mjs";
 import assert from "node:assert/strict";
 import { existsSync, renameSync, symlinkSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-function findPiPackage(): string {
-	const home = process.env.HOME ?? "";
-	const candidates = [
-		process.env.PI_SDK_DIR,
-		join(home, ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
-		"/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
-		"/usr/lib/node_modules/@earendil-works/pi-coding-agent",
-	].filter((candidate): candidate is string => Boolean(candidate));
-	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "dist", "index.js"))) return candidate;
-	}
-	throw new Error("@earendil-works/pi-coding-agent not found; install Pi globally or set PI_SDK_DIR");
-}
 
-const piPackage = findPiPackage();
-const jitiModuleUrl = pathToFileURL(join(piPackage, "node_modules", "jiti", "lib", "jiti.mjs"));
-const { createJiti } = await import(jitiModuleUrl.href);
-const jiti = createJiti(import.meta.url, {
-	interopDefault: true,
-	moduleCache: true,
-	alias: {
-		"@earendil-works/pi-coding-agent": join(
-			piPackage,
-			"dist",
-			"core",
-			"tools",
-			"file-mutation-queue.js",
-		),
-	},
-});
+const jiti = await createPiJiti(import.meta.url);
 const outputPath = fileURLToPath(new URL("../extensions/codex-image-generation/output.ts", import.meta.url));
 const { saveGeneratedImage, validateOutputRequest } = await jiti.import(outputPath) as typeof import("../extensions/codex-image-generation/output.ts");
 

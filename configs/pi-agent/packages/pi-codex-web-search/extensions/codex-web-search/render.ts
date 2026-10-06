@@ -87,7 +87,7 @@ export function renderWebSearchResult(
 	return lines.join("\n");
 }
 
-function normalizeDetails(value: unknown): WebSearchDetails {
+function normalizeDetails(value: unknown): Omit<WebSearchDetails, "sources"> & { sources: DisplaySource[] } {
 	if (!value || typeof value !== "object") return { query: "", sources: [] };
 	const record = value as Record<string, unknown>;
 	const sources = Array.isArray(record.sources)

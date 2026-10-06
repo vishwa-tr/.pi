@@ -1,3 +1,5 @@
+import { systemPromptText } from "../../../../test/runtime.mjs";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * Phase-7 completion e2e for pi-teams: explicit team_await (completed /
  * attention / timeout), oneshot auto-retire on final report, manual retire +
@@ -11,7 +13,7 @@ import { join } from "node:path";
 import { createTestModelRuntime, EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-const piAi = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 const { createLayout } = await jiti.import(join(EXT, "store/layout.ts"));
 const { createCore } = await jiti.import(join(EXT, "core.ts"));
 const { composeIdentityBlock } = await jiti.import(join(EXT, "context/compose.ts"));
@@ -28,7 +30,7 @@ const scripts = [];
 function mockStream(model, context) {
 	const stream = piAi.createAssistantMessageEventStream();
 	(async () => {
-		const sp = context.systemPrompt ?? "";
+		const sp = systemPromptText(context);
 		const address = (sp.match(/address `([^`]+)`/) || [])[1] ?? "?";
 		const lastRole = context.messages.at(-1)?.role;
 		let lastUser = "";

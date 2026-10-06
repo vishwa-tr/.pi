@@ -26,7 +26,7 @@ The extension:
   icons and separators use `dim`, while values use `muted`.
 
 Enable the package through `"./configs/pi-agent/packages/pi-turn-stats"` in the
-root package settings, then run `/reload` or restart Pi.
+`agent/settings.json`, then run `/reload` or restart Pi.
 
 ## Verification
 

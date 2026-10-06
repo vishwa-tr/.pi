@@ -45,7 +45,7 @@ interface ReviewPanelOptions {
 	onDone: (action: ReviewAction) => void;
 }
 
-export function createReviewPanel(opts: ReviewPanelOptions): Component {
+export function createReviewPanel(opts: ReviewPanelOptions): Component & { dispose(): void } {
 	const { group, index, total, dryRun, tui, theme, keybindings, loadDiff, loadDescription, onDone } = opts;
 	const keys = createReviewKeys(keybindings);
 

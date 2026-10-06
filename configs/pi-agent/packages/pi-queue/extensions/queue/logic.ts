@@ -89,7 +89,7 @@ export function patchCompactionQueue(
 	const originalFlush = prototype.flushCompactionQueue;
 	if (typeof originalQueue !== "function" || typeof originalFlush !== "function") return null;
 
-	function patchedQueue(this: CompactionQueueHost, text: string, mode: Exclude<QueueStreamingBehavior, undefined>): void {
+	const patchedQueue = function (this: CompactionQueueHost, text: string, mode: Exclude<QueueStreamingBehavior, undefined>): void {
 		if (!capture(text, mode)) {
 			originalQueue.call(this, text, mode);
 			return;
@@ -99,9 +99,9 @@ export function patchCompactionQueue(
 		// The submit path repaints after this method returns. Avoid reaching into
 		// InteractiveMode's private renderer; its field name varies by Pi build.
 		this.showStatus?.("Managed message queued for after compaction");
-	}
+	};
 
-	async function patchedFlush(this: CompactionQueueHost, options?: unknown): Promise<void> {
+	const patchedFlush = async function (this: CompactionQueueHost, options?: unknown): Promise<void> {
 		try {
 			await originalFlush.call(this, options);
 		} finally {
@@ -109,7 +109,7 @@ export function patchCompactionQueue(
 			// handoff equally reliable without depending on success-only extension events.
 			flushManaged();
 		}
-	}
+	};
 
 	prototype.queueCompactionMessage = patchedQueue;
 	prototype.flushCompactionQueue = patchedFlush;

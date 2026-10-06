@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { findPiPackage } from "../../../test/runtime.mjs";
 
 import { strict as assert } from "node:assert";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -15,19 +16,6 @@ function importPath(...segments) {
 	return import(pathToFileURL(join(...segments)).href);
 }
 
-function findPiPackage() {
-	const home = process.env.HOME ?? "";
-	const candidates = [
-		process.env.PI_SDK_DIR,
-		join(home, ".local/lib/node_modules/@earendil-works/pi-coding-agent"),
-		"/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
-		"/usr/lib/node_modules/@earendil-works/pi-coding-agent",
-	].filter(Boolean);
-	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "dist", "cli.js"))) return candidate;
-	}
-	throw new Error("@earendil-works/pi-coding-agent not found; install Pi globally or set PI_SDK_DIR");
-}
 
 function stripAnsi(value) {
 	return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");

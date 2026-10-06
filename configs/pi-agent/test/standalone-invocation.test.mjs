@@ -1,36 +1,14 @@
 #!/usr/bin/env node
+import { createPiJiti } from "./runtime.mjs";
 
 import { strict as assert } from "node:assert";
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-function findPiPackage() {
-	const candidates = [
-		process.env.PI_SDK_DIR,
-		join(homedir(), ".local", "lib", "node_modules", "@earendil-works", "pi-coding-agent"),
-		"/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
-		"/usr/lib/node_modules/@earendil-works/pi-coding-agent",
-	].filter(Boolean);
-	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "dist", "index.js"))) return candidate;
-	}
-	throw new Error("@earendil-works/pi-coding-agent not found; install Pi globally or set PI_SDK_DIR");
-}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = join(HERE, "..", "packages");
-const PI_PACKAGE = findPiPackage();
-const { createJiti } = await import(
-	pathToFileURL(join(PI_PACKAGE, "node_modules", "jiti", "lib", "jiti.mjs")).href
-);
-const jiti = createJiti(import.meta.url, {
-	alias: {
-		"@earendil-works/pi-coding-agent": join(PI_PACKAGE, "dist", "index.js"),
-		"@earendil-works/pi-tui": join(PI_PACKAGE, "node_modules", "@earendil-works", "pi-tui", "dist", "index.js"),
-	},
-});
+const jiti = await createPiJiti(import.meta.url);
 
 const sources = [
 	join(PACKAGE_ROOT, "pi-changes", "extensions", "changes", "ask.ts"),

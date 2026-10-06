@@ -1,3 +1,5 @@
+import { systemPromptText } from "../../../../test/runtime.mjs";
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * Phase-10 peer-messaging control e2e (D12). The `peers` capability with three
  * layers of control (user → main → per-type), covering:
@@ -18,7 +20,7 @@ import { join } from "node:path";
 import { createTestModelRuntime, EXT, PI_PKG, WORLDS, jiti } from "./env.mjs";
 
 const piSdk = await jiti.import(join(PI_PKG, "dist/index.js"));
-const piAi = await jiti.import(join(PI_PKG, "node_modules/@earendil-works/pi-ai/dist/index.js"));
+const piAi = await jiti.import(join(dependencyRoot("@earendil-works/pi-ai", PI_PKG), "dist", "index.js"));
 const { parseTypeFile } = await jiti.import(join(EXT, "typedefs/parse.ts"));
 const { composeIdentityBlock } = await jiti.import(join(EXT, "context/compose.ts"));
 const { createSubagentTools } = await jiti.import(join(EXT, "tools/sub-agent.ts"));
@@ -87,7 +89,7 @@ const scripts = [];
 function mockStream(model, context) {
 	const stream = piAi.createAssistantMessageEventStream();
 	(async () => {
-		const sys = context.systemPrompt ?? "";
+		const sys = systemPromptText(context);
 		const address = (sys.match(/address `([^`]+)`/) || [])[1] ?? "?";
 		const lastRole = context.messages.at(-1)?.role;
 		let spec = { text: "ok" };

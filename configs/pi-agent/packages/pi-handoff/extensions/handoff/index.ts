@@ -112,7 +112,7 @@ async function runHandoff(ctx: ExtensionCommandContext, args: string): Promise<v
 		version: 1,
 		createdAt: new Date().toISOString(),
 		focus: focus || undefined,
-		sourceContextTokens: ctx.getContextUsage()?.tokens,
+		sourceContextTokens: ctx.getContextUsage()?.tokens ?? undefined,
 		sourceSession,
 		summaryInputTokensEstimate: generation.inputTokensEstimate,
 		summaryUsage: generation.usage,

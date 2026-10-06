@@ -86,7 +86,7 @@ return { verified }
 ```
 
 This repository enables the package through
-`"./configs/pi-agent/packages/pi-procedure"` in root `settings.json`. Run
+`"./configs/pi-agent/packages/pi-procedure"` in `agent/settings.json`. Run
 `/reload` after changing package activation. The repository's matching
 `pi-safety` package is required for confirmations (it claims
 `procedure:confirm-request`).

@@ -9,7 +9,7 @@ Plain interactive messages submitted whenever Pi is busy—including while it is
 - **Enter** → steer at the next turn boundary
 - **Alt+Enter** → follow up after the current agent run
 
-A pending-message card appears above Pi's working indicator. It shows the delivery mode and the complete queued text, wrapping long lines instead of truncating the message. Managed state is journaled into the current session, so `/reload`, resume, forks, and session switches restore the correct branch-local state instead of losing or carrying messages between sessions.
+A pending-message card appears in Pi's supported above-editor widget area. It shows the delivery mode and the complete queued text, wrapping long lines instead of truncating the message. Managed state is journaled into the current session, so `/reload`, resume, forks, and session switches restore the correct branch-local state instead of losing or carrying messages between sessions.
 
 Registered extension commands execute before input interception. Other slash inputs are intentionally left to Pi's native path so skills and prompt templates still expand correctly; those inputs are not manageable through this extension.
 

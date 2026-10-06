@@ -107,5 +107,5 @@ installations still run a black-box RPC load test and skip only the loader-level
 lifecycle cases instead of failing the suite.
 
 This repository enables the package through
-`"./configs/pi-agent/packages/pi-todo"` in root `settings.json`. Run `/reload`
+`"./configs/pi-agent/packages/pi-todo"` in `agent/settings.json`. Run `/reload`
 after changing package activation.

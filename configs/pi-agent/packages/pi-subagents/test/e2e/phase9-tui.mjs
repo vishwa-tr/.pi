@@ -1,3 +1,4 @@
+import { dependencyRoot } from "../../../../test/runtime.mjs";
 /**
  * Phase-9 TUI e2e: the unified ambient widget owns running/waiting/mail status,
  * live activity rows, and its trailing padding line. The extension publishes no
@@ -15,7 +16,7 @@ import { test, summary, until } from "./harness.mjs";
 const tree = await jiti.import(join(EXT, "tui/tree-widget.ts"));
 const text = await jiti.import(join(EXT, "text.ts"));
 const widget = await jiti.import(join(EXT, "tui/widget.ts"));
-const piTuiModuleUrl = pathToFileURL(join(PI_PKG, "node_modules/@earendil-works/pi-tui/dist/index.js")).href;
+const piTuiModuleUrl = pathToFileURL(join(dependencyRoot("@earendil-works/pi-tui", PI_PKG), "dist", "index.js")).href;
 const { visibleWidth } = await import(piTuiModuleUrl);
 const plainTheme = { fg: (_color, text) => text };
 
