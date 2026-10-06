@@ -6,6 +6,7 @@ import { createProgress } from "./progress.mjs";
 import { prepareLayout } from "./store/layout.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { createNativeRuntime } from "./native-provider.mjs";
+import { createEmergencyInput } from "./emergency-input.mjs";
 import { displayText, showDashboard } from "./dashboard.mjs";
 import { specificationFingerprint } from "./host-approval.mjs";
 import { requestLaunchSpecification } from "./launch-input.mjs";
@@ -56,6 +57,10 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		let restoreLink;
 		let restoring;
 		let contextEpoch = 0;
+		let terminalInput;
+		let emergencyInput;
+		let emergencyStop;
+		let promptDepth = 0;
 		const progressContext = () => !retired && context && (!owner || owner === context.sessionManager.getSessionId()) ? context : undefined;
 		let progress = createProgress(pi, progressContext);
 		const cancel = () => { contextEpoch++; command?.abort(); };
@@ -145,10 +150,46 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			return result;
 		};
 
-		// Yield the inspection view before a worker's native safety dialog is presented.
+		const stopImmediately = ctx => {
+			check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot control the Swarm host");
+			if (emergencyStop) return emergencyStop;
+			// Fence admission and dismiss approvals before doing any asynchronous work.
+			cancel();
+			focus?.hide();
+			notify(ctx, "Swarm emergency stop requested. Cancelling approvals, workers and their commands.", "warning");
+			emergencyStop = control("stop", ctx).then(result => {
+				if (result?.settled) {
+					notify(ctx, "Swarm stopped. No workers will restart without fresh approval.");
+				}
+			}).catch(error => {
+				notify(ctx, "Swarm emergency stop could not establish settlement. Execution is fenced; ownership retained. Inspect status before recovery.", "error");
+				throw error;
+			}).finally(() => { emergencyStop = undefined; });
+			return emergencyStop;
+		};
+		const bindEmergencyInput = ctx => {
+			terminalInput?.();
+			emergencyInput?.reset();
+			if (ctx.mode !== "tui" || !ctx.hasUI || !ctx.ui.onTerminalInput) return;
+			emergencyInput = createEmergencyInput({
+				enabled: () => !retired && (!owner || owner === ctx.sessionManager.getSessionId())
+					&& Boolean(command || restoreLink || host?.snapshot().run),
+				canCapture: () => promptDepth > 0 || viewing || focus?.active || !ctx.ui.getEditorText?.(),
+				pendingChanged: text => ctx.ui.setStatus?.("swarm-emergency", text || undefined),
+				stop: () => {
+					if (ctx.ui.getEditorText?.().trim() === "/swarm stop") ctx.ui.setEditorText?.("");
+					void stopImmediately(ctx).catch(() => {});
+				},
+			});
+			terminalInput = ctx.ui.onTerminalInput(data => emergencyInput.handle(data));
+		};
+
+		// The raw listener runs before dialogs/overlays; a slash handler alone cannot
+		// receive /swarm stop when a worker confirmation owns terminal focus.
 		pi.on("agent_settled", () => progress.settled());
 		pi.on("input", event => { if (event.source !== "extension") progress.input(); });
-		pi.on("ui_prompt_start", event => { focus?.hide(); if (viewing && event.kind !== "custom") cancel(); });
+		pi.on("ui_prompt_start", event => { promptDepth++; focus?.hide(); if (viewing && event.kind !== "custom") cancel(); });
+		pi.on("ui_prompt_end", () => { promptDepth = Math.max(0, promptDepth - 1); });
 
 		// `ask` and `present` belong to the main tool call; the public command only stops.
 		const control = async (args, ctx, signal, ask, present) => {
@@ -159,8 +200,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				const current = contextGuard(ctx);
 				if (restoreLink && !restoring) await restorePending(ctx);
 				if (!current()) return;
-				await brake(ctx, action === "stop");
-				return;
+				return brake(ctx, action === "stop");
 			}
 			if (action === "reconcile" && !host?.snapshot().run) {
 				const runId = rest[0] ?? restoreLink?.runId;
@@ -322,7 +362,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					notify(ctx, "Use /swarm stop to stop immediately. Ask the main agent to start, inspect, pause, restore, resume, restart, or reconcile Swarm.", "info");
 					return;
 				}
-				return control("stop", ctx);
+				return stopImmediately(ctx);
 			},
 		});
 		const inspect = ctx => {
@@ -339,6 +379,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 
 		pi.on("session_start", async (event, ctx) => {
 			context = ctx;
+			bindEmergencyInput(ctx);
 			if (event.reason === "fork" || retired) return;
 			const link = ctx.sessionManager.getBranch().filter(entry => entry.type === "custom" && entry.customType === LINK).at(-1)?.data;
 			if (!link || link.ownerSessionId !== ctx.sessionManager.getSessionId()) return;
@@ -371,6 +412,8 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		});
 		pi.on("session_shutdown", async (_event, ctx) => {
 			retired = true;
+			terminalInput?.();
+			emergencyInput?.reset();
 			focus?.dispose();
 			progress.dispose();
 			cancel();

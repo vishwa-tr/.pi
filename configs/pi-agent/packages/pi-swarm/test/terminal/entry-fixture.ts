@@ -28,7 +28,7 @@ export default function (pi) {
 				api: selected.api, provider: selected.provider, model: selected.id, timestamp: Date.now(), stopReason: launch ? "toolUse" : "stop",
 				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 			output.push({ type: "done", reason: message.stopReason, message }); output.end();
-			record({ type: "main-dispatch", launch: Boolean(launch) });
+			record({ type: "main-dispatch", launch: Boolean(launch), action });
 			return output;
 		}
 		record({ type: "dispatch", model: selected.id });
@@ -46,8 +46,10 @@ export default function (pi) {
 		auth: { apiKey: { name: "Fixture", check: async () => ({ type: "api_key" }),
 			resolve: async () => { record({ type: "auth" }); return { auth: { apiKey: "memory-only-fixture" } }; } } },
 		api: { stream, streamSimple: stream } }));
+	pi.on("agent_settled", () => record({ type: "main-settled" }));
 	pi.on("tool_result", event => {
 		if (event.toolName === "swarm_start") record({ type: "chat-result", data: event.details });
+		if (event.toolName === "swarm_control") record({ type: "control-result", action: event.input.action });
 	});
 	pi.on("session_start", (_event, ctx) => {
 		const names = pi.getAllTools().map(tool => tool.name);

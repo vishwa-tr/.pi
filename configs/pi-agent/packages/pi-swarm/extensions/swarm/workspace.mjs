@@ -126,13 +126,13 @@ export class WorkspaceRuntime {
 				return this.#tools.get("read").execute(call.toolCallId ?? randomUUID(), { ...params, path: canonical }, context.signal, call.onUpdate, call.ctx).then(result => {
 					this.#check(context);
 					check(this.#files.fingerprint(canonical) === fingerprint, "STALE", "File changed while being read");
-					this.#reads.get(context.owner).set(canonical, fingerprint);
+					this.#reads.get(context.owner).set(this.#files.identity(canonical), fingerprint);
 					return result;
 				});
 			},
 			claim: paths => {
 				const context = this.#context(binding);
-				const canonical = paths.map(path => this.#files.path(path));
+				const canonical = paths.map(path => this.#files.identity(path));
 				const claim = this.#scheduler.acquireClaims(context.owner, canonical);
 				// A handoff never inherits the previous owner's read observation.
 				for (const path of canonical) this.#reads.get(context.owner).delete(path);
@@ -177,16 +177,17 @@ export class WorkspaceRuntime {
 	async #mutate(binding, kind, path, params, call = {}) {
 		const context = this.#context(binding);
 		const canonical = this.#files.path(path);
-		const expected = this.#reads.get(context.owner).get(canonical) ?? (kind === "write" && !existsSync(resolve(this.#controller.snapshot().workspaceRoot, canonical)) ? this.#files.fingerprint(canonical) : undefined);
+		const identity = this.#files.identity(canonical);
+		const expected = this.#reads.get(context.owner).get(identity) ?? (kind === "write" && !existsSync(resolve(this.#controller.snapshot().workspaceRoot, canonical)) ? this.#files.fingerprint(canonical) : undefined);
 		check(expected, "STALE", "Read the current file after acquiring its claim");
-		return this.#scheduler.withMutation(context.owner, [canonical], async signal => {
+		return this.#scheduler.withMutation(context.owner, [identity], async signal => {
 			await this.#permission(context, kind, [canonical], null, signal);
 			const result = await this.#execute(context, kind, [canonical], null, signal, async () => {
 				check(this.#files.fingerprint(canonical) === expected, "STALE", "Reread the changed target before editing");
 				const nativeResult = await this.#tools.get(kind).execute(call.toolCallId ?? randomUUID(), { ...params, path: canonical }, signal, call.onUpdate, call.ctx);
 				return { nativeResult, settled: true, exitCode: null };
 			});
-			this.#reads.get(context.owner)?.set(canonical, this.#files.fingerprint(canonical));
+			this.#reads.get(context.owner)?.set(identity, this.#files.fingerprint(canonical));
 			return result;
 		}, { signal: context.signal });
 	}

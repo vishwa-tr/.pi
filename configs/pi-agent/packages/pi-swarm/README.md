@@ -12,9 +12,15 @@ restore a run, resume, restart, or reconcile interrupted work. The main agent su
 objective and invokes the tools below. You review the full agreement and answer native Pi
 dialogs yourself. Tool arguments, model output, and transcript text cannot approve work.
 
-**`/swarm stop` is the only direct user command.** It cancels pending approval and stops
-work without an extra model call. Other `/swarm` arguments display guidance without
-changing state. Stopping waits for settlement; uncertain operations retain ownership.
+**`/swarm stop` is the only direct user command.** It immediately fences new work,
+cancels pending approvals and worker requests, and aborts native Bash process trees
+without an extra model call. It is recognized before focused dialogs and overlays:
+type the literal command and press Enter, even while a worker confirmation is open.
+The captured command appears in the status area; Escape cancels it. Pasting the command
+still requires a separate Enter. Other `/swarm` arguments display guidance without
+changing state. Immediate notifications distinguish a requested stop from established
+settlement. Uncertain operations retain ownership; stopping never invents settlement
+or kills the main Pi process or unrelated processes.
 
 | Main-agent tool | Behavior |
 |---|---|
@@ -87,7 +93,10 @@ file queues and cancellation. Swarm wraps execution with current-task and admiss
 file claims, explicit policy approval, serialized mutations, exclusive Bash access and
 durable before/after receipts. Existing files must be read after acquiring their claim
 before editing or overwriting; creating a missing claimed file does not require a failing
-read first. Mutations recheck the fingerprint after approval. Native read options and Bash
+read first. Claim identities use workspace-relative forward slashes on every platform;
+Windows case aliases share a claim without changing the path spelling used for IO.
+Traversal, outside-workspace drive/share paths and filesystem aliases remain denied.
+Mutations recheck the fingerprint after approval. Native read options and Bash
 timeouts are preserved. Receipt IDs are returned alongside native tool output.
 
 Pi's default retries and automatic compaction are enabled; cache warming is off. Admission

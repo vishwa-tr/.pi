@@ -1,10 +1,11 @@
 import test from "node:test";
+import { join, parse } from "node:path";
 import assert from "node:assert/strict";
-import { join } from "node:path";
-import { mkdirSync, writeFileSync, symlinkSync, linkSync, chmodSync, renameSync } from "node:fs";
+import { repository } from "./helpers.mjs";
 import { execFileSync } from "node:child_process";
 import { WorkspaceFiles, hash } from "../extensions/swarm/workspace-files.mjs";
-import { repository } from "./helpers.mjs";
+import { WorkspaceScheduler } from "../extensions/swarm/workspace-scheduler.mjs";
+import { mkdirSync, writeFileSync, symlinkSync, linkSync, chmodSync, renameSync } from "node:fs";
 
 test("read-only fingerprints cover files, modes, ignored files and Git index without writes", t => {
  const root = repository(t);
@@ -38,6 +39,31 @@ test("snapshots work without Git and detect a replaced root", t => {
  writeFileSync(join(project, "work.txt"), "work"); assert.notEqual(files.snapshot(), first);
  renameSync(project, join(root, "previous")); mkdirSync(project);
  assert.throws(() => files.snapshot(), /identity changed/);
+});
+
+test("nested file paths produce scheduler identities while preserving IO spelling", async t => {
+ const root = repository(t);
+ const files = new WorkspaceFiles(root);
+ mkdirSync(join(root, "Source"));
+ writeFileSync(join(root, "Source", "File.txt"), "data");
+ const target = join(root, "Source", "File.txt");
+ assert.equal(files.path(target), "Source/File.txt");
+ const identity = files.identity(target);
+ assert.equal(identity, process.platform === "win32" ? "source/file.txt" : "Source/File.txt");
+ const scheduler = new WorkspaceScheduler();
+ scheduler.acquireClaims("owner", [identity]);
+ assert.throws(() => scheduler.acquireClaims("other", [files.identity("Source/File.txt")]), { code: "CLAIM_CONFLICT" });
+ await scheduler.withMutation("owner", [files.identity(target)], () => {});
+ scheduler.releaseClaims("owner");
+ scheduler.acquireClaims("ancestor", [files.identity("Missing")]);
+ assert.throws(() => scheduler.acquireClaims("child", [files.identity(join("Missing", "child.txt"))]), { code: "CLAIM_CONFLICT" });
+ if (process.platform === "win32") {
+  assert.equal(files.identity("SOURCE\\File.txt"), identity);
+  assert.throws(() => files.path(".GIT/config"), { code: "PATH" });
+  assert.throws(() => files.path("\\\\server\\share\\outside.txt"), { code: "PATH" });
+  const drive = parse(root).root.slice(0, 1).toUpperCase() === "Z" ? "Y" : "Z";
+  assert.throws(() => files.path(`${drive}:\\outside.txt`), { code: "PATH" });
+ }
 });
 
 test("native coding definitions retain SDK schemas, renderers and output metadata", async () => {

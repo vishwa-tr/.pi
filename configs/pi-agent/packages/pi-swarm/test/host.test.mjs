@@ -203,7 +203,7 @@ test("explicit restart approval resets cycle and reacquires stopped ownership", 
 
 test("create-only launch cannot adopt another host's differently approved run", async t => {
 	const decision = deferred(); const presented = deferred();
-	const f = await fixture(t, { approval: request => { presented.resolve(request); return decision.promise; } });
+	const f = await fixture(t, { timeout: 5000, approval: request => { presented.resolve(request); return decision.promise; } });
 	const launch = assert.rejects(f.launch(), code("DUPLICATE")); const request = await presented.promise;
 	const other = new SwarmHost({ events: f.events, sessionId: "owner1", requestApproval: approved, modelRuntime: f.mock.modelRuntime, mainModel: f.mock.model, tickIntervalMs: 0 });
 	await other.launch({ workspace: f.root, runId: "run1", specification: { ...specification, objective: "Another approved objective" } });
@@ -247,6 +247,26 @@ test("pause cancels an approved continuation before it can regain execution auth
 	await f.host.close();
 });
 
+test("emergency stop drains the attached driver without waiting for stalled continuation", async t => {
+	const f = await fixture(t); await f.launch(); await f.host.pause();
+	const entered = deferred(); const release = deferred();
+	const original = SwarmController.prototype.owner;
+	t.after(() => { SwarmController.prototype.owner = original; release.resolve(); });
+	SwarmController.prototype.owner = async function(type, ...args) {
+		const result = await original.call(this, type, ...args);
+		if (type === "host.continue") { entered.resolve(); await release.promise; }
+		return result;
+	};
+	const rejected = assert.rejects(f.host.resume(), code("CANCELLED"));
+	await entered.promise;
+	const stopped = await f.host.pause({ stop: true, timeoutMs: 50 });
+	assert.equal(stopped.settled, false, "pending preparation still retains ownership");
+	assert.equal(f.host.snapshot().run.status, "stopped", "stop transition must not wait for preparation");
+	assert.throws(() => f.host.wake("builder"), code("HOST_DENIED"));
+	release.resolve(); await rejected; await f.host.close();
+	assert.equal(f.mock.calls.length, 0);
+});
+
 test("close during terminal restart releases the newly acquired controller", async t => {
 	const f = await fixture(t); await f.launch(); await f.host.pause({ stop: true });
 	const entered = deferred(); const release = deferred();
@@ -278,6 +298,31 @@ test("missing safety provider denies actual SDK shell execution", async t => {
 	assert.equal(f.host.snapshot().run.workspace.operations.length, 0);
 	assert.ok(f.mock.calls.some(call => call.context.messages.some(message => message.role === "toolResult" && message.isError)));
 	await f.host.close();
+});
+
+test("emergency stop kills a native Bash child process and settles its operation", async t => {
+	const command = `node -e "require('node:fs').writeFileSync('worker-child.pid', String(process.pid)); setInterval(()=>{},1000)"`;
+	const f = await fixture(t, { script: [...shellScript.slice(0, 2),
+		{ toolCalls: [{ id: "shell", name: "bash", arguments: { command } }] }] });
+	let pid;
+	t.after(async () => {
+		if (pid) { try { process.kill(pid, "SIGKILL"); } catch {} }
+		await f.host.close();
+	});
+	f.events.on("swarm:confirm-request", request => request.claim(() => ({ approved: true })));
+	await f.launch(); await wakeBuilder(f);
+	const path = join(f.root, "worker-child.pid");
+	for (let i = 0; i < 500 && !existsSync(path); i++) await new Promise(resolve => setTimeout(resolve, 10));
+	assert.ok(existsSync(path), "native child started");
+	pid = Number(readFileSync(path, "utf8"));
+	assert.ok(Number.isInteger(pid) && pid > 0);
+	const result = await f.host.pause({ stop: true });
+	assert.equal(result.settled, true);
+	assert.equal(f.host.snapshot().run.status, "stopped");
+	assert.deepEqual(f.host.snapshot().driver.active, []);
+	assert.equal(f.host.snapshot().run.workspace.operations.length, 0);
+	assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "child process must be dead, not just marked stopped");
+	pid = undefined;
 });
 
 test("mode revocation during a durable execution-start gap prevents the side effect", async t => {

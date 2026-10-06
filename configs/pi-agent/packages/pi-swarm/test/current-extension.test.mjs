@@ -51,6 +51,7 @@ async function fixture(t, { policy = true, entries = [], root, hold = false } = 
 	if (policy) events.on("pi-plan:query-mode", request => request.respond({ version: 1, instanceId: "entry-policy", revision: 1,
 		contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "off", enforcedMode: "off", runMode: null, pendingChange: false }));
 	const answers = []; let command; let thinking = "high";
+	const terminalListeners = new Set(); const statuses = new Map(); let editorText = "";
 	const dialog = kind => async (...args) => {
 		if (kind === "input") return '["Fixture only"]';
 		packets.push(args[0]);
@@ -63,7 +64,10 @@ async function fixture(t, { policy = true, entries = [], root, hold = false } = 
 	};
 	const ctx = { cwd: root ?? repository(t), mode: "tui", hasUI: true, model: undefined, isIdle: () => true,
 		modelRegistry: new ModelRegistry(source), sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries, getBranch: () => entries },
-		ui: { custom: () => assert.fail("Approval needs no custom TUI component"), input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: text => notices.push(text) } };
+		ui: { custom: () => assert.fail("Approval needs no custom TUI component"), input: dialog("input"), select: dialog("select"), confirm: dialog("confirm"), notify: text => notices.push(text),
+			onTerminalInput: listener => { terminalListeners.add(listener); return () => terminalListeners.delete(listener); },
+			getEditorText: () => editorText, setEditorText: text => { editorText = text; },
+			setStatus: (key, value) => statuses.set(key, value) } };
 	const tools = new Map(); const messages = []; const renderers = new Map();
 	const pi = { registerMessageRenderer: (type, renderer) => renderers.set(type, renderer), registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events, on: (name, fn) => handlers.set(name, fn), registerCommand: (name, value) => { assert.equal(name, "swarm"); command = value; },
 		getThinkingLevel: () => thinking, appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
@@ -73,7 +77,8 @@ async function fixture(t, { policy = true, entries = [], root, hold = false } = 
 	// Main tools stream their approval packet as a partial result before each dialog.
 	const updates = [];
 	const tool = (name, args, signal) => tools.get(name).execute("call", args, signal, update => updates.push(update.content[0].text), ctx);
-	return { tools, tool, updates, handlers, messages, renderers, ctx, source, calls, packets, answers, entries, event, events, notices, auth: () => auth,
+	return { tools, tool, updates, handlers, messages, renderers, ctx, source, calls, packets, answers, entries, event, events, notices, terminalListeners, statuses, auth: () => auth,
+		terminal: data => { for (const listener of terminalListeners) { const result = listener(data); if (result) return result; } },
 		select(id) { ctx.model = source.getModel(model.provider, id); }, thinking(value) { thinking = value; },
 		slashCommand: args => command.handler(args, ctx), command: args => mainAgentAction(tools, ctx, args, output => updates.push(output.content[0].text)), status: async () => { await mainAgentAction(tools, ctx, "status"); return notices.at(-1).startsWith("{") ? JSON.parse(notices.at(-1)) : { status: "unattached" }; } };
 }
@@ -171,6 +176,60 @@ test("main start returns while native worker streams and status remains callable
 	assert.equal(stopped.details.status, "stopped");
 	assert.equal(stopped.details.unsettled.turns, 0);
 	assert.equal(f.calls.length, 1);
+});
+
+test("slash emergency stop visibly cancels an active native worker and remains idempotent", async t => {
+	const f = await fixture(t, { hold: true }); f.select("first");
+	await f.event("session_start");
+	await f.command("start Stop fixture"); await until(() => f.calls.length === 1);
+	await f.slashCommand("stop");
+	assert.ok(f.notices.some(text => text.startsWith("Swarm emergency stop requested")));
+	assert.ok(f.notices.some(text => text.startsWith("Swarm stopped.")));
+	assert.equal((await f.status()).status, "stopped");
+	await f.slashCommand("stop");
+	assert.equal(f.calls.length, 1);
+	await f.event("session_shutdown");
+	assert.equal(f.terminalListeners.size, 0);
+});
+
+test("raw emergency command bypasses a focused approval and late approval cannot restart workers", async t => {
+	const f = await fixture(t, { hold: true }); f.select("first");
+	await f.event("session_start");
+	let finish; let signal;
+	const decision = new Promise(resolve => { finish = resolve; });
+	f.answers.push(async (_title, _choices, options) => {
+		signal = options.signal;
+		await f.event("ui_prompt_start", { kind: "select" });
+		return decision;
+	});
+	const rejected = assert.rejects(f.command("start Blocked approval"));
+	await until(() => Boolean(signal));
+	f.ctx.ui.setEditorText("preserve this draft");
+	for (const key of "/swarm stop") assert.equal(f.terminal(key), undefined);
+	assert.equal(f.statuses.get("swarm-emergency"), "/swarm stop");
+	assert.deepEqual(f.terminal("\r"), { consume: true });
+	assert.equal(signal.aborted, true, "confirmation cancelled synchronously");
+	finish("Approve"); await rejected;
+	await until(() => f.notices.some(text => text.startsWith("Swarm stopped.")));
+	assert.equal(f.ctx.ui.getEditorText(), "preserve this draft");
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.statuses.get("swarm-emergency"), undefined);
+});
+
+test("raw emergency command kills active native worker execution despite dialog focus", async t => {
+	const f = await fixture(t, { hold: true }); f.select("first");
+	await f.event("session_start");
+	await f.command("start Streaming fixture"); await until(() => f.calls.length === 1);
+	await f.event("ui_prompt_start", { kind: "select" });
+	assert.deepEqual(f.terminal("/swarm stop\r"), { consume: true });
+	await until(() => f.notices.some(text => text.startsWith("Swarm stopped.")));
+	const status = await f.tool("swarm_status", {});
+	assert.equal(status.details.status, "stopped");
+	assert.equal(status.details.unsettled.turns, 0);
+	assert.equal(status.details.unsettled.operations, 0);
+	assert.equal(f.calls.length, 1);
+	await f.event("session_start");
+	assert.equal(f.terminalListeners.size, 1, "rebinding does not duplicate listeners");
 });
 
 for (const refusal of ["cancel", "escape", "no-ui", "no-update", "signal", "aborted", "stop", "mode", "model", "model-silent", "thinking", "owner", "session-file", "rpc-context", "reload", "changed-file"]) {

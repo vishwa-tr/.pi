@@ -22,11 +22,13 @@ export class WorkspaceFiles {
 	path(path) {
 		this.#checkRoot();
 		check(typeof path === "string" && path.length > 0 && !path.includes("\0"), "INPUT", "Invalid workspace path");
-		const parts = path.replaceAll("\\", "/").split("/");
+		const parts = (process.platform === "win32" ? path.toLowerCase() : path).replaceAll("\\", "/").split("/");
 		check(!parts.some(part => ["..", ".git"].includes(part)), "PATH", "Traversal and Git control paths are protected");
 		const normalized = relative(this.#root, resolve(this.#root, path));
 		check(normalized && normalized !== ".." && !normalized.startsWith(`..${sep}`) && !isAbsolute(normalized), "PATH", "Path is outside the workspace");
-		check(!this.#protected.some(part => normalized === part || normalized.startsWith(`${part}${sep}`)), "PATH", "Protected path");
+		const protectedIdentity = value => process.platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value;
+		const identity = protectedIdentity(normalized);
+		check(!this.#protected.some(part => identity === protectedIdentity(part) || identity.startsWith(`${protectedIdentity(part)}/`)), "PATH", "Protected path");
 		let current = this.#root;
 		const components = normalized.split(sep);
 		for (let i = 0; i < components.length; i++) {
@@ -36,7 +38,12 @@ export class WorkspaceFiles {
 			check(!stat.isSymbolicLink(), "PATH", "Workspace file aliases are unsupported");
 			check(i === components.length - 1 ? stat.isFile() && stat.nlink === 1 : stat.isDirectory(), "PATH", "Expected ordinary file and directory parents");
 		}
-		return normalized;
+		return normalized.split(sep).join("/");
+	}
+	identity(path) {
+		const canonical = this.path(path);
+		// Conservatively serialize case aliases on Windows, without changing IO spelling.
+		return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 	}
 	fingerprint(path) {
 		const normalized = this.path(path);

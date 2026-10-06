@@ -397,9 +397,16 @@ export class SwarmHost {
 		const timeoutMs = options.timeoutMs ?? 5000;
 		check(Number.isFinite(timeoutMs) && timeoutMs >= 0, "INPUT", "Invalid settlement timeout");
 		let timer;
+		// Do not let a stalled launch/resume inspection delay the durable stop or
+		// native session/process cancellation for an already attached driver.
+		const driver = this.#driver;
+		const draining = driver?.pause(options);
 		const settle = (async () => {
+			const result = await draining;
 			if (pending) await pending.catch(() => { });
-			return this.#driver ? this.#driver.pause(options) : { settled: true };
+			// Preparation may have attached a driver before observing cancellation.
+			if (this.#driver && this.#driver !== driver) return this.#driver.pause(options);
+			return result ?? { settled: true };
 		})();
 		try {
 			return await Promise.race([settle, new Promise(resolve => { timer = setTimeout(() => resolve({ settled: false }), timeoutMs); })]);

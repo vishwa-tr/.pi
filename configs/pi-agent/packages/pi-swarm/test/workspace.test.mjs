@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { repository } from "./helpers.mjs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { WorkspaceRuntime } from "../extensions/swarm/workspace.mjs";
-import { repository } from "./helpers.mjs";
 
 const code = expected => error => error.code === expected;
 const success = { exitCode: 0, stdout: "", stderr: "", settled: true, aborted: false };
@@ -56,6 +56,24 @@ test("actual guarded edits, verification command, independent review and final c
 	assert.equal(readFileSync(join(f.root, "source.txt"), "utf8"), "implemented\n");
 	assert.equal(f.c.snapshot().workspace.receipts.length, 3);
 	assert.equal(f.runtime.snapshot().coordination.active.length, 0);
+});
+
+test("nested native paths share claim and fresh-read identities through actual IO", async t => {
+	const f = await fixture(t);
+	mkdirSync(join(f.root, "Source"));
+	const target = join(f.root, "Source", "File.txt");
+	writeFileSync(target, "original\n");
+	const claim = f.worker.claim([target]);
+	assert.equal(claim.paths[0], process.platform === "win32" ? "source/file.txt" : "Source/File.txt");
+	const readPath = process.platform === "win32" ? "SOURCE\\File.txt" : "Source/File.txt";
+	const editPath = process.platform === "win32" ? "Source\\FILE.txt" : target;
+	await f.worker.read(readPath);
+	await f.worker.edit(editPath, [{ oldText: "original", newText: "implemented" }]);
+	assert.equal(readFileSync(target, "utf8"), "implemented\n");
+	assert.equal(f.c.snapshot().workspace.receipts.at(-1).paths[0], process.platform === "win32" ? "Source/FILE.txt" : "Source/File.txt");
+	await f.worker.write(target, "updated\n");
+	assert.equal(readFileSync(target, "utf8"), "updated\n");
+	await drain(f);
 });
 
 test("claims and fresh post-acquisition reads are required; stale edits preserve user work", async t => {

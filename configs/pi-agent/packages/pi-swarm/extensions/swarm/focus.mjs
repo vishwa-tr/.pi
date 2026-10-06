@@ -59,6 +59,7 @@ export function createFocusBridge(pi, source, ui) {
 	});
 	publish(true);
 	return {
+		get active() { return Boolean(view); },
 		hide,
 		refresh: publish,
 		dispose() {

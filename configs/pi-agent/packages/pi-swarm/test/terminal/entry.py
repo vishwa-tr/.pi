@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 import time
-from run import DisposableFixture, Terminal, HERE, compact, pi_cli
+from run import ANSI, DisposableFixture, Terminal, HERE, compact, pi_cli
 
 
 def main(scripted=False, package_root=False):
@@ -53,7 +53,10 @@ def main(scripted=False, package_root=False):
             if scripted:
                 terminal.line('/fixture-model'); terminal.expect('Entry model changed')
                 terminal.line('fixture chat launch'); terminal.expect('LAUNCH (Pi native provider)')
-                terminal.send('\x1b'); terminal.expect('Fixture main agent returned')
+                # A focused native approval must not swallow the emergency command.
+                terminal.line('/swarm stop'); terminal.expect('Fixture main agent returned')
+                assert 'Swarm emergency stop requested' in ANSI.sub('', terminal.output)
+                assert 'Swarm stopped.' in ANSI.sub('', terminal.output)
                 assert not any(row['type'] == 'dispatch' for row in events())
                 terminal.line('fixture chat launch'); terminal.expect('LAUNCH (Pi native provider)')
                 terminal.read_packet('LAUNCH (Pi native provider)')
@@ -65,23 +68,37 @@ def main(scripted=False, package_root=False):
                 terminal.send('\t'); terminal.expect('Main agent')
                 terminal.send('\t'); terminal.expect('No topics yet')
                 terminal.send('\x1b'); time.sleep(.1)
+                settled_count = sum(row['type'] == 'main-settled' for row in events())
                 terminal.line('fixture chat pause'); terminal.expect('Fixture main agent returned'); wait_event('settled')
+                wait_event('main-settled', settled_count + 1)
+                settled_count = sum(row['type'] == 'main-settled' for row in events())
                 terminal.line('fixture chat view'); terminal.expect('Swarm · paused')
                 terminal.send('r'); terminal.send('p'); terminal.send('s'); time.sleep(.2)
                 assert sum(row['type'] == 'dispatch' for row in events()) == 1
                 terminal.send('\x1b'); terminal.expect('Fixture main agent returned')
+                wait_event('main-settled', settled_count + 1)
                 terminal.line('/reload'); terminal.expect('Reloaded'); time.sleep(.3)
                 terminal.line('fixture chat status'); terminal.expect('Fixture main agent returned')
                 assert sum(row['type'] == 'dispatch' for row in events()) == 1
+                terminal.line('fixture chat resume'); terminal.expect('RESUME (Pi native provider)')
+                terminal.choose(1); terminal.expect('Preserve and proceed?'); terminal.choose(1)
+                terminal.expect('Workspace reconciliation'); terminal.choose(1)
+                terminal.expect('Fixture main agent returned'); wait_event('dispatch', 2)
+                terminal.send('\x1bn'); terminal.expect('1 Messages  2 Agents  3 Topics / Boards')
+                # Stop while the read-only agent overlay owns terminal focus.
+                terminal.line('/swarm stop'); terminal.expect('Swarm stopped.'); wait_event('settled', 2)
+                assert sum(row['type'] == 'dispatch' for row in events()) == 2
             terminal.line('/swarm stop')
             time.sleep(.3)
             assert not (project / '.git').exists()
             assert not (project / '.swarms').exists()
             assert (project / '.gitignore').read_bytes() == b'# Preserve existing rules\r\n'
             assert (project / 'user.txt').read_text() == 'Preserve fixture work\n'
+        except AssertionError as error:
+            raise AssertionError(f'{error}\nRecent offline fixture events: {events()[-15:]}') from error
         finally:
             terminal.close()
-    print('PASS: main-agent tools, Cancel-default approval, read-only dashboard, reload and sole /swarm stop' if scripted else
+    print('PASS: main-agent tools, approval/overlay emergency stop, read-only dashboard and reload' if scripted else
           'PASS: normal entry exposes only /swarm stop without model dispatch')
 
 if __name__ == '__main__':
