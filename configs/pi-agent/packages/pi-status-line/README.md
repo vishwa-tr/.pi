@@ -85,3 +85,13 @@ only visible ones for `hide`).
 
 Enable the `pi-status-line` package in Pi's `packages` setting, then reload with
 `/reload`. The extension replaces Pi's built-in footer while active.
+
+## Verification
+
+`node test/agent-focus.test.mjs` covers the protocol, routing, draft recovery and
+lifecycle. From the repository root,
+`python3 configs/pi-agent/packages/pi-status-line/test/focus-terminal.py` exercises
+Alt+N/Escape and native-dialog cleanup while a scripted main model is streaming.
+It uses disposable offline state and the managed Pi installation, with `PI_SDK_DIR`
+and `PI_BIN` overrides. The terminal harness requires POSIX and the repository
+Swarm test helpers; it does not send requests to a live provider.
