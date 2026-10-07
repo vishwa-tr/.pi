@@ -11,6 +11,7 @@ import { acquireLease } from "../extensions/swarm/store/lease.mjs";
 import { openJournal } from "../extensions/swarm/store/journal.mjs";
 import { privateDirectory, writeAll } from "../extensions/swarm/store/files.mjs";
 import { repository } from "./helpers.mjs";
+import { failureDiagnostic, inPhase } from "../extensions/swarm/errors.mjs";
 
 function storage(t, runId = "run1") {
 	const root = repository(t);
@@ -54,11 +55,21 @@ test("one controller owns the checkout across processes and no stale lock is sto
 	assert.throws(() => acquireLease(layout), { code: "EEXIST" });
 });
 
-test("paused reservation survives live-owner release and blocks a different run", t => {
+test("paused reservation survives live-owner release and blocks a different run", async t => {
 	const { root, layout, lease } = storage(t);
 	lease.release();
 	const other = prepareLayout(root, "run2");
-	assert.throws(() => acquireLease(other), /another running or paused swarm/);
+	const reservation = readFileSync(layout.reservationPath, "utf8");
+	await assert.rejects(inPhase("storage", () => acquireLease(other)), error => {
+		const diagnostic = failureDiagnostic(error);
+		assert.equal(diagnostic.code, "RESERVED");
+		assert.equal(diagnostic.phase, "storage");
+		assert.match(diagnostic.message, /Restore that run and explicitly stop it/);
+		assert.ok(!diagnostic.message.includes(root));
+		return true;
+	});
+	assert.equal(readFileSync(layout.reservationPath, "utf8"), reservation);
+	assert.equal(existsSync(layout.ownerPath), false);
 	const resumed = acquireLease(layout);
 	resumed.release({ retainReservation: false });
 	const next = acquireLease(other);
