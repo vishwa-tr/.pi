@@ -5,7 +5,7 @@ import { createFocusBridge } from "./focus.mjs";
 import { createProgress } from "./progress.mjs";
 import { prepareLayout } from "./store/layout.mjs";
 import { requireCondition as check } from "./errors.mjs";
-import { createNativeRuntime } from "./native-provider.mjs";
+import { createNativeRuntime, nativeModelRuntime } from "./native-provider.mjs";
 import { createEmergencyInput } from "./emergency-input.mjs";
 import { showDashboard } from "./dashboard.mjs";
 import { specificationFingerprint } from "./host-approval.mjs";
@@ -25,13 +25,10 @@ export async function createNativeSwarmExtension(options) {
 
 /** Normal Pi entry: register now, bind the current public context only on demand. */
 export function createCurrentSwarmExtension() {
-	return configureSwarmExtension({}, async (ctx, pi) => {
-		check(ctx.model, "MODEL", "Select a physical chat model with /model before starting Swarm");
-		return createNativeRuntime({
-			modelRegistry: ctx.modelRegistry, mainModel: ctx.model,
-			thinkingLevel: pi.getThinkingLevel()
-		});
-	});
+	return configureSwarmExtension({}, async (ctx, pi) => ({
+		modelRuntime: nativeModelRuntime({ modelRegistry: ctx.modelRegistry }),
+		mainModel: ctx.model, thinkingLevel: pi.getThinkingLevel(), nativeModels: true
+	}));
 }
 
 /** Explicit injection remains mock-only unless a branded provider capability is supplied. */
@@ -75,11 +72,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			const epoch = contextEpoch;
 			const sessionId = ctx.sessionManager.getSessionId();
 			const cwd = ctx.cwd;
-			const model = specificationFingerprint(ctx.model ?? null);
-			const thinking = pi.getThinkingLevel?.();
 			return () => !retired && epoch === contextEpoch && !signal?.aborted
 				&& ctx.sessionManager.getSessionId() === sessionId && (!owner || owner === sessionId)
-				&& ctx.cwd === cwd && specificationFingerprint(ctx.model ?? null) === model && pi.getThinkingLevel?.() === thinking;
+				&& ctx.cwd === cwd;
 		};
 		const sendMessage = (args, ctx, signal, expectedHost = host, runId = host?.snapshot().run?.runId) => {
 			inspect(ctx);
@@ -275,7 +270,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				if (["pause", "stop"].includes(selected)) { await brake(ctx, selected === "stop"); return; }
 				let activeHost;
 				if (selected === "start") {
-					if (resolveSelection) check(ctx.model, "MODEL", "Select a physical chat model with /model before starting Swarm");
+					if (resolveSelection) check(ctx.model || launchOptions?.model?.provider && launchOptions?.model?.modelId, "MODEL", "Select a physical chat model or supply a Swarm model before starting");
 					check(ctx.sessionManager.getSessionFile(), "SESSION", "A persisted owner session is required");
 					setupGate = new ModeGate({ events: pi.events, sessionId: ctx.sessionManager.getSessionId(), onRevoke: () => { if (setupGate) pending.abort(); } });
 					const permission = setupGate.capture();
@@ -311,6 +306,11 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					await activeHost.resume({ restart: selected === "restart" });
 					if (current()) progress.continued();
 					if (!pending.signal.aborted && !retired) for (const worker of activeHost.snapshot().run.workers) activeHost.wake(worker.id);
+				} else if (selected === "configure") {
+					activeHost = await ensureHost(ctx);
+					if (!current()) return;
+					present?.("Waiting for current Swarm turns to settle before inspecting model settings. Active edits and commands are not interrupted; no changed model is authorized yet.");
+					await activeHost.configure(launchOptions);
 				} else if (selected === "reconcile") {
 					activeHost = await ensureHost(ctx);
 					if (!current()) return;
@@ -357,8 +357,6 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			check(action !== "restore" || args.runId, "INPUT", "Restore requires a run identifier");
 			const revoked = accepted?.revoked ?? new AbortController();
 			const current = contextGuard(ctx, signal);
-			const model = specificationFingerprint(ctx.model ?? null);
-			const thinking = pi.getThinkingLevel?.();
 			const registry = ctx.modelRegistry;
 			const cwd = ctx.cwd;
 			const sessionId = ctx.sessionManager.getSessionId();
@@ -373,8 +371,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				const assertCurrent = (candidate = ctx) => {
 					check(current() && candidate?.mode === "tui" && candidate.hasUI
 						&& candidate.sessionManager.getSessionId() === sessionId && candidate.sessionManager.getSessionFile() === sessionFile
-						&& candidate.cwd === cwd && candidate.modelRegistry === registry
-						&& specificationFingerprint(candidate.model ?? null) === model && pi.getThinkingLevel?.() === thinking, "OWNERSHIP", "Approval context changed");
+						&& candidate.cwd === cwd && candidate.modelRegistry === registry, "OWNERSHIP", "Approval context changed");
 					gate.assert(permission.token);
 				};
 				accepted?.assertCurrent(ctx);
@@ -384,7 +381,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					assertCurrent();
 					check(!request.signal?.aborted, "CANCELLED", "Approval cancelled before presentation");
 					const { signal: _signal, ...packet } = request;
-					const fingerprint = specificationFingerprint(packet);
+					// Running turns/mail may advance revision between proposals. Model configuration
+					// remains bound to the exact settings, providers, policy and inspected workspace.
+					const fingerprint = specificationFingerprint(action === "configure" ? { ...packet, runRevision: null } : packet);
 					if (accepted) {
 						accepted.assertCurrent(ctx);
 						check(fingerprint === accepted.fingerprint, "STALE", "Proposal workspace, run or provider changed; propose again");
@@ -403,7 +402,8 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				};
 				const stop = AbortSignal.any([revoked.signal, ...(signal ? [signal] : [])]);
 				try {
-					await control(action === "start" ? "start" : `${action}${args.runId ? ` ${args.runId}` : ""}`, ctx, stop, ask, present, action === "start" ? args : undefined, Boolean(accepted));
+					const settings = action === "start" ? args : action === "configure" ? Object.fromEntries(["model", "workerModels"].filter(key => args[key] !== undefined).map(key => [key, args[key]])) : undefined;
+					await control(action === "start" ? "start" : `${action}${args.runId ? ` ${args.runId}` : ""}`, ctx, stop, ask, present, settings, Boolean(accepted));
 				} catch (error) {
 					if (!accepted && created && error.code === "AUTHORITY") {
 						created.assertCurrent(ctx);
@@ -456,10 +456,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			}
 			catch { notify(ctx, "Swarm restore blocked. Storage and ownership were preserved; inspect before recovery. Nothing was resumed.", "warning"); }
 		});
-		// Main selection never rewrites a run's durable model. Revoke, then require
-		// fresh approval of the pinned selection before any continuation.
+		// Main-chat selections do not change the Swarm's independently pinned settings.
 		if (resolveSelection) for (const event of ["model_select", "thinking_level_select"]) {
-			pi.on(event, async (_event, ctx) => { await brake(ctx); });
+			pi.on(event, (_event, ctx) => { context = ctx; });
 		}
 		for (const event of ["session_before_switch", "session_before_fork", "session_before_tree"]) {
 			pi.on(event, async (_event, ctx) => {

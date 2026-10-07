@@ -8,7 +8,9 @@ import { failureDiagnostic, requireCondition as check } from "./errors.mjs";
 import { pendingMail, sessionWorker } from "./session-state.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
 import { createSdkSession, readSessionHistory } from "./sdk-session.mjs";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { buildSpecialistPrompt, buildTurnPrompt } from "./specializations.mjs";
+import { effectiveWorkerSelection, resolveModelSettings } from "./model-settings.mjs";
 
 const attached = new WeakSet();
 const terminal = new Set(["paused", "stopped", "completed", "failed"]);
@@ -16,21 +18,28 @@ const draining = new Set(["pausing", "stopping", "failing"]);
 
 /** Host-owned native SDK worker lifecycle and admission. */
 export class SwarmSessions {
-	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission, providerCapability } = {}) {
+	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission, providerCapability, workerModels, resolveProviderCapability } = {}) {
 		controller.assertOwned();
 		check(!attached.has(controller), "OWNERSHIP", "Controller already has an SDK driver");
 		const state = controller.snapshot();
 		check(state.workspace && workspace && (terminal.has(state.status) || draining.has(state.status)), "STATE", "Attach to a paused, workspace-enabled controller");
 		const selected = override?.model ?? mainModel;
 		const selection = state.sessions?.selection ?? { provider: selected?.provider, modelId: selected?.id, thinkingLevel: override?.thinkingLevel ?? thinkingLevel };
-		const model = providerCapability ? assertProviderSelection(providerCapability, selection, modelRuntime) : modelRuntime?.getModel(selection.provider, selection.modelId);
-		check(providerCapability || (selection.provider === "swarm-mock" && model?.api === "swarm-mock"), "MODEL", "A native provider agreement or explicit offline mock is required");
+		check(resolveProviderCapability === undefined || typeof resolveProviderCapability === "function", "INPUT", "Invalid provider capability resolver");
+		const configuredModels = state.sessions?.workerModels ?? workerModels;
+		resolveModelSettings(selection, configuredModels ?? [], selection);
+		for (const configured of [selection, ...(configuredModels ?? []).map(item => item.selection)]) {
+			const capability = (await resolveProviderCapability?.(configured)) ?? providerCapability;
+			const model = capability ? assertProviderSelection(capability, configured, modelRuntime) : modelRuntime?.getModel(configured.provider, configured.modelId);
+			check(capability || (configured.provider === "swarm-mock" && model?.provider === "swarm-mock" && model.api === "swarm-mock" && model.id === configured.modelId), "MODEL", "A native provider agreement or explicit offline mock is required");
+			check(getSupportedThinkingLevels(model).includes(configured.thinkingLevel), "MODEL", "Selected thinking level is unsupported");
+		}
 		check(Number.isSafeInteger(tickIntervalMs) && tickIntervalMs >= 0, "INPUT", "Invalid tick interval");
 		makeSessionTools(async () => { }, state.sessions?.codingTools ?? codingTools);
 		attached.add(controller);
 		try {
-			if (!state.sessions) await controller.owner("sessions.configure", { selection, instructions, codingTools });
-			return new SwarmSessions(controller, workspace, modelRuntime, tickIntervalMs, admission, providerCapability);
+			if (!state.sessions) await controller.owner("sessions.configure", { selection, instructions, codingTools, ...(workerModels !== undefined ? { workerModels } : {}) });
+			return new SwarmSessions(controller, workspace, modelRuntime, tickIntervalMs, admission, providerCapability, resolveProviderCapability);
 		} catch (error) {
 			attached.delete(controller);
 			throw error;
@@ -41,6 +50,8 @@ export class SwarmSessions {
 	#workspace;
 	#modelRuntime;
 	#providerCapability;
+	#resolveProviderCapability;
+	#quiescence = null;
 	#admission;
 	#sessionDir;
 	#entries = new Map();
@@ -52,11 +63,12 @@ export class SwarmSessions {
 	#pumpQueued = false;
 	#drain = null;
 
-	constructor(controller, workspace, modelRuntime, tickIntervalMs, admission, providerCapability) {
+	constructor(controller, workspace, modelRuntime, tickIntervalMs, admission, providerCapability, resolveProviderCapability) {
 		this.#controller = controller;
 		this.#workspace = workspace;
 		this.#modelRuntime = modelRuntime;
 		this.#providerCapability = providerCapability;
+		this.#resolveProviderCapability = resolveProviderCapability;
 		this.#admission = admission;
 		const state = controller.snapshot();
 		this.#sessionDir = controller.layout.sessionDir;
@@ -86,12 +98,15 @@ export class SwarmSessions {
 		entry.ready = (async () => {
 			const state = this.#controller.snapshot();
 			const binding = sessionWorker(state, workerId);
+			const selection = effectiveWorkerSelection(state.sessions, workerId);
+			const providerCapability = (await this.#resolveProviderCapability?.(selection)) ?? this.#providerCapability;
+			entry.selection = structuredClone(selection);
 			const tools = makeSessionTools((name, params, call) => this.#invoke(entry, name, params, call), state.sessions.codingTools, state.workspaceRoot);
 			const created = await createSdkSession({
 				cwd: state.workspaceRoot, sessionDir: this.#sessionDir, sessionId: binding?.sessionId,
 				sessionFile: binding ? join(this.#sessionDir, binding.sessionFile) : undefined,
-				modelRuntime: this.#modelRuntime, selection: state.sessions.selection,
-				providerCapability: this.#providerCapability,
+				modelRuntime: this.#modelRuntime, selection,
+				providerCapability,
 				admitRequest: async () => { await this.#controller.system("run.tick"); this.#requestGuard(entry); },
 				systemPrompt: buildSpecialistPrompt(state, worker), customTools: tools,
 			});
@@ -213,6 +228,7 @@ export class SwarmSessions {
 	}
 
 	#pump() {
+		if (this.#quiescence) return;
 		try { this.#admission?.assert(); } catch { this.#queue.clear(); return; }
 		const state = this.#controller.snapshot();
 		if (this.#closed || state.status !== "running") { this.#queue.clear(); return; }
@@ -344,6 +360,9 @@ export class SwarmSessions {
 	}
 
 	async tick() {
+		// Admission still ticks active turns. An idle model-change barrier must not
+		// advance the journal revision while its exact agreement is inspected.
+		if (this.#quiescence && !this.#active.size) return;
 		await this.#controller.system("run.tick");
 		await this.#settleDrain();
 	}
@@ -371,6 +390,7 @@ export class SwarmSessions {
 
 	async compact(workerId) {
 		this.#admission?.assert();
+		check(!this.#quiescence, "BUSY", "Model reconfiguration holds new compaction starts");
 		check(!this.#active.has(workerId) && !this.#queue.has(workerId), "BUSY", "Compact only an idle specialist");
 		check(this.#active.size < this.#controller.snapshot().limits.active, "ACTIVE_LIMIT", "No compaction slot available");
 		return this.#launch(workerId, "compaction", "Compact without replacing specialist identity");
@@ -394,8 +414,56 @@ export class SwarmSessions {
 		return existsSync(manager.getSessionFile()) ? structuredClone(manager.getBranch()) : [];
 	}
 
+	/** Hold new starts while native turns, retries, compaction and tools settle normally. */
+	async quiesce({ signal } = {}) {
+		check(!this.#closed && !this.#quiescence, "BUSY", "Driver already quiesced or closed");
+		signal?.throwIfAborted();
+		const barrier = {};
+		this.#quiescence = barrier;
+		const release = () => {
+			signal?.removeEventListener("abort", release);
+			if (this.#quiescence !== barrier) return;
+			this.#quiescence = null;
+			this.#pump();
+		};
+		signal?.addEventListener("abort", release, { once: true });
+		try {
+			while (this.#active.size || this.#controller.snapshot().sessions.turns.length || this.#drain) {
+				signal?.throwIfAborted();
+				check(this.#controller.snapshot().sessions.turns.every(turn => this.#active.has(turn.workerId)),
+					"UNSETTLED", "Journaled orphan turns require explicit reconciliation");
+				await new Promise(resolve => setTimeout(resolve, 10));
+			}
+			signal?.throwIfAborted();
+			check(!this.#controller.snapshot().workspace.operations.length, "UNSETTLED", "Journaled orphan operations require explicit reconciliation");
+			return release;
+		} catch (error) {
+			release();
+			throw error;
+		}
+	}
+
+	/** Evict only changed model pins; the next wake reopens the same native identity. */
+	async refreshModels() {
+		check(!this.#active.size && !this.#controller.snapshot().sessions.turns.length && !this.#drain &&
+			(this.#quiescence || (!this.#queue.size && !this.#pumpQueued)), "UNSETTLED", "Quiesce or settle before refreshing models");
+		// An idle refresh also holds starts across awaiting cache construction.
+		const release = this.#quiescence ? null : await this.quiesce();
+		try {
+			for (const [workerId, entry] of this.#entries) {
+				await entry.ready;
+				const selection = effectiveWorkerSelection(this.#controller.snapshot().sessions, workerId);
+				if (entry.selection.provider === selection.provider && entry.selection.modelId === selection.modelId &&
+					entry.selection.thinkingLevel === selection.thinkingLevel) continue;
+				check(entry.session.isIdle && !this.#active.size, "UNSETTLED", "SDK session is not idle");
+				entry.session.dispose();
+				this.#entries.delete(workerId);
+			}
+		} finally { release?.(); }
+	}
+
 	async idle() {
-		while (this.#active.size || this.#queue.size || this.#pumpQueued || this.#drain) {
+		while (this.#active.size || (!this.#quiescence && this.#queue.size) || this.#pumpQueued || this.#drain) {
 			this.#pump();
 			await Promise.allSettled([...this.#active.values()]);
 			if (this.#drain) await this.#drain;

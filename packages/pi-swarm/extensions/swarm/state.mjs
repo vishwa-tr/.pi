@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { validId } from "./store/files.mjs";
+import { validateModelSelection, validateWorkerModels } from "./model-settings.mjs";
 import { recipientId } from "./messaging.mjs";
 import { requireCondition } from "./errors.mjs";
 import { validateApproval } from "./approval-state.mjs";
@@ -15,6 +17,7 @@ const FIELDS = {
 	...SESSION_FIELDS,
 	"host.attest": ["evidence", "operationIds", "turnIds", "fingerprint"],
 	"host.approve": ["approval"], "host.continue": ["restart", "reconciled", "approval"],
+	"host.configure": ["selection", "workerModels", "approval"],
 	"run.create": ["runId", "ownerSessionId", "workspaceRoot", "objective", "criteria", "scope", "limits"],
 	"run.resume": ["reconciled"], "run.restart": ["reconciled"], "run.pause": [], "run.stop": [],
 	"run.adopt": ["ownerSessionId"],
@@ -26,6 +29,12 @@ const FIELDS = {
 	"task.fail": ["taskId", "reason"], "task.yield": ["taskId", "blocker"], "task.unblock": ["taskId"],
 	"assignment.settle": ["taskId", "assignmentId"], "message.send": ["to", "text"],
 };
+
+function canonical(value) {
+	if (Array.isArray(value)) return value.map(canonical);
+	if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+	return value;
+}
 
 function text(value, name) {
 	requireCondition(typeof value === "string" && value.trim().length > 0 && value.length <= 32768, "INPUT", `Invalid ${name}`);
@@ -110,7 +119,10 @@ export function reduceEvent(previous, event) {
 	requireCondition(event.version === 1 && Object.hasOwn(FIELDS, event.type), "INPUT", "Unsupported event version/type");
 	id(event.operationId); text(event.actor, "actor"); integer(event.expectedRevision, "revision");
 	integer(event.cycle, "cycle", 1); integer(event.generation, "generation"); integer(event.atMs, "timestamp");
-	exactKeys(event.payload, event.type === "message.send" && event.payload && Object.hasOwn(event.payload, "topic") ? [...FIELDS[event.type], "topic"] : FIELDS[event.type]);
+	let payloadFields = FIELDS[event.type];
+	if (event.type === "message.send" && event.payload && Object.hasOwn(event.payload, "topic")) payloadFields = [...payloadFields, "topic"];
+	if (event.type === "sessions.configure" && event.payload && Object.hasOwn(event.payload, "workerModels")) payloadFields = [...payloadFields, "workerModels"];
+	exactKeys(event.payload, payloadFields);
 	if (previous === null) return create(event);
 
 	requireCondition(event.type !== "run.create", "STATE", "Run already exists");
@@ -157,6 +169,24 @@ export function reduceEvent(previous, event) {
 			}
 			state.settlementAttestations ??= [];
 			state.settlementAttestations.push({ ...structuredClone(p), atMs: event.atMs, cycle: state.cycle, generation: state.generation, authority: "user-established-settlement" });
+			break;
+		}
+		case "host.configure": {
+			requireCondition(event.actor === "owner", "AUTHORITY", "Explicit user configuration approval required");
+			requireCondition(["running", "paused"].includes(state.status) && state.sessions, "STATE", "Configure requires a running or paused configured run");
+			requireSessionIdle(state);
+			requireCondition(!state.workspace?.operations.length, "UNSETTLED", "Workspace operations must settle first");
+			validateApproval(p.approval, "configure", state.hostApprovals);
+			validateModelSelection(p.selection, p.approval);
+			const workerModels = validateWorkerModels(p.workerModels, p.approval);
+			const specification = { objective: state.objective, criteria: state.criteria, scope: state.scope,
+				limits: state.limits, model: p.selection, codingTools: state.sessions.codingTools,
+				instructions: state.sessions.instructions, workerModels };
+			const fingerprint = createHash("sha256").update(JSON.stringify(canonical(specification))).digest("hex");
+			requireCondition(p.approval.specificationFingerprint === fingerprint, "SCOPE", "Configuration does not match approved specification");
+			state.sessions.selection = structuredClone(p.selection);
+			state.sessions.workerModels = workerModels;
+			state.hostApprovals.push(structuredClone(p.approval));
 			break;
 		}
 		case "host.approve":

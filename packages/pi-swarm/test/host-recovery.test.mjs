@@ -11,13 +11,16 @@ import { reduceEvent } from "../extensions/swarm/state.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import { openJournal } from "../extensions/swarm/store/journal.mjs";
+import { createProviderCapability, PROVIDER_DATA_SCOPE } from "../extensions/swarm/provider-capability.mjs";
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 const approve = () => ({ approved: true, reconciled: true, attestation: { kind: "user-established-settlement", evidence: "Fixture has no remaining sessions or processes" } });
-async function orphanFixture(t, approval = approve) {
+async function orphanFixture(t, approval = approve, withProvider = false) {
 	const root = repository(t); const mock = await createMockRuntime([]); const events = new EventEmitter();
 	events.on("pi-plan:query-mode", request => request.respond({ version: 1, instanceId: "mode1", revision: 1, contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "off", enforcedMode: "off", runMode: null, pendingChange: false }));
-	const make = ask => new SwarmHost({ events, sessionId: "owner1", modelRuntime: mock.modelRuntime, mainModel: mock.model, requestApproval: ask, tickIntervalMs: 0 });
+	const providerCapability = withProvider ? createProviderCapability({ version: 1, provider: mock.model.provider, modelId: mock.model.id, api: mock.model.api,
+		endpoint: mock.model.baseUrl, transport: "scripted-memory", outboundData: [...PROVIDER_DATA_SCOPE] }) : undefined;
+	const make = ask => new SwarmHost({ events, sessionId: "owner1", modelRuntime: mock.modelRuntime, mainModel: mock.model, providerCapability, requestApproval: ask, tickIntervalMs: 0 });
 	const first = make(approve);
 	await first.launch({ workspace: root, runId: "run1", specification: { objective: "Goal", criteria: ["Result"], scope: ["src"] } });
 	await first.recruit({ id: "builder", specialization: "Build", brief: "Build approved work", reason: "Independent work" });
@@ -81,6 +84,17 @@ for (const action of ["cancel", "drift", "revision"]) {
 		delayed = false; await f.host.reconcile(); await f.host.close();
 	});
 }
+
+test("provider implementation failure does not block settlement-only reconciliation", async t => {
+	const f = await orphanFixture(t, approve, true);
+	const stream = f.mock.modelRuntime.streamSimple;
+	f.mock.modelRuntime.streamSimple = () => { throw new Error("Replacement must never execute"); };
+	assert.deepEqual(await f.host.reconcile(), { settled: true });
+	assert.equal(f.mock.calls.length, 0);
+	await assert.rejects(f.host.resume(), { code: "PROVIDER" });
+	f.mock.modelRuntime.streamSimple = stream;
+	await f.host.close();
+});
 
 test("failed shutdown retains ownership and host reconciliation access", async t => {
 	const f = await orphanFixture(t);

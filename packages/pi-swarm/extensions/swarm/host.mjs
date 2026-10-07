@@ -21,6 +21,8 @@ import {
 	requireCondition as check,
 } from "./errors.mjs";
 import { inspectCheckout, specificationFingerprint } from "./host-approval.mjs";
+import { createNativeSelection, nativeModelRuntime } from "./native-provider.mjs";
+import { resolveModelSettings, providerAgreements } from "./model-settings.mjs";
 
 function freeze(value) {
 	if (value && typeof value === "object") {
@@ -61,13 +63,23 @@ export class SwarmHost {
 	#pendingSafety = 0;
 	#safetySeen = false;
 	#providerCapability;
-	#providerRuntimeBinding;
-	#approvedModel;
+	#approvedModels = new Map();
+	#providerRuntimeBindings = new Map();
+	#capabilities = new Map();
+	#nativeModels;
 
-	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => { }, providerCapability }) {
+	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => { }, providerCapability, nativeModels = false }) {
 		check(typeof requestApproval === "function", "INPUT", "Human approval callback required");
 		for (const timeout of [approvalTimeoutMs, safetyTimeoutMs]) check(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 600000, "INPUT", "Invalid approval timeout");
-		if (providerCapability !== undefined) providerDescriptor(providerCapability);
+		const descriptor = providerCapability === undefined ? undefined : providerDescriptor(providerCapability);
+		this.#nativeModels = nativeModels;
+		if (nativeModels) nativeModelRuntime({ modelRuntime });
+		else if (descriptor?.transport === "pi-native") {
+			// Explicit test adapters keep their single branded capability; only a public
+			// Pi runtime can resolve additional physical models from the host catalog.
+			try { nativeModelRuntime({ modelRuntime }); this.#nativeModels = true; } catch { }
+		}
+		if (descriptor) this.#capabilities.set(this.#modelKey(descriptor), providerCapability);
 		this.#providerCapability = providerCapability;
 		this.#runner = runner;
 		this.#beforePrompt = beforePrompt;
@@ -122,27 +134,58 @@ export class SwarmHost {
 		this.#permit = undefined;
 	}
 
+	#modelKey(selection) { return JSON.stringify([selection.provider, selection.modelId]); }
+
+	#capability(selection) {
+		const key = this.#modelKey(selection);
+		if (!this.#capabilities.has(key) && this.#nativeModels) {
+			this.#capabilities.set(key, createNativeSelection(this.#modelRuntime, selection).providerCapability);
+		}
+		return this.#capabilities.get(key) ?? this.#providerCapability;
+	}
+
+	#selections(specification) {
+		return [specification.model, ...(specification.workerModels ?? []).map(worker => worker.selection)];
+	}
+
 	#assertProvider(selection) {
-		if (!this.#providerCapability) return;
-		const model = assertProviderSelection(this.#providerCapability, selection, this.#modelRuntime);
+		const capability = this.#capability(selection);
+		if (!capability) return;
+		const model = assertProviderSelection(capability, selection, this.#modelRuntime);
+		if (this.#nativeModels) createNativeSelection(this.#modelRuntime, selection);
+		const key = this.#modelKey(selection);
 		const fingerprint = specificationFingerprint(model);
-		if (this.#approvedModel === undefined) this.#approvedModel = fingerprint;
-		check(this.#approvedModel === fingerprint, "PROVIDER", "Model catalog metadata changed; create a new host and approve again");
+		if (!this.#approvedModels.has(key)) this.#approvedModels.set(key, fingerprint);
+		check(this.#approvedModels.get(key) === fingerprint, "PROVIDER", "Model catalog metadata changed; create a new host and approve again");
 		const provider = this.#modelRuntime.getProvider?.(model.provider);
 		check(provider, "PROVIDER", "Explicit provider implementation required");
 		const references = [provider, provider.stream, provider.streamSimple, this.#modelRuntime.getModel,
 			this.#modelRuntime.getProvider, this.#modelRuntime.stream, this.#modelRuntime.streamSimple,
 			this.#modelRuntime.complete, this.#modelRuntime.completeSimple];
-		if (!this.#providerRuntimeBinding) this.#providerRuntimeBinding = references;
-		check(references.every((reference, index) => reference === this.#providerRuntimeBinding[index]),
+		if (!this.#providerRuntimeBindings.has(key)) this.#providerRuntimeBindings.set(key, references);
+		check(references.every((reference, index) => reference === this.#providerRuntimeBindings.get(key)[index]),
 			"PROVIDER", "Provider implementation replacement requires a new host and fresh approval");
+	}
+
+	#providerPacket(specification, { validate = true } = {}) {
+		const descriptors = new Map();
+		for (const selection of this.#selections(specification)) {
+			if (validate) this.#assertProvider(selection);
+			const capability = this.#capability(selection);
+			if (capability) descriptors.set(this.#modelKey(selection), providerDescriptor(capability));
+		}
+		const defaultCapability = this.#capability(specification.model);
+		return {
+			...(defaultCapability ? { provider: providerDescriptor(defaultCapability) } : {}),
+			...(specification.workerModels !== undefined && descriptors.size ? { providers: [...descriptors.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([, descriptor]) => descriptor) } : {})
+		};
 	}
 
 	#assertAdmission() {
 		check(!this.#closing && !this.#lifetime.signal.aborted && this.#permit && !this.#permit.signal.aborted, "HOST_DENIED", "Explicit current host approval is required");
 		this.#mode.assert(this.#permit.grant.token);
-		if (this.#providerCapability) {
-			try { this.#assertProvider(this.#specification().model); }
+		if (this.#nativeModels || this.#providerCapability) {
+			try { for (const selection of this.#selections(this.#specification())) this.#assertProvider(selection); }
 			catch (error) {
 				this.#invalidate();
 				this.#modePause = this.pause().catch(failure => this.#errors.push(failureDiagnostic(failure)));
@@ -160,16 +203,22 @@ export class SwarmHost {
 	}
 
 	#draft(input) {
-		return structuredClone({ objective: input.objective, criteria: input.criteria, scope: input.scope, limits: { ...DEFAULT_LIMITS, ...input.limits }, model: input.model ?? this.#defaults.model, codingTools: input.codingTools ?? this.#defaults.codingTools, instructions: input.instructions ?? this.#defaults.instructions });
+		const settings = resolveModelSettings(input.model, input.workerModels, this.#defaults.model);
+		return structuredClone({ objective: input.objective, criteria: input.criteria, scope: input.scope, limits: { ...DEFAULT_LIMITS, ...input.limits }, model: settings.model, codingTools: input.codingTools ?? this.#defaults.codingTools, instructions: input.instructions ?? this.#defaults.instructions,
+			...(input.workerModels !== undefined ? { workerModels: settings.workerModels } : {}) });
 	}
 
 	#validate(draft, root, runId) {
-		check(draft && Object.keys(draft).sort().join() === "codingTools,criteria,instructions,limits,model,objective,scope", "INPUT", "Invalid approval specification");
+		const fields = draft?.workerModels === undefined ? "codingTools,criteria,instructions,limits,model,objective,scope" : "codingTools,criteria,instructions,limits,model,objective,scope,workerModels";
+		check(draft && Object.keys(draft).sort().join() === fields, "INPUT", "Invalid approval specification");
 		reduceEvent(null, { version: 1, operationId: "approval-preflight", actor: "owner", expectedRevision: 0, cycle: 1, generation: 0, atMs: 0, type: "run.create", payload: { runId, ownerSessionId: this.#sessionId, workspaceRoot: root, objective: draft.objective, criteria: draft.criteria, scope: draft.scope, limits: draft.limits } });
 		check(draft.model && Object.keys(draft.model).sort().join() === "modelId,provider,thinkingLevel", "MODEL", "Explicit model selection required");
-		this.#assertProvider(draft.model);
-		check(this.#providerCapability || (draft.model.provider === "swarm-mock" && this.#modelRuntime?.getModel(draft.model.provider, draft.model.modelId)?.api === "swarm-mock"), "MODEL", "Live model execution remains disabled");
-		check(["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(draft.model.thinkingLevel), "MODEL", "Invalid thinking level");
+		resolveModelSettings(draft.model, draft.workerModels, draft.model);
+		for (const selection of this.#selections(draft)) {
+			this.#assertProvider(selection);
+			check(this.#capability(selection) || (selection.provider === "swarm-mock" && this.#modelRuntime?.getModel(selection.provider, selection.modelId)?.api === "swarm-mock"), "MODEL", "Live model execution remains disabled");
+			check(["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(selection.thinkingLevel), "MODEL", "Invalid thinking level");
+		}
 		check(Array.isArray(draft.codingTools) && new Set(draft.codingTools).size === draft.codingTools.length && draft.codingTools.every(name => ["read", "edit", "write", "bash"].includes(name)), "INPUT", "Unsupported coding tool selection");
 		check(typeof draft.instructions === "string" && draft.instructions.length <= 32768, "INPUT", "Invalid host instructions");
 	}
@@ -209,7 +258,9 @@ export class SwarmHost {
 				if (signal.aborted) abort();
 				timer = setTimeout(() => pending.abort(), this.#approvalTimeout);
 			});
-			const provider = this.#providerCapability ? providerDescriptor(this.#providerCapability) : undefined;
+			// Settlement attestation must remain available after a provider failure;
+			// it discloses the recorded pins but grants no model execution authority.
+			const providers = this.#providerPacket(specification, { validate: action !== "reconcile" });
 			const safety = await requestSafety({ events: this.#events, request: { agent: "swarm", tool: "write", path: "capability probe" }, signal, probe: true });
 			check(safety.claimed || safety.unclaimed && !this.#safetySeen, "AUTHORITY", "Safety provider is malformed, duplicated, or disappeared");
 			if (safety.claimed) this.#safetySeen = true;
@@ -219,7 +270,7 @@ export class SwarmHost {
 					? "pi-safety policy remains enforced and may ask for operation confirmation"
 					: "Selected coding tools are authorized within this bounded run; no Swarm operation prompts"
 			});
-			const request = Object.freeze({ action, provider, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, workspaceFingerprint: inspection.fingerprint, runRevision: this.#controller?.snapshot().revision ?? null, existingChanges: "preserve", requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
+			const request = Object.freeze({ action, ...providers, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, workspaceFingerprint: inspection.fingerprint, runRevision: this.#controller?.snapshot().revision ?? null, existingChanges: "preserve", requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
 			const answer = structuredClone(await Promise.race([Promise.resolve().then(() => {
 				check(!signal.aborted, "CANCELLED", "Approval cancelled before presentation");
 				return this.#ask(request);
@@ -229,13 +280,13 @@ export class SwarmHost {
 			check(answer?.approved === true, "AUTHORITY", "User did not approve this action");
 			// Preservation is the only disposition; approval never grants cleanup authority.
 			check(action === "launch" || action === "reconcile" || answer.reconciled === true, "UNSETTLED", "Explicit workspace reconciliation is required");
-			check(answer.provider === undefined, "PROVIDER", "Approval cannot replace the host provider binding");
+			check(answer.provider === undefined && answer.providers === undefined, "PROVIDER", "Approval cannot replace the host provider binding");
 			// Settlement attestation grants no model authority and must remain available after provider failure.
-			if (action !== "reconcile") this.#assertProvider(specification.model);
+			if (action !== "reconcile") for (const selection of this.#selections(specification)) this.#assertProvider(selection);
 			const approved = answer.specification ?? specification;
 			if (action !== "launch") check(specificationFingerprint(approved) === specificationFingerprint(specification), "SCOPE", "Continuation cannot silently change the approved scope");
 			if (action === "reconcile") check(answer.attestation?.kind === "user-established-settlement" && typeof answer.attestation.evidence === "string" && answer.attestation.evidence.trim().length > 0 && answer.attestation.evidence.length <= 4096, "UNSETTLED", "Describe independently established process/session settlement; a boolean is not evidence");
-			return { grant, specification: approved, attestation: answer.attestation, approval: { id: randomUUID(), action, workspaceFingerprint: inspection.fingerprint, specificationFingerprint: specificationFingerprint(approved), existingChanges: inspection.changes.length ? "preserve" : "clean", ...(provider ? { provider } : {}) } };
+			return { grant, specification: approved, attestation: answer.attestation, approval: { id: randomUUID(), action, workspaceFingerprint: inspection.fingerprint, specificationFingerprint: specificationFingerprint(approved), existingChanges: inspection.changes.length ? "preserve" : "clean", ...providers } };
 		} finally {
 			clearTimeout(timer);
 			signal.removeEventListener("abort", abort);
@@ -264,11 +315,10 @@ export class SwarmHost {
 	async #attachRuntimes() {
 		this.#unsubscribe?.();
 		this.#unsubscribe = this.#controller.subscribe(event => this.#publish(event.type));
-		const recorded = this.#controller.snapshot().hostApprovals.at(-1)?.provider;
-		const configured = this.#providerCapability ? providerDescriptor(this.#providerCapability) : undefined;
-		check(!recorded || (configured && specificationFingerprint(recorded) === specificationFingerprint(configured)),
-			"PROVIDER", "Restore requires the original host provider capability");
-		this.#assertProvider(this.#specification().model);
+		const specification = this.#specification();
+		const recorded = providerAgreements(this.#controller.snapshot().hostApprovals.at(-1));
+		const configured = providerAgreements(this.#providerPacket(specification));
+		check(specificationFingerprint(recorded) === specificationFingerprint(configured), "PROVIDER", "Restore requires the recorded Swarm provider agreements");
 		const admission = { assert: () => this.#assertAdmission(), signal: () => this.#permit?.signal ?? this.#denied };
 		this.#workspace = await WorkspaceRuntime.attach(this.#controller, {
 			signal: AbortSignal.any([this.#lifetime.signal, ...(this.#operation ? [this.#operation.cancel.signal] : [])]),
@@ -299,13 +349,21 @@ export class SwarmHost {
 				return result.approved === true;
 			}
 		});
-		this.#driver = await SwarmSessions.attach(this.#controller, { workspace: this.#workspace, modelRuntime: this.#modelRuntime, mainModel: this.#modelRuntime.getModel(this.#specification().model.provider, this.#specification().model.modelId), thinkingLevel: this.#specification().model.thinkingLevel, codingTools: this.#specification().codingTools, instructions: this.#specification().instructions, tickIntervalMs: this.#tickInterval, admission, providerCapability: this.#providerCapability });
+		this.#driver = await SwarmSessions.attach(this.#controller, {
+			workspace: this.#workspace, modelRuntime: this.#modelRuntime,
+			mainModel: this.#modelRuntime.getModel(specification.model.provider, specification.model.modelId), thinkingLevel: specification.model.thinkingLevel,
+			codingTools: specification.codingTools, instructions: specification.instructions,
+			...(specification.workerModels !== undefined ? { workerModels: specification.workerModels } : {}),
+			tickIntervalMs: this.#tickInterval, admission, providerCapability: this.#capability(specification.model),
+			resolveProviderCapability: selection => this.#capability(selection)
+		});
 	}
 
 	#launchSpecification;
 	#specification() {
 		const state = this.#controller.snapshot();
-		return state.sessions ? { objective: state.objective, criteria: state.criteria, scope: state.scope, limits: state.limits, model: state.sessions.selection, codingTools: state.sessions.codingTools, instructions: state.sessions.instructions } : this.#launchSpecification;
+		return state.sessions ? { objective: state.objective, criteria: state.criteria, scope: state.scope, limits: state.limits, model: state.sessions.selection, codingTools: state.sessions.codingTools, instructions: state.sessions.instructions,
+			...(state.sessions.workerModels !== undefined ? { workerModels: state.sessions.workerModels } : {}) } : this.#launchSpecification;
 	}
 
 	launch(input) { return this.#runOperation("launch", operation => this.#launch(input, operation)); }
@@ -383,6 +441,43 @@ export class SwarmHost {
 		await this.#controller.owner("host.continue", { restart, reconciled: true, approval: accepted.approval });
 		this.#setPermit(accepted.grant, operation);
 		return this.snapshot();
+	}
+
+	configure(settings = {}) {
+		return this.#runOperation("configure", async operation => {
+			check(settings && Object.keys(settings).every(key => ["model", "workerModels"].includes(key)) && Object.keys(settings).length > 0, "INPUT", "Supply Swarm model settings");
+			const state = this.#controller?.snapshot();
+			check(state?.sessions && this.#driver && ["running", "paused"].includes(state.status), "STATE", "Configure a running or paused Swarm");
+			const release = await this.#driver.quiesce({ signal: operation.cancel.signal });
+			let changed = false;
+			try {
+				this.#assertOperation(operation);
+				const current = this.#controller.snapshot();
+				check(current.status === state.status && !current.sessions.turns.length && !current.workspace.operations.length, "UNSETTLED", "Worker turns and operations must settle before configuring");
+				const resolved = resolveModelSettings(settings.model, settings.workerModels, current.sessions.selection, current.sessions.workerModels ?? []);
+				const specification = { ...this.#specification(), ...resolved };
+				this.#validate(specification, current.workspaceRoot, current.runId);
+				const inspection = await this.#inspect(current.workspaceRoot, operation);
+				const accepted = await this.#approval("configure", inspection, specification);
+				await this.#unchanged(inspection, accepted.grant, operation);
+				check(this.#controller.snapshot().revision === current.revision, "STALE", "Run changed during configuration approval");
+				await this.#controller.owner("host.configure", { selection: resolved.model, workerModels: resolved.workerModels, approval: accepted.approval });
+				changed = true;
+				await this.#driver.refreshModels();
+				this.#assertOperation(operation);
+				this.#mode.assert(accepted.grant.token);
+				// Model settings do not change assignment identity or tool scope. Keep the
+				// running permit so idle file claims are not cancelled beneath their owner.
+				if (current.status === "running") this.#assertAdmission();
+				return this.snapshot();
+			} catch (error) {
+				if (changed) {
+					this.#invalidate();
+					await this.#driver.pause().catch(() => {});
+				}
+				throw error;
+			} finally { release(); }
+		});
 	}
 
 	async pause(options = {}) {

@@ -8,10 +8,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { createMockRuntime } from "./sdk-env.mjs";
+import { guardNetwork } from "./network-guard.mjs";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import { createSdkSession, readSessionHistory } from "../extensions/swarm/sdk-session.mjs";
 
 async function fixture(t, script = []) {
+	guardNetwork(t);
 	const root = mkdtempSync(join(tmpdir(), "swarm-sdk-"));
 	const cwd = join(root, "checkout");
 	mkdirSync(cwd);
@@ -287,13 +289,71 @@ test("selection rejects real providers, missing models, and live APIs before cre
 	assert.equal(f.calls.length, 0);
 });
 
-test("approved thinking is uniform and not restored from a previous selection", async (t) => {
-	const f = await fixture(t);
+test("approved thinking overrides persisted native thinking on idle restore", async (t) => {
+	const f = await fixture(t, [{ text: "Persisted high thinking" }, { text: "New pinned thinking" }]);
 	const first = await f.open({ selection: { ...f.selection, thinkingLevel: "high" } });
-	assert.equal(first.session.thinkingLevel, "high");
+	await first.session.prompt("Persist old selection");
+	first.session.dispose();
 	const second = await f.open({ sessionId: first.sessionId, sessionFile: first.sessionFile });
 	assert.equal(second.session.thinkingLevel, "off");
 	assert.equal(second.session.model.id, f.selection.modelId);
+	await second.session.prompt("Use new selection with old history");
+	assert.equal(f.calls[1].options.reasoning, undefined);
+	assert.match(JSON.stringify(f.calls[1].context), /Persisted high thinking/);
+});
+
+test("idle restore explicitly changes an old persisted model without replacing history or identity", async t => {
+	const f = await fixture(t, [{ text: "Old model decision" }, { text: "New model response" }]);
+	const first = await f.open();
+	await first.session.prompt("Persist old model");
+	first.session.dispose();
+	const alternate = { ...f.model, id: "alternate" };
+	const runtime = new Proxy(f.modelRuntime, { get(target, property) {
+		if (property === "getModel") return (provider, id) => provider === "swarm-mock" && id === "alternate" ? alternate : target.getModel(provider, id);
+		const value = Reflect.get(target, property, target);
+		return typeof value === "function" ? value.bind(target) : value;
+	} });
+	const second = await f.open({ sessionId: first.sessionId, sessionFile: first.sessionFile,
+		modelRuntime: runtime, selection: { ...f.selection, modelId: "alternate", thinkingLevel: "low" } });
+	assert.equal(second.sessionId, first.sessionId);
+	assert.equal(second.session.model.id, "alternate");
+	await second.session.prompt("Continue with new model");
+	assert.equal(f.calls[1].model.id, "alternate");
+	assert.equal(f.calls[1].options.reasoning, "low");
+	assert.match(JSON.stringify(f.calls[1].context), /Old model decision/);
+});
+
+for (const drift of ["model", "thinking", "metadata"]) test(`pinned ${drift} drift is denied before request admission`, async t => {
+	const f = await fixture(t, [{ text: "Must not request" }]);
+	let admissions = 0;
+	const { session } = await f.open({ admitRequest() { admissions++; } });
+	if (drift === "model") session.agent.state.model = { ...f.model, id: "other" };
+	if (drift === "thinking") session.agent.state.thinkingLevel = "high";
+	await assert.rejects(session.agent.streamFunction(f.model, { messages: [] }, { reasoning: drift === "metadata" ? "high" : undefined }), /approved model\/thinking/);
+	assert.equal(admissions, 0);
+	assert.equal(f.calls.length, 0);
+});
+
+test("pinned thinking drift in a native retry is denied without provider continuation", async t => {
+	const f = await fixture(t, [{ error: "429 rate limit exceeded" }, { text: "Must not retry" }]);
+	const { session } = await f.open();
+	session.subscribe(event => { if (event.type === "auto_retry_start") session.agent.state.thinkingLevel = "high"; });
+	await session.prompt("One initial failure");
+	await session.waitForIdle();
+	assert.equal(f.calls.length, 1);
+	assert.equal(session.messages.at(-1).stopReason, "error");
+});
+
+test("manual compaction validates the actual pin before provider admission", async t => {
+	const f = await fixture(t, [{ text: "Old history" }, { text: "Recent history" }]);
+	let admissions = 0;
+	const { session } = await f.open({ admitRequest() { admissions++; } });
+	await session.prompt("Old context");
+	await session.prompt("Recent context. ".repeat(7000));
+	session.agent.state.thinkingLevel = "high";
+	await assert.rejects(session.compact("Keep old history"), /approved model\/thinking/);
+	assert.equal(admissions, 2);
+	assert.equal(f.calls.length, 2);
 });
 
 test("reopen rejects a session file from another session or workspace and leaves it unchanged", async (t) => {

@@ -45,9 +45,9 @@ or kills the main Pi process or unrelated processes.
 
 | Main-agent tool | Behavior |
 |---|---|
-| `swarm_start` | Prepares a chat proposal from `objective` and optional `criteria`, `scope`, `limits`, `codingTools` and `instructions`. A later call with `proposalId` consumes actual owner chat confirmation and launches after revalidation. |
+| `swarm_start` | Prepares a chat proposal from `objective` and optional `criteria`, `scope`, `limits`, `codingTools`, `instructions`, `model` and `workerModels`. A later call with `proposalId` consumes actual owner chat confirmation and launches after revalidation. |
 | `swarm_status` | Returns the run ID, bounded progress, workers, tasks and unresolved-operation counts; never wakes workers. |
-| `swarm_control` | `pause` and `stop` act immediately. `resume`, `restart` and `reconcile` prepare fresh chat proposals, then consume confirmation with `proposalId`. `restore` requires `runId` and attaches paused; `reconcile` accepts `runId` for a crashed controller. `view` inspects; `send` delivers mail within an approved running run. |
+| `swarm_control` | `pause` and `stop` act immediately. `resume`, `restart` and `reconcile` prepare fresh chat proposals, then consume confirmation with `proposalId`. `restore` requires `runId` and attaches paused; `reconcile` accepts `runId` for a crashed controller. `configure` proposes user-requested model/thinking changes and applies confirmed settings between worker turns; `view` inspects; `send` delivers mail within an approved running run. |
 | `swarm_history` | Reads bounded pages of worker history without constructing or waking workers. |
 
 Existing work and Swarm changes are **kept by default**, without a disposition question.
@@ -121,11 +121,63 @@ or edit ignore files. Existing project files and Git changes are disclosed and f
 
 Swarm imports Pi and Node APIs, with no runtime imports from sibling packages. Normal
 package loading uses the current public Pi model registry, physical model and thinking
-selection. All workers inherit the approved main-agent model and thinking level; changing
-that selection invalidates authorization rather than silently migrating workers. Pi owns
+selection. By default the Swarm copies the main-agent model and thinking level when preparing its
+launch proposal. Workers inherit this pinned default unless individually overridden.
+Later main-chat model/thinking changes neither change nor pause the Swarm.
+Main-selection events alone also leave pending pinned proposals intact; the unrelated
+input/dialog cancellation rules above still apply. Changes to the actual approved worker
+model metadata or provider implementation still fence execution. Pi owns
 credentials, OAuth and provider routing; the displayed endpoint is informational.
 No credentials are copied into run records. Provider context includes the
 objective, instructions, workspace content, tool results, history and compaction summaries.
+
+## Independent model and thinking settings
+
+Ask the main agent to select a different Swarm default or settings for individual workers.
+It may recommend alternatives, but must ask the user before applying a change; a model's
+own recommendation does not authorize it. Defaults copy the main chat only at launch,
+not continuously. All selected models must be physical chat models in Pi's existing
+catalog, with a supported thinking level. Credentials and provider routing stay with Pi.
+
+`swarm_start` accepts partial `model` settings and `workerModels` entries:
+
+```json
+{
+  "objective": "Implement and independently review the requested feature",
+  "model": { "thinkingLevel": "high" },
+  "workerModels": [
+    {
+      "workerId": "reviewer",
+      "selection": { "provider": "example", "modelId": "review-model", "thinkingLevel": "medium" }
+    }
+  ]
+}
+```
+
+The provider/model in this example are placeholders, not installed models. Missing default
+fields copy the main chat; missing override fields inherit the resolved Swarm default.
+Overrides may name future worker IDs, so a later recruited reviewer gets its approved
+settings without another model choice. Every effective selection and provider/context
+disclosure appears in the agreement before any worker request. Status reports show the
+Swarm default, overrides, and each worker's effective settings.
+
+To change settings in an existing running or paused run, the main agent uses
+`swarm_control` with `action: "configure"` and `model` and/or `workerModels`. Partial
+`model` fields update the pinned default. `workerModels` replaces the entire override
+list; omit it to preserve overrides, or use `[]` to clear them. Non-overridden workers
+follow the Swarm default; overridden workers keep their explicit settings.
+
+Configuration prepares a fresh agreement and uses the same owner-chat confirmation
+protocol as launch. New worker starts wait while existing native turns, edits, commands,
+retries and compaction finish normally; they are not aborted to change models.
+Configuration preserves worker identity/history, task state, claims, cycle and allowances.
+A running run stays running and a paused run stays paused. Stop and policy revocation
+still fence execution; unknown or orphaned operations require reconciliation rather
+than treating silence as settlement. A failed or cancelled proposal grants no settings
+change. If applying a recorded change fails, execution is fenced rather than continuing
+under stale SDK settings. Reload/restore recovers the recorded settings independently
+of the main-chat selection and never resumes automatically. Legacy single-model journals
+remain readable.
 
 ## Submodule workspaces
 

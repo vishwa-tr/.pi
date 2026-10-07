@@ -73,6 +73,7 @@ export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile
 	invariant(typeof selection.modelId === "string" && THINKING_LEVELS.has(selection.thinkingLevel), "Explicit model and thinking selection required");
 	invariant(modelRuntime && typeof modelRuntime.getModel === "function", "Model runtime required");
 	const model = modelRuntime.getModel(selection.provider, selection.modelId);
+	const modelApi = model?.api;
 	invariant(native || (model?.provider === "swarm-mock" && model.api === "swarm-mock" && model.id === selection.modelId),
 		"Selected swarm-mock model/API unavailable; fallback is disabled");
 	invariant(admitRequest === undefined || typeof admitRequest === "function", "Invalid request admission");
@@ -99,20 +100,34 @@ export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile
 		sessionManager: manager, settingsManager, resourceLoader: isolatedLoader(systemPrompt),
 		tools: names, customTools,
 	});
-	if (admitRequest) {
-		// Pi 1.0.4 passes this stream function to agent-loop follow-ups/retries and
-		// AgentSession._runDefaultCompaction; SDK integration tests cover both paths.
+	const pinned = Object.freeze({ ...selection });
+	const matchesModel = actual => actual?.id === pinned.modelId && actual?.api === modelApi && actual?.provider === pinned.provider;
+	const validatePin = () => {
+		if (providerCapability) assertProviderSelection(providerCapability, pinned, modelRuntime);
+		invariant(matchesModel(session.model) && session.thinkingLevel === pinned.thinkingLevel,
+			"SDK changed the approved model/thinking selection");
+	};
+	try {
+		invariant(!modelFallbackMessage && session.isIdle, "SDK model fallback or busy restore is disabled");
+		// Pi can restore its last journaled model instead of the explicit factory model.
+		// Change it through public idle APIs so native history records the new pin.
+		if (!matchesModel(session.model)) await session.setModel(model);
+		invariant(session.getAvailableThinkingLevels().includes(pinned.thinkingLevel), "Approved thinking level is unsupported");
+		if (session.thinkingLevel !== pinned.thinkingLevel) session.setThinkingLevel(pinned.thinkingLevel);
+		validatePin();
+		// This boundary covers initial requests, follow-ups, retries and compaction.
 		const stream = session.agent.streamFunction;
 		session.agent.streamFunction = async (...request) => {
-			await admitRequest();
+			validatePin();
+			invariant(matchesModel(request[0]) && (request[2]?.reasoning ?? "off") === pinned.thinkingLevel,
+				"Provider request changed the approved model/thinking metadata");
+			await admitRequest?.();
+			validatePin();
+			invariant(matchesModel(request[0]) && (request[2]?.reasoning ?? "off") === pinned.thinkingLevel,
+				"Provider request changed the approved model/thinking metadata");
 			request[2]?.signal?.throwIfAborted();
 			return stream(...request);
 		};
-	}
-	try {
-		invariant(!modelFallbackMessage && session.model?.id === model.id && session.model?.api === model.api &&
-			session.model?.provider === model.provider && session.thinkingLevel === selection.thinkingLevel,
-			"SDK changed the approved model/thinking selection");
 		const tools = session.getAllTools();
 		invariant(tools.length === names.length && tools.every((tool) => names.includes(tool.name) && tool.sourceInfo?.source === "sdk"),
 			"SDK exposed a tool outside the custom tool boundary");

@@ -60,6 +60,7 @@ export function approvalPacket(request) {
 		+ `${request.repository === false ? "Project has no Git checkout metadata; existing files are preserved.\n" : ""}`
 		+ `${request.fingerprintScope ? `Startup fingerprint scope: ${request.fingerprintScope}\n` : ""}`
 		+ `${json(request.specification)}${request.provider ? `\nProvider agreement (${disclosure}):\n${json(request.provider)}` : ""}`
+		+ `${request.providers ? `\nAll approved worker providers/models (${disclosure}):\n${json(request.providers)}` : ""}`
 		+ `\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`);
 }
 

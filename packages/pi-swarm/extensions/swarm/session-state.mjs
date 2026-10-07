@@ -1,4 +1,5 @@
 import { isBoardMessage } from "./messaging.mjs";
+import { validateModelSelection, validateWorkerModels } from "./model-settings.mjs";
 import { requireCondition as check } from "./errors.mjs";
 
 export const SESSION_FIELDS = {
@@ -9,23 +10,11 @@ export const SESSION_FIELDS = {
 	"sessions.reconcile": ["settled"],
 };
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const RECONCILABLE = new Set(["paused", "pausing", "stopping", "failing"]);
 
 function identifier(value) {
 	check(typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(value)
 		&& !["owner", "system"].includes(value), "INPUT", "Invalid session identifier");
-}
-
-function selection(value, state) {
-	check(value !== null && typeof value === "object" && !Array.isArray(value), "INPUT", "Invalid session selection");
-	check(Object.keys(value).sort().join() === "modelId,provider,thinkingLevel", "INPUT", "Unexpected or missing selection fields");
-	const provider = state.hostApprovals?.at(-1)?.provider;
-	check(value.provider === "swarm-mock" || (provider?.transport === "pi-native" &&
-		value.provider === provider.provider && value.modelId === provider.modelId),
-		"INPUT", "Non-mock selection requires a matching host provider agreement");
-	check(typeof value.modelId === "string" && value.modelId.trim().length > 0 && value.modelId.length <= 32768, "INPUT", "Invalid model identifier");
-	check(THINKING_LEVELS.has(value.thinkingLevel), "INPUT", "Invalid thinking level");
 }
 
 export function sessionWorker(state, workerId) {
@@ -62,10 +51,11 @@ export function pendingMail(state, workerId) {
 function configure(state, payload) {
 	check(state.status === "paused" && !state.sessions, "STATE", "Configure sessions on a paused run once");
 	check(!state.tasks.some(task => task.assignment) && !state.workspace?.operations.length, "UNSETTLED", "Settle work before configuring sessions");
-	selection(payload.selection, state);
+	validateModelSelection(payload.selection, state.hostApprovals?.at(-1));
 	check(typeof payload.instructions === "string" && payload.instructions.length <= 32768, "INPUT", "Invalid session instructions");
 	check(Array.isArray(payload.codingTools) && new Set(payload.codingTools).size === payload.codingTools.length && payload.codingTools.every(name => ["read", "edit", "write", "bash"].includes(name)), "INPUT", "Unsupported or duplicate coding tools");
 	state.sessions = { selection: structuredClone(payload.selection), instructions: payload.instructions, codingTools: [...payload.codingTools], workers: [], turns: [], history: [] };
+	if (Object.hasOwn(payload, "workerModels")) state.sessions.workerModels = validateWorkerModels(payload.workerModels, state.hostApprovals?.at(-1));
 }
 
 function bind(state, payload) {
