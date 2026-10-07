@@ -1652,8 +1652,11 @@ settlement, scope or independent-review requirements, nor authorize another live
   an unrelated normal-chat question. Native UI prompts cancel the proposal.
 - The next tool call consumes one-shot confirmation only after validating the exact packet,
   workspace, owner/session, provider/model/thinking selection, mode and run revision.
-  Proposals expire after 120 seconds. Other chat input, revised settings or changed context
-  require a fresh proposal; pause, stop, reload and shutdown cancel pending authorization.
+  Chat proposals and their unconsumed confirmation have no time limit; owner inactivity
+  does not invalidate them. The complete packet and workspace are revalidated on consumption.
+  Other chat input, revised settings or changed context require a fresh proposal; pause,
+  stop, reload and shutdown cancel pending authorization. Inspection, host approval callbacks
+  and independent Safety requests retain their separate bounded timeouts.
 - Existing and generated changes are kept by default, without a separate disposition ask.
   No automatic stash, reset, discard, stage, commit, push or submodule mutation is implied.
 - Resume/restart use fresh proposals and reconciliation, with unchanged settlement and
