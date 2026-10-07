@@ -23,7 +23,7 @@ async function fixture(t, { script = () => ({ text: "Mock planning complete" }),
 	const ctx = { cwd: root, mode: "tui", hasUI: true, isIdle: () => true,
 		sessionManager: { getSessionId: () => "owner1", getSessionFile: () => "owner.jsonl", getEntries: () => entries, getBranch: () => entries },
 		ui: { input: dialog, select: dialog, confirm: dialog, notify: (text, level) => notices.push({ text, level }) } };
-	const pi = { registerMessageRenderer() {}, registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events,
+	const pi = { registerMessageRenderer() {}, registerEntryRenderer() {}, registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events,
 		on: (name, handler) => handlers.set(name, handler), registerCommand: (name, command) => commands.set(name, command), appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
 	createSwarmExtension({ modelRuntime: mock.modelRuntime, mainModel: mock.model, runner, tickIntervalMs: 0, approvalTimeoutMs })(pi);
 	const event = (name, data = {}) => handlers.get(name)(data, ctx);

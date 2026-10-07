@@ -6,54 +6,54 @@ import { registerMainTools, swarmSummary } from "../extensions/swarm/main-tools.
 function fixture(t) {
 	const snapshot = { run: { objective: "Fixture objective", status: "running", revision: 1, cycle: 1,
 		workers: [{ id: "planner" }], tasks: [], sessions: { turns: [] }, workspace: { operations: [] } }, pendingApproval: false };
-	const listeners = new Set(); const messages = [];
+	const listeners = new Set(); const messages = []; const notifications = []; const statuses = [];
 	let current = true;
+	const context = { hasUI: true, ui: { setStatus: (...args) => statuses.push(args), notify: (...args) => notifications.push(args) } };
 	const pi = { sendMessage: (...args) => messages.push(args) };
 	const host = { snapshot: () => structuredClone(snapshot), subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); } };
-	const progress = createProgress(pi, () => current);
+	const progress = createProgress(pi, () => current ? context : undefined);
 	progress.bind(host);
 	t.after(() => progress.dispose());
-	return { snapshot, messages, listeners, progress, invalidate: () => { current = false; },
+	return { snapshot, messages, notifications, statuses, listeners, progress, invalidate: () => { current = false; },
 		update: () => { for (const listener of listeners) listener("fixture"); } };
 }
 
 const delay = () => new Promise(resolve => setTimeout(resolve, 800));
 
-test("chat progress is event driven, starts once, coalesces completions and sends no model turns", async t => {
+test("routine progress stays on passive status surfaces, never transcript or model messages", async t => {
 	const f = fixture(t); f.progress.launched();
-	assert.equal(f.messages.length, 1);
 	for (let i = 0; i < 40; i++) f.update();
-	assert.equal(f.messages.length, 1);
 	f.snapshot.run.tasks.push({ id: "task", title: "Task", status: "done", assignment: null });
 	f.update(); f.update();
 	f.snapshot.run.status = "completed"; f.update(); f.update();
 	await delay();
-	assert.equal(f.messages.length, 2);
-	assert.match(f.messages[1][0].content, /task completion recorded.*run completed/);
-	assert.ok(f.messages.every(([, options]) => options.triggerTurn === false));
-	for (let i = 0; i < 20; i++) f.update();
-	await delay(); assert.equal(f.messages.length, 2);
+	assert.deepEqual(f.messages, []);
+	assert.deepEqual(f.notifications, []);
+	assert.match(f.statuses.at(-1)[1], /Swarm completed · 1\/1 tasks/);
 });
 
-test("approval notices wait for native focus; dispose removes listeners and pending messages", async t => {
+test("important errors and stops remain notifications; approval/Safety surfaces are not replaced", async t => {
 	const f = fixture(t); f.progress.launched();
 	f.snapshot.pendingApproval = true; f.update();
-	await delay(); assert.equal(f.messages.length, 1);
-	f.snapshot.pendingApproval = false; f.update();
-	await delay(); assert.equal(f.messages.length, 2);
-	assert.match(f.messages[1][0].content, /human approval requested/);
-	f.snapshot.run.status = "paused"; f.update();
+	f.snapshot.errors = ["PRIVATE_PROVIDER_DIAGNOSTIC"]; f.update(); f.update();
+	f.snapshot.run.status = "failed"; f.update(); f.update();
+	f.snapshot.run.status = "stopped"; f.update(); f.update();
+	assert.equal(f.notifications.length, 3);
+	assert.deepEqual(f.notifications.map(([, level]) => level), ["error", "error", "warning"]);
+	assert.doesNotMatch(JSON.stringify(f.notifications), /PRIVATE_/);
 	f.progress.dispose();
 	assert.equal(f.listeners.size, 0);
-	await delay(); assert.equal(f.messages.length, 2);
+	await delay(); assert.deepEqual(f.messages, []);
 });
 
 test("inspection/restoration and stale owner context do not generate chat or model activity", async t => {
 	const f = fixture(t);
 	f.update(); await delay(); assert.equal(f.messages.length, 0);
-	f.progress.launched();
-	f.snapshot.run.status = "stopped"; f.update(); f.invalidate();
-	await delay(); assert.equal(f.messages.length, 1);
+	f.progress.launched(); f.invalidate();
+	const notifications = f.notifications.length;
+	f.snapshot.run.status = "stopped"; f.update();
+	await delay(); assert.equal(f.messages.length, 0);
+	assert.equal(f.notifications.length, notifications);
 });
 
 test("status bounds large boards, counts all tasks, and omits private host fields", () => {

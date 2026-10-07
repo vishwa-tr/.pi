@@ -68,7 +68,7 @@ test("recovery packet shows exact unsettled intent as data, without manufacturin
 
 test("agreement renderer keeps all lines literal and readable at narrow terminal width", () => {
 	const renderers = new Map();
-	registerSwarmRenderers({ registerMessageRenderer: (name, renderer) => renderers.set(name, renderer) });
+	registerSwarmRenderers({ registerMessageRenderer: (name, renderer) => renderers.set(name, renderer), registerEntryRenderer() {} });
 	const content = Array.from({ length: 60 }, (_, index) => `packet-line-${index}`).join("\n") + "\n**literal**\n\x1b[2J\u202eend";
 	const rendered = renderers.get("swarm-agreement")({ content }).render(18).join("\n").replace(/\s/g, "");
 	for (let index = 0; index < 60; index++) assert.ok(rendered.includes(`packet-line-${index}`));

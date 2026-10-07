@@ -2,7 +2,7 @@ import { displayText } from "./dashboard.mjs";
 import { swarmSummary } from "./main-tools.mjs";
 import { persistedMessageIds } from "./mail.mjs";
 
-const terminal = status => ["completed", "failed", "stopped"].includes(status);
+import { createTopicMirrors } from "./topic-mirrors.mjs";
 
 /** Progress stays passive; addressed agent mail wakes Pi through its native queue. */
 export function createProgress(pi, getContext) {
@@ -13,7 +13,7 @@ export function createProgress(pi, getContext) {
 	let disposed = false;
 	let enabled = false;
 	let previous;
-	const notices = new Set();
+	const mirrors = createTopicMirrors(pi, getContext);
 	const mail = new Map();
 	const inFlight = new Set();
 	let acknowledged = new Set();
@@ -31,7 +31,7 @@ export function createProgress(pi, getContext) {
 	const flush = () => {
 		clearTimeout(timer);
 		timer = undefined;
-		if (disposed || !getContext() || !enabled || !notices.size && !mail.size || source?.snapshot().pendingApproval) return;
+		if (disposed || !getContext() || !enabled || !mail.size || source?.snapshot().pendingApproval) return;
 		const summary = swarmSummary(source.snapshot());
 		try { reconcileMail(true); } catch { return; }
 		const batch = pendingMail().slice(0, 30);
@@ -49,34 +49,30 @@ export function createProgress(pi, getContext) {
 			} catch { for (const message of batch) inFlight.delete(message.id); }
 		}
 		if (queued && pendingMail().length) schedule();
-		if (!notices.size) return;
-		const content = `Swarm extension update: ${[...notices].join("; ")}. ` +
-			`Run ${summary.status}; tasks ${summary.progress.done}/${summary.progress.total} done, ${summary.progress.blocked} blocked. ` +
-			"This is a recorded Swarm observation, not independent main-agent verification or authorization.";
-		notices.clear();
-		// Failed presentation must never interrupt launch, cancellation or settlement.
-		try { pi.sendMessage({ customType: "swarm-progress", content, display: true }, { triggerTurn: false }); }
-		catch { /* No raw diagnostics in chat. */ }
 	};
 	const schedule = () => {
-		if (timer || !notices.size && !pendingMail().length || source?.snapshot().pendingApproval) return;
+		if (timer || !pendingMail().length || source?.snapshot().pendingApproval) return;
 		const current = epoch;
 		timer = setTimeout(() => { if (current === epoch) flush(); }, 750);
 	};
 	const refresh = () => {
 		if (disposed || !getContext() || !source) return;
 		const snapshot = source.snapshot();
+		mirrors.refresh(snapshot);
 		try { reconcileMail(); } catch { return; }
 		const next = swarmSummary(snapshot);
 		if (!next.progress) return;
-		if (enabled && previous) {
-			if (next.pendingApproval && !previous.pendingApproval) notices.add("human approval requested");
-			if (next.status !== previous.status) notices.add(`run ${next.status}`);
-			if (!terminal(next.status)) {
-				if (next.progress.done > previous.progress.done) notices.add("task completion recorded");
-				if (next.progress.blocked !== previous.progress.blocked) notices.add("task blockers changed");
+		// Passive status/notification surfaces only: no transcript or model progress entries.
+		try {
+			const ctx = getContext();
+			if (ctx?.hasUI) {
+				ctx.ui.setStatus?.("swarm-progress", `Swarm ${displayText(next.status)} · ${next.progress.done}/${next.progress.total} tasks · ${next.progress.blocked} blocked`);
+				if (previous && next.status !== previous.status && ["failed", "stopped"].includes(next.status))
+					ctx.ui.notify(`Swarm run ${next.status}. Inspect status; this is not independent verification of physical settlement.`, next.status === "failed" ? "error" : "warning");
+				if (previous && next.errorsPresent && !previous.errorsPresent)
+					ctx.ui.notify("Swarm reported an error. Inspect status before continuing; no automatic recovery was requested.", "error");
 			}
-		}
+		} catch { /* Presentation must not interrupt cancellation, Safety or settlement. */ }
 		previous = next;
 		schedule();
 	};
@@ -87,7 +83,7 @@ export function createProgress(pi, getContext) {
 			epoch++;
 			clearTimeout(timer);
 			timer = undefined;
-			notices.clear(); mail.clear(); inFlight.clear(); acknowledged.clear();
+			mail.clear(); inFlight.clear(); acknowledged.clear();
 			previous = undefined;
 			enabled = false;
 			source = host;
@@ -98,11 +94,9 @@ export function createProgress(pi, getContext) {
 		launched() {
 			enabled = true;
 			refresh();
-			// Only invoked after the approved host launch has actually returned.
-			notices.add("approved launch started");
 			flush();
 		},
-		continued() { enabled = true; notices.add("approved continuation started"); refresh(); },
+		continued() { enabled = true; refresh(); },
 		input() {
 			if (disposed || !getContext() || !enabled) return;
 			try { reconcileMail(true); } catch { return; }
@@ -118,7 +112,8 @@ export function createProgress(pi, getContext) {
 			epoch++;
 			clearTimeout(timer);
 			unsubscribe?.();
-			notices.clear(); mail.clear(); inFlight.clear();
+			try { getContext()?.ui?.setStatus?.("swarm-progress", undefined); } catch { }
+			mail.clear(); inFlight.clear();
 		},
 	};
 }

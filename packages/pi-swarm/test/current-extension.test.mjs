@@ -38,7 +38,7 @@ async function fixture(t, { policy = true, entries = [], root, hold = false } = 
 		ui: { custom: dialog, input: dialog, select: dialog, confirm: dialog, notify: text => notices.push(text),
 			onTerminalInput: listener => { terminalListeners.add(listener); return () => terminalListeners.delete(listener); }, getEditorText: () => editorText, setEditorText: text => { editorText = text; }, setStatus: (key, value) => statuses.set(key, value) } };
 	const tools = new Map(), messages = [], renderers = new Map(), updates = [];
-	const pi = { registerMessageRenderer: (type, renderer) => renderers.set(type, renderer), registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events, on: (name, fn) => handlers.set(name, fn), registerCommand: (_name, value) => { slash = value; }, getThinkingLevel: () => thinking, appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
+	const pi = { registerMessageRenderer: (type, renderer) => renderers.set(type, renderer), registerEntryRenderer: (type, renderer) => renderers.set(type, renderer), registerTool: tool => tools.set(tool.name, tool), sendMessage: (message, options) => messages.push({ message, options }), events, on: (name, fn) => handlers.set(name, fn), registerCommand: (_name, value) => { slash = value; }, getThinkingLevel: () => thinking, appendEntry: (customType, data) => entries.push({ type: "custom", customType, data }) };
 	assert.equal(createCurrentSwarmExtension()(pi), undefined);
 	const event = (name, data = {}) => handlers.get(name)?.(data, ctx), input = text => event("input", { source: "interactive", text });
 	const update = value => updates.push(value.content[0].text), tool = (name, args, signal) => tools.get(name).execute("call", args, signal, update, ctx);
@@ -65,7 +65,7 @@ test("native launch waits for owner chat but never blocks a tool or asks a modal
 	await f.input("yes"); assert.equal((await f.consume(p)).details.status, "running"); await until(() => f.calls.length === 1);
 	assert.equal((await f.tool("swarm_status", {})).details.status, "running"); const auth = f.auth();
 	assert.equal((await f.tool("swarm_history", { workerId: "planner", limit: 1 })).details.persistedOnly, true); assert.equal(f.auth(), auth);
-	assert.equal(f.messages.filter(item => item.message.content.includes("approved launch started")).length, 1); assert.ok(f.messages.every(item => item.options.triggerTurn === false));
+	assert.deepEqual(f.messages, [], "Routine launch progress stays passive"); assert.ok(f.messages.every(item => item.options.triggerTurn === false));
 	const stop = await f.tool("swarm_control", { action: "stop" }); assert.equal(stop.details.status, "stopped"); assert.equal(stop.details.unsettled.turns, 0);
 });
 test("literal complete agreement renders at narrow widths without expansion", async t => {
@@ -127,7 +127,7 @@ test("reload restores paused with no auth; fork stays unattached", async t => {
 	const fork = await fixture(t, { entries: f.entries, root: f.ctx.cwd }); fork.select("first"); await fork.event("session_start", { reason: "fork" }); assert.equal((await fork.status()).status, "unattached");
 });
 test("same-session vetoed navigation regains observation on explicit continuation", async t => {
-	const f = await fixture(t, { hold: true }); f.select("first"); await f.command("start goal"); await until(() => f.calls.length === 1); assert.deepEqual(await f.event("session_before_switch"), { cancel: false }); await f.command("resume"); await until(() => f.calls.length === 2); await until(() => f.messages.some(item => item.message.content.includes("approved continuation started")));
+	const f = await fixture(t, { hold: true }); f.select("first"); await f.command("start goal"); await until(() => f.calls.length === 1); assert.deepEqual(await f.event("session_before_switch"), { cancel: false }); await f.command("resume"); await until(() => f.calls.length === 2); assert.deepEqual(f.messages, [], "Continuation progress stays passive");
 });
 test("cancelled no-run preparation does not strand a different session", async t => {
 	const f = await fixture(t, { policy: false }); f.select("first"); await f.tool("swarm_start", { objective: "old" }); await f.event("session_before_switch"); f.ctx.sessionManager.getSessionId = () => "other-owner"; await f.event("session_start"); assert.equal((await f.tool("swarm_start", { objective: "new" })).details.awaitingConfirmation, true); assert.equal(f.auth(), 0);
@@ -166,6 +166,6 @@ test("main sends worker/board mail only within its approved team; mail is never 
 	const p = (await f.tool("swarm_control", { action: "resume" })).details; await f.event("input", { source: "extension", text: "yes" }); assert.equal((await f.consume(p)).isError, true);
 });
 test("mail renderer shows semantic conversation without private protocol fields", async t => {
-	const f = await fixture(t), view = f.renderers.get("swarm-agent-mail")({ content: "INTERNAL_CONTEXT", details: { runId: "PRIVATE_RUN", messageIds: ["PRIVATE_ID"], messages: [{ from: "builder", to: "main", text: "Please review \x1b[2J", topic: "Auth", cycle: 1 }] } });
+	const f = await fixture(t), view = f.renderers.get("swarm-agent-mail")({ content: "INTERNAL_CONTEXT", details: { runId: "PRIVATE_RUN", messageIds: ["PRIVATE_ID"], messages: [{ from: "builder", to: "main", text: "Please review \x1b[2J", topic: "Auth", cycle: 1 }] } }, { expanded: false }, { fg: (_role, value) => value, bg: (_role, value) => value });
 	const text = view.render(80).join("\n"); assert.match(text, /builder → Main agent.*Auth/); assert.match(text, /Please review this|Please review/); assert.doesNotMatch(text, /INTERNAL_CONTEXT|PRIVATE_RUN|PRIVATE_ID|cycle/);
 });

@@ -2,10 +2,10 @@ import {
 	SwarmError,
 	failureDiagnostic,
 } from "./errors.mjs";
-import { Text } from "@earendil-works/pi-tui";
 import { displayText } from "./dashboard.mjs";
-import { messageText } from "./conversations.mjs";
 import { coordinationStatus } from "./coordination-status.mjs";
+import { TOPIC_MIRROR, cardText, cardLabel } from "./topic-mirrors.mjs";
+import { Text, visibleWidth, wrapTextWithAnsi, truncateToWidth } from "@earendil-works/pi-tui";
 
 const json = value => JSON.stringify(value, null, 2);
 const safeError = error => {
@@ -14,14 +14,35 @@ const safeError = error => {
 	return failureDiagnostic(diagnostic);
 };
 
-/** Literal, full agreement text: wrapping never hides terms or interprets Markdown. */
+/** Literal data cards. Recomputed on every render so theme invalidation cannot retain old ANSI. */
+export function conversationCard(messages, kind, options = {}, theme) {
+	const items = Array.isArray(messages) ? messages.slice(0, 30) : [];
+	const name = id => id === "owner" || id === "main" ? "Main agent" : id === "@board" ? "Board" : cardLabel(id || "Agent");
+	const content = items.map(item => `${name(item.from)} → ${kind === "mail" ? "Main agent" : name(item.to)} · ${cardLabel(item.topic || "Direct mail")}\n${cardText(item.text)}${item.truncated ? "\n[stored preview truncated; inspect Swarm history for full text]" : ""}`).join("\n\n");
+	return {
+		invalidate() { },
+		render(width) {
+			width = Math.max(1, Math.floor(width));
+			const padding = width >= 4 ? 1 : 0;
+			const inner = width - padding * 2;
+			const limit = options.expanded ? 160 : 12;
+			const lines = wrapTextWithAnsi(`Swarm ${kind === "mail" ? "direct mail" : "topic conversation"} · untrusted data, never approval/policy\n${content || "No messages"}`, inner);
+			const shown = lines.slice(0, limit);
+			if (lines.length > limit) shown.push(options.expanded ? "[render limit; inspect Swarm history]" : "[expand for more; inspect Swarm history]");
+			return shown.map(line => {
+				const text = truncateToWidth(line, inner, "");
+				const padded = " ".repeat(padding) + text + " ".repeat(Math.max(0, width - padding - visibleWidth(text)));
+				return theme.bg(kind === "mail" ? "customMessageBg" : "toolPendingBg", theme.fg("customMessageText", padded));
+			});
+		},
+	};
+}
+
+/** Agreements stay complete; mail is context-bearing, topic entries are transcript-only. */
 export function registerSwarmRenderers(pi) {
 	pi.registerMessageRenderer("swarm-agreement", message => new Text(displayText(message.content), 0, 0));
-	pi.registerMessageRenderer("swarm-agent-mail", message => {
-		const messages = Array.isArray(message.details?.messages) ? message.details.messages : [];
-		const text = messageText(messages.map(item => ({ ...item, to: "owner" })));
-		return new Text(displayText(text || "Swarm agent messages"), 0, 0);
-	});
+	pi.registerMessageRenderer("swarm-agent-mail", (message, options, theme) => conversationCard(message.details?.messages, "mail", options, theme));
+	pi.registerEntryRenderer(TOPIC_MIRROR, (entry, options, theme) => conversationCard(entry.data?.messages, "topic", options, theme));
 }
 
 /** Presentation only. Consent is captured separately from a real owner input event. */
