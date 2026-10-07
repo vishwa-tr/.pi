@@ -1,0 +1,53 @@
+export class SwarmError extends Error {
+	constructor(code, message) {
+		super(message);
+		this.name = "SwarmError";
+		this.code = code;
+	}
+}
+
+export function requireCondition(condition, code, message) {
+	if (!condition) throw new SwarmError(code, message);
+}
+
+/** Attach a trusted phase without exposing filesystem or SDK exception text. */
+export async function inPhase(phase, operation) {
+	try { return await operation(); }
+	catch (error) {
+		const failure = error instanceof SwarmError ? error : new SwarmError(["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(error?.code) ? "PATH" : "FAILED", "Swarm operation failed");
+		failure.phase ??= phase;
+		if (failure !== error) failure.cause = error;
+		throw failure;
+	}
+}
+
+const FAILURE_MESSAGES = {
+	INPUT: "Check the tool arguments and agreement fields.",
+	UI: "Interactive Pi dialogs are required for this action.",
+	SESSION: "A persisted owning session is required.",
+	MODEL: "Select an available physical model before starting.",
+	MODE_DENIED: "Use unrestricted mode and wait for policy readiness.",
+	AUTHORITY: "Approval was declined, unavailable, or revoked.",
+	CANCELLED: "The request was cancelled; fresh approval is required to continue.",
+	INSPECTION_TIMEOUT: "Workspace inspection reached its deadline.",
+	INSPECTION_LIMIT: "Git inspection output exceeded its bounded limit.",
+	INSPECTION: "Workspace inspection could not complete.",
+	STALE: "Workspace or run state changed; inspect and approve again.",
+	PATH: "Workspace path or file identity is unsupported.",
+	PROVIDER: "The selected provider no longer matches the approved configuration.",
+	OWNERSHIP: "Session or controller ownership changed or is unavailable.",
+	UNSETTLED: "Execution remains unsettled; inspect before recovery.",
+	BUSY: "Another Swarm operation is still active.",
+	STATE: "This action is unavailable in the current run state.",
+	DUPLICATE: "This run already exists; restore it instead.",
+	FAILED: "The Swarm operation failed; inspect status before continuing.",
+};
+const FAILURE_PHASES = new Set(["setup", "launch", "inspection", "approval", "storage", "attachment", "resume", "restart", "restore", "reconcile", "control", "history"]);
+
+/** Only constant messages, codes and phases are safe for model-facing results. */
+export function failureDiagnostic(error, fallback = "control") {
+	const trusted = error instanceof SwarmError;
+	const code = trusted && Object.hasOwn(FAILURE_MESSAGES, error.code) ? error.code : "FAILED";
+	const phase = trusted && FAILURE_PHASES.has(error.phase) ? error.phase : fallback;
+	return { code, phase: FAILURE_PHASES.has(phase) ? phase : "control", message: FAILURE_MESSAGES[code] };
+}
