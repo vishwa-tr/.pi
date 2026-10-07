@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { WorkspaceScheduler, WorkspaceSchedulerError } from "../extensions/swarm/workspace-scheduler.mjs";
+import {
+	WorkspaceScheduler,
+	WorkspaceSchedulerError,
+} from "../extensions/swarm/workspace-scheduler.mjs";
 
 const code = expected => error => error instanceof WorkspaceSchedulerError && error.code === expected;
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -108,46 +111,49 @@ test("same owner's disjoint mutations overlap and pin claims through rejection",
 	scheduler.assertIdle();
 });
 
-test("pending exclusives block fresh admission, drain old mutations, and wait for foreign release", { timeout: 2000 }, async () => {
+test("foreign claims reject exclusive admission without wedging the claimant's edit", { timeout: 2000 }, async () => {
 	const scheduler = new WorkspaceScheduler();
-	scheduler.acquireClaims("writer", ["/src"]);
-	scheduler.acquireClaims("foreign", ["/other"]);
-	const write = heldOperation();
-	const writePromise = scheduler.withMutation("writer", ["/src"], write.run);
-	await write.entered;
-	const order = [];
-	const queuedWrite = scheduler.withMutation("writer", ["/src"], () => { order.push("queued-write"); });
-	const shell = scheduler.withExclusive("writer", () => { order.push("shell"); return 42; });
-	assert.throws(() => scheduler.acquireClaims("new", ["/new"]), code("BUSY"));
-	await assert.rejects(scheduler.withMutation("foreign", ["/other"], () => {}), code("BUSY"));
-	write.finish();
-	await Promise.all([writePromise, queuedWrite]);
-	assert.deepEqual(order, ["queued-write"]);
-	assert.deepEqual(scheduler.snapshot().claims, [{ owner: "foreign", paths: ["/other"] }]);
-	assert.equal(scheduler.snapshot().pending[0].owner, "writer");
-	scheduler.releaseClaims("foreign");
-	assert.equal(await shell, 42);
-	assert.deepEqual(order, ["queued-write", "shell"]);
+	scheduler.acquireClaims("claimant", ["/private-target"]);
+	await assert.rejects(scheduler.withExclusive("submitter", () => assert.fail("rejected submission ran")), error => {
+		assert.equal(error.code, "BUSY");
+		assert.deepEqual(error.blockers, [{ owner: "claimant", kind: "claim", stage: "claims-held" }]);
+		assert.ok(!JSON.stringify(error.blockers).includes("private-target"));
+		return true;
+	});
+	assert.deepEqual(scheduler.snapshot().pending, []);
+	let edited = false;
+	await scheduler.withMutation("claimant", ["/private-target"], () => { edited = true; });
+	assert.equal(edited, true);
+	scheduler.releaseClaims("claimant");
+	assert.equal(await scheduler.withExclusive("submitter", () => "current"), "current");
 	scheduler.assertIdle();
 });
 
-test("competing claim-owner upgrades relinquish every owner's claims without deadlock", { timeout: 2000 }, async () => {
+test("pending exclusive drains own already-admitted mutations and preserves the barrier", { timeout: 2000 }, async () => {
 	const scheduler = new WorkspaceScheduler();
-	scheduler.acquireClaims("a", ["/a"]);
-	scheduler.acquireClaims("b", ["/b"]);
-	const writeA = heldOperation();
-	const writeB = heldOperation();
-	const writes = [scheduler.withMutation("a", ["/a"], writeA.run), scheduler.withMutation("b", ["/b"], writeB.run)];
-	await Promise.all([writeA.entered, writeB.entered]);
+	scheduler.acquireClaims("writer", ["/src"]);
+	const write = heldOperation();
+	const running = scheduler.withMutation("writer", ["/src"], write.run);
+	await write.entered;
 	const order = [];
-	const first = scheduler.withExclusive("a", () => { order.push("a"); });
-	const second = scheduler.withExclusive("b", () => { order.push("b"); });
-	writeA.finish();
-	await writes[0];
-	assert.deepEqual(scheduler.snapshot().claims, [{ owner: "b", paths: ["/b"] }]);
-	writeB.finish();
-	await Promise.all([...writes, first, second]);
-	assert.deepEqual(order, ["a", "b"]);
+	const queued = scheduler.withMutation("writer", ["/src"], () => { order.push("write"); });
+	const exclusive = scheduler.withExclusive("writer", () => { order.push("exclusive"); });
+	assert.throws(() => scheduler.acquireClaims("other", ["/other"]), code("BUSY"));
+	await assert.rejects(scheduler.withMutation("writer", ["/src"], () => assert.fail()), code("BUSY"));
+	write.finish();
+	await Promise.all([running, queued, exclusive]);
+	assert.deepEqual(order, ["write", "exclusive"]);
+	scheduler.assertIdle();
+});
+
+test("competing upgraders fail fast without dropping either owner's claims", async () => {
+	const scheduler = new WorkspaceScheduler();
+	scheduler.acquireClaims("a", ["/a"]); scheduler.acquireClaims("b", ["/b"]);
+	await assert.rejects(scheduler.withExclusive("a", () => assert.fail()), code("BUSY"));
+	await assert.rejects(scheduler.withExclusive("b", () => assert.fail()), code("BUSY"));
+	assert.equal(scheduler.snapshot().claims.length, 2);
+	assert.equal(scheduler.snapshot().pending.length, 0);
+	scheduler.releaseClaims("a"); scheduler.releaseClaims("b");
 	scheduler.assertIdle();
 });
 
@@ -169,7 +175,10 @@ test("exclusive requests are FIFO and cannot be starved by fresh claims or mutat
 
 test("cancelling the sole queued exclusive removes its request and unblocks admission", { timeout: 2000 }, async () => {
 	const scheduler = new WorkspaceScheduler();
-	scheduler.acquireClaims("foreign", ["/other"]);
+	scheduler.acquireClaims("shell", ["/other"]);
+	const active = heldOperation();
+	const running = scheduler.withMutation("shell", ["/other"], active.run);
+	await active.entered;
 	const abort = new AbortController();
 	const reason = new Error("cancel queue");
 	let invoked = false;
@@ -180,8 +189,9 @@ test("cancelling the sole queued exclusive removes its request and unblocks admi
 	assert.equal(invoked, false);
 	assert.deepEqual(scheduler.snapshot().pending, []);
 	scheduler.acquireClaims("new", ["/new"]);
-	await scheduler.withMutation("foreign", ["/other"], () => {});
-	scheduler.releaseClaims("foreign");
+	active.finish(); await running;
+	await scheduler.withMutation("shell", ["/other"], () => {});
+	scheduler.releaseClaims("shell");
 	scheduler.releaseClaims("new");
 	scheduler.assertIdle();
 });
@@ -210,7 +220,9 @@ test("cancelling an upgrade before mutation settlement keeps claims and restores
 
 test("cancelling a queued FIFO head lets the next exclusive proceed", { timeout: 2000 }, async () => {
 	const scheduler = new WorkspaceScheduler();
-	scheduler.acquireClaims("foreign", ["/other"]);
+	const active = heldOperation();
+	const running = scheduler.withExclusive("active", active.run);
+	await active.entered;
 	const abort = new AbortController();
 	const first = scheduler.withExclusive("first", () => assert.fail("cancelled callback ran"), { signal: abort.signal });
 	const rejected = assert.rejects(first, { name: "AbortError" });
@@ -218,7 +230,7 @@ test("cancelling a queued FIFO head lets the next exclusive proceed", { timeout:
 	abort.abort();
 	await rejected;
 	assert.deepEqual(scheduler.snapshot().pending.map(operation => operation.owner), ["second"]);
-	scheduler.releaseClaims("foreign");
+	active.finish(); await running;
 	assert.equal(await second, "next");
 	scheduler.assertIdle();
 });

@@ -1,11 +1,18 @@
+import {
+	WorkspaceScheduler,
+	WorkspaceSchedulerError,
+} from "./workspace-scheduler.mjs";
+import {
+	coordinationEntry,
+	coordinationStatus,
+} from "./coordination-status.mjs";
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { inspectCheckout } from "./host-approval.mjs";
 import { WorkspaceFiles } from "./workspace-files.mjs";
 import { codingDefinitions } from "./session-tools.mjs";
-import { WorkspaceScheduler } from "./workspace-scheduler.mjs";
-import { requireCondition as check, SwarmError } from "./errors.mjs";
+import { SwarmError, requireCondition as check } from "./errors.mjs";
 
 const attached = new WeakSet();
 const construction = Symbol("trusted workspace runtime");
@@ -43,6 +50,8 @@ export class WorkspaceRuntime {
 	#reads = new Map();
 	#uncertain = new Map();
 	#observedPaths = new Set();
+	#refused = new Set();
+	#permissions = new Map();
 
 	constructor(token, controller, files, authorize, runner, admission) {
 		check(token === construction, "AUTHORITY", "Use the trusted attachment API");
@@ -66,7 +75,46 @@ export class WorkspaceRuntime {
 	}
 
 	snapshot() {
-		return { uncertain: [...this.#uncertain.keys()], coordination: this.#scheduler.snapshot(), workspace: this.#controller.snapshot().workspace };
+		return { uncertain: [...this.#uncertain.keys()], coordination: this.#scheduler.snapshot(), coordinationStatus: this.coordinationStatus(), workspace: this.#controller.snapshot().workspace };
+	}
+
+	/** Bounded coordination metadata only; never commands, target paths or exception text. */
+	coordinationStatus() {
+		const snapshot = this.#scheduler.snapshot();
+		const ownerView = owner => {
+			const context = this.#owners.get(owner);
+			return { owner, workerId: context?.workerId ?? null, taskId: context?.taskId ?? null };
+		};
+		const operationView = ({ id, kind, owner, purpose, stage, cancellationRequested }) => ({
+			...ownerView(owner), id, kind, purpose, stage, cancellationRequested,
+		});
+		return coordinationStatus({
+			claims: snapshot.claims.slice(0, 32).map(({ owner, paths }) => ({ ...ownerView(owner), count: paths.length, stage: "claims-held" })),
+			pending: snapshot.pending.slice(0, 32).map(operationView), active: snapshot.active.slice(0, 32).map(operationView),
+			counts: { claims: snapshot.claims.length, pending: snapshot.pending.length, active: snapshot.active.length },
+		});
+	}
+
+	#coordinationFailure(error) {
+		if (!(error instanceof WorkspaceSchedulerError)) throw error;
+		const blockers = error.blockers.slice(0, 8).map(({ owner, id, kind, purpose, stage }) => {
+			const context = this.#owners.get(owner);
+			return coordinationEntry({ owner, workerId: context?.workerId ?? null, taskId: context?.taskId ?? null, id, kind, purpose, stage: stage ?? "claims-held" });
+		});
+		throw new SwarmError(error.code, `${error.message}${blockers.length ? `; blockers: ${JSON.stringify(blockers)}` : ""}`);
+	}
+
+	async #coordinated(operation) {
+		try { return await operation(); }
+		catch (error) { this.#coordinationFailure(error); }
+	}
+
+	#policyKey(context) {
+		return `${context.cycle}:${context.generation}:${context.assignmentId ?? "final"}`;
+	}
+
+	#requirePermission(context) {
+		check(!this.#refused.has(this.#policyKey(context)), "AUTHORITY", "Policy refusal fenced this assignment; no automatic approval retry. Release or yield and ask the owner.");
 	}
 
 	#check(context, signal = context.signal) {
@@ -132,7 +180,9 @@ export class WorkspaceRuntime {
 			claim: paths => {
 				const context = this.#context(binding);
 				const canonical = paths.map(path => this.#files.identity(path));
-				const claim = this.#scheduler.acquireClaims(context.owner, canonical);
+				let claim;
+				try { claim = this.#scheduler.acquireClaims(context.owner, canonical); }
+				catch (error) { this.#coordinationFailure(error); }
 				// A handoff never inherits the previous owner's read observation.
 				for (const path of canonical) this.#reads.get(context.owner).delete(path);
 				return claim;
@@ -150,11 +200,21 @@ export class WorkspaceRuntime {
 		});
 	}
 
-	async #permission(context, kind, paths, command, signal) {
-		this.#check(context, signal);
-		const allowed = await this.#authorize(Object.freeze({ kind, paths: Object.freeze([...paths]), command, workerId: context.workerId, taskId: context.taskId, signal }));
-		check(allowed === true, "AUTHORITY", "Host policy did not authorize this operation");
-		this.#check(context, signal);
+	async #permission(context, kind, paths, command, signal, setStage) {
+		const key = this.#policyKey(context);
+		const previous = this.#permissions.get(key) ?? Promise.resolve();
+		setStage("approval");
+		const request = previous.catch(() => {}).then(async () => {
+			this.#check(context, signal);
+			this.#requirePermission(context);
+			const allowed = await this.#authorize(Object.freeze({ kind, paths: Object.freeze([...paths]), command, workerId: context.workerId, taskId: context.taskId, signal }));
+			if (allowed !== true) this.#refused.add(key);
+			check(allowed === true, "AUTHORITY", "Host policy declined or timed out; this assignment will not request approval again.");
+			this.#check(context, signal);
+		});
+		this.#permissions.set(key, request);
+		try { await request; }
+		finally { if (this.#permissions.get(key) === request) this.#permissions.delete(key); }
 	}
 
 	async #fingerprint(signal, paths = []) {
@@ -175,33 +235,36 @@ export class WorkspaceRuntime {
 
 	async #mutate(binding, kind, path, params, call = {}) {
 		const context = this.#context(binding);
+		this.#requirePermission(context);
 		const canonical = this.#files.path(path);
 		const identity = this.#files.identity(canonical);
 		const expected = this.#reads.get(context.owner).get(identity) ?? (kind === "write" && !existsSync(resolve(this.#controller.snapshot().workspaceRoot, canonical)) ? this.#files.fingerprint(canonical) : undefined);
 		check(expected, "STALE", "Read the current file after acquiring its claim");
-		return this.#scheduler.withMutation(context.owner, [identity], async signal => {
-			await this.#permission(context, kind, [canonical], null, signal);
+		return this.#coordinated(() => this.#scheduler.withMutation(context.owner, [identity], async (signal, setStage) => {
+			await this.#permission(context, kind, [canonical], null, signal, setStage);
 			const result = await this.#execute(context, kind, [canonical], null, signal, async () => {
 				check(this.#files.fingerprint(canonical) === expected, "STALE", "Reread the changed target before editing");
 				const nativeResult = await this.#tools.get(kind).execute(call.toolCallId ?? randomUUID(), { ...params, path: canonical }, signal, call.onUpdate, call.ctx);
 				return { nativeResult, settled: true, exitCode: null };
-			});
+			}, setStage);
 			this.#reads.get(context.owner)?.set(identity, this.#files.fingerprint(canonical));
 			return result;
-		}, { signal: context.signal });
+		}, { signal: context.signal, purpose: kind }));
 	}
 
 	async #shell(binding, command, call = {}) {
 		check(typeof command === "string" && command.trim(), "INPUT", "Command required");
 		const context = this.#context(binding);
-		return this.#scheduler.withExclusive(context.owner, async signal => {
+		this.#requirePermission(context);
+		return this.#coordinated(() => this.#scheduler.withExclusive(context.owner, async (signal, setStage) => {
 			this.#reads.get(context.owner)?.clear();
-			await this.#permission(context, "shell", [], command, signal);
-			return this.#execute(context, "shell", [], command, signal, () => this.#runner({ command, cwd: this.#controller.snapshot().workspaceRoot, signal, call }));
-		}, { signal: context.signal });
+			await this.#permission(context, "shell", [], command, signal, setStage);
+			return this.#execute(context, "shell", [], command, signal, () => this.#runner({ command, cwd: this.#controller.snapshot().workspaceRoot, signal, call }), setStage);
+		}, { signal: context.signal, purpose: "shell" }));
 	}
 
-	async #execute(context, kind, paths, command, signal, perform) {
+	async #execute(context, kind, paths, command, signal, perform, setStage) {
+		setStage("inspection");
 		this.#check(context, signal);
 		const before = await this.#fingerprint(signal, paths);
 		this.#check(context, signal);
@@ -213,6 +276,7 @@ export class WorkspaceRuntime {
 		try {
 			this.#check(context, signal);
 			invoked = true;
+			setStage("execution");
 			result = await perform();
 		} catch (error) {
 			failure = error;
@@ -220,12 +284,17 @@ export class WorkspaceRuntime {
 			result = { settled: !invoked || !shell || error.settled === true, exitCode: null };
 		}
 		const uncertain = result?.settled !== true;
-		if (uncertain) await this.#holdUncertain(id);
+		if (uncertain) {
+			setStage("unknown-settlement");
+			await this.#holdUncertain(id);
+		}
+		setStage("settlement");
 		let after = null;
 		// Settlement observations cannot inherit an already-aborted execution signal.
 		// This bounded inspection records effects but never authorizes execution.
 		try { after = await this.#fingerprint(undefined, paths); } catch (error) { failure ??= error; }
 		let outcome = uncertain || after === null ? "unknown" : signal.aborted || result.aborted ? "cancelled" : failure || result.exitCode !== null && result.exitCode !== 0 ? "failed" : "succeeded";
+		setStage("recording");
 		await this.#controller.system("workspace.finish", { id, after, exitCode: result?.exitCode ?? null, outcome });
 		if (failure) throw failure;
 		check(!uncertain, "UNSETTLED", "Execution required reconciliation and is not verification evidence");
@@ -261,24 +330,28 @@ export class WorkspaceRuntime {
 
 	async #submit(binding, summary, receipts) {
 		const context = this.#context(binding);
-		return this.#scheduler.withExclusive(context.owner, async signal => {
+		return this.#coordinated(() => this.#scheduler.withExclusive(context.owner, async (signal, setStage) => {
+			setStage("inspection");
 			this.#check(context, signal);
 			const fingerprint = await this.#observe(signal);
 			this.#check(context, signal);
+			setStage("candidate");
 			await this.#controller.system("workspace.candidate", { taskId: context.taskId, assignmentId: context.assignmentId, fingerprint, receipts }, { cycle: context.cycle, generation: context.generation });
 			this.#check(context, signal);
 			return this.#controller.worker(context.workerId).dispatch("task.submit", { taskId: context.taskId, summary });
-		}, { signal: context.signal });
+		}, { signal: context.signal, purpose: "submit" }));
 	}
 
 	async #review(binding, approved, summary) {
 		const context = this.#context(binding);
-		return this.#scheduler.withExclusive(context.owner, async signal => {
+		return this.#coordinated(() => this.#scheduler.withExclusive(context.owner, async (signal, setStage) => {
+			setStage("inspection");
 			this.#check(context, signal);
 			await this.#observe(signal);
 			this.#check(context, signal);
+			setStage("review");
 			return this.#controller.worker(context.workerId).dispatch("task.review", { taskId: context.taskId, approved, summary });
-		}, { signal: context.signal });
+		}, { signal: context.signal, purpose: "review" }));
 	}
 
 	async settle(taskId) {
@@ -307,14 +380,14 @@ export class WorkspaceRuntime {
 		this.#admission?.assert();
 		await this.#controller.system("run.verify");
 		const context = this.#context(null, true);
-		return this.#scheduler.withExclusive(context.owner, async signal => {
-			await this.#permission(context, "final", [], command, signal);
-			const result = await this.#execute(context, "final", [], command, signal, () => this.#runner({ command, cwd: this.#controller.snapshot().workspaceRoot, signal }));
+		return this.#coordinated(() => this.#scheduler.withExclusive(context.owner, async (signal, setStage) => {
+			await this.#permission(context, "final", [], command, signal, setStage);
+			const result = await this.#execute(context, "final", [], command, signal, () => this.#runner({ command, cwd: this.#controller.snapshot().workspaceRoot, signal }), setStage);
 			this.#check(context, signal);
 			await this.#observe(signal);
 			this.#check(context, signal);
 			await this.#controller.system("run.complete", { evidence: result.executionId });
 			return result;
-		}, { signal: context.signal });
+		}, { signal: context.signal, purpose: "final" }));
 	}
 }

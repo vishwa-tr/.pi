@@ -30,7 +30,7 @@ def main(native=False):
         label = "Pi native provider" if native else "mock only"
         scope = "Disposable project only; no network"
         env["PI_SDK_DIR"] = str(sdk)  # The child's sdk-register cannot see the real agent dir.
-        settings = {"quietStartup": True, "enableInstallTelemetry": False,
+        settings = {"quietStartup": True, "enableInstallTelemetry": False, "tuiMode": "fullscreen", "fullscreenScrollbar": "always",
                     "compaction": {"enabled": False}, "retry": {"enabled": False}}
         (agent / "settings.json").write_text(json.dumps(settings))
         subprocess.run(["git", "init", "-q", str(project)], env=env, check=True)
@@ -140,7 +140,9 @@ def main(native=False):
             terminal.send("\x1b[Z")  # production Shift+Tab: Off -> Discuss
             mode("discuss")
             terminal.line("yes")
-            terminal.expect("MODE_DENIED")
+            # Revocation removes the proposal before consumption; this is absent
+            # owner authority, not a fresh proposal's restricted-mode inspection.
+            terminal.expect("AUTHORITY")
             assert count("worker-start") == 0
             assert not (project / ".swarms").exists()
             policy_command("/discuss off")

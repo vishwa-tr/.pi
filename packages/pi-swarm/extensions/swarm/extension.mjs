@@ -400,7 +400,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					created.confirmationPrompt = created.recovery
 						? "Independently establish that ALL listed execution has stopped, then reply: I confirm settlement: <how you established this>. Missing PID, timeout or no output is not proof. Unknown effects stay unknown; nothing is replayed."
 						: "Shall I proceed with this exact Swarm configuration? Reply yes or confirm to approve, or ask for changes. Resume preserves allowances; restart resets them. Existing and generated changes are kept.";
-					present(`${created.agreement}\n${created.confirmationPrompt}`);
+					present(`${created.agreement}\nProposal ID: ${created.id} (bookkeeping only; not approval).\n${created.confirmationPrompt}\nNo execution authorized.`);
 					return { approved: false }; // Inspection only: no storage or workers.
 				};
 				const stop = AbortSignal.any([revoked.signal, ...(signal ? [signal] : [])]);

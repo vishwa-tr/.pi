@@ -59,9 +59,10 @@ test("worker status exposes collaboration state, not host or storage metadata", 
 		f.driver.wake("builder"); await f.driver.idle();
 		const result = f.mock.calls[1].context.messages.find(message => message.role === "toolResult");
 		const status = JSON.parse(result.content[0].text);
-		assert.deepEqual(Object.keys(status).sort(), ["status", "revision", "cycle", "generation", "objective", "criteria", "scope", "limits", "guidanceRevision", "guidance", "workers", "tasks", "messages"].sort());
+		assert.deepEqual(Object.keys(status).sort(), ["status", "revision", "cycle", "generation", "objective", "criteria", "scope", "limits", "guidanceRevision", "guidance", "workers", "tasks", "messages", "coordination"].sort());
 		assert.equal(status.workers[0].id, "builder");
 		assert.equal(status.objective, "Implement invitations");
+		assert.deepEqual(status.coordination.counts, { claims: 0, pending: 0, active: 0 });
 		assert.ok(!JSON.stringify(status).includes(f.root));
 		assert.ok(f.c.snapshot().sessions.workers[0].sessionFile);
 	} finally { await shutdown(f); }
@@ -355,6 +356,28 @@ test("real SDK coding tools use guarded claims and recorded command evidence", a
 	assert.equal(f.c.snapshot().workspace.receipts.length, 2);
 	assert.ok(f.mock.calls.every(call => !call.context.messages.some(message => message.role === "toolResult" && message.isError)));
 	await shutdown(f);
+});
+
+test("SDK follow-ups after Safety denial report errors but do not request approval again", async t => {
+	let approvals = 0;
+	const f = await fixture(t, [
+		tool("swarm_task", { action: "claim", taskId: "denied", kind: "build" }),
+		tool("bash", { command: "first denied" }, "first"),
+		tool("bash", { command: "second denied" }, "second"),
+		tool("swarm_task", { action: "yield", taskId: "denied", blocker: "Policy refused" }, "yield"),
+		{ text: "Handoff only" },
+	], undefined, { authorize: async () => { approvals++; return false; } });
+	try {
+		await f.driver.recruit(specialist("builder"));
+		await f.c.owner("task.create", { id: "denied", title: "Policy task", criteria: [0], dependencies: [] });
+		f.driver.wake("builder"); await f.driver.idle();
+		assert.equal(approvals, 1);
+		assert.equal(f.c.snapshot().tasks[0].assignment, null);
+		assert.equal(f.c.snapshot().tasks[0].status, "blocked");
+		assert.equal(f.c.snapshot().workspace.receipts.length, 0);
+		assert.ok(f.mock.calls.at(-1).context.messages.filter(message => message.role === "toolResult" && message.toolName === "bash").every(message => message.isError));
+		assert.deepEqual(f.workspace.coordinationStatus().counts, { claims: 0, pending: 0, active: 0 });
+	} finally { await shutdown(f); }
 });
 
 test('exhausted Pi retries consume exactly one task failure', async t => {

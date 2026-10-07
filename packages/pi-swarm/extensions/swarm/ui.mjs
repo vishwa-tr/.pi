@@ -1,8 +1,18 @@
+import {
+	SwarmError,
+	failureDiagnostic,
+} from "./errors.mjs";
 import { Text } from "@earendil-works/pi-tui";
 import { displayText } from "./dashboard.mjs";
 import { messageText } from "./conversations.mjs";
+import { coordinationStatus } from "./coordination-status.mjs";
 
 const json = value => JSON.stringify(value, null, 2);
+const safeError = error => {
+	const diagnostic = new SwarmError(error?.code, "");
+	diagnostic.phase = error?.phase;
+	return failureDiagnostic(diagnostic);
+};
 
 /** Literal, full agreement text: wrapping never hides terms or interprets Markdown. */
 export function registerSwarmRenderers(pi) {
@@ -37,8 +47,9 @@ export function statusText(snapshot) {
 	return json({
 		runId: run.runId, status: run.status, cycle: run.cycle, elapsedMs: run.elapsedMs,
 		limits: run.limits, objective: run.objective, workers: run.workers, tasks: run.tasks,
-		active: driver?.active, queued: driver?.queued, claims: workspace?.coordination,
-		unresolvedOperations: run.workspace?.operations, unresolvedTurns: run.sessions?.turns,
-		usage: "Not yet aggregated; cost unknown", errors: [...snapshot.errors, ...(driver?.errors ?? [])]
+		active: driver?.active, queued: driver?.queued, claims: coordinationStatus(workspace?.coordinationStatus),
+		unresolvedOperations: run.workspace?.operations.slice(0, 32).map(({ id, workerId, taskId, kind, uncertain }) => ({ id, workerId, taskId, kind, uncertain })),
+		unresolvedTurns: run.sessions?.turns.slice(0, 32).map(({ id, workerId, kind }) => ({ id, workerId, kind })),
+		usage: "Not yet aggregated; cost unknown", errors: [...(snapshot.errors ?? []), ...(driver?.errors ?? [])].slice(0, 32).map(safeError)
 	});
 }

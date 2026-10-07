@@ -14,7 +14,12 @@ import { WorkspaceRuntime } from "./workspace.mjs";
 import { readSessionHistory } from "./sdk-session.mjs";
 import { DEFAULT_LIMITS, reduceEvent } from "./state.mjs";
 import { ModeGate, requestSafety } from "./host-gates.mjs";
-import { inPhase, requireCondition as check, SwarmError } from "./errors.mjs";
+import {
+	inPhase,
+	SwarmError,
+	failureDiagnostic,
+	requireCondition as check,
+} from "./errors.mjs";
 import { inspectCheckout, specificationFingerprint } from "./host-approval.mjs";
 
 function freeze(value) {
@@ -78,7 +83,7 @@ export class SwarmHost {
 			events, sessionId, onRevoke: () => {
 				this.#invalidate();
 				if (!this.#lifetime.signal.aborted) {
-					this.#modePause = this.pause().catch(error => this.#errors.push(error.message));
+					this.#modePause = this.pause().catch(error => this.#errors.push(failureDiagnostic(error)));
 				}
 			}
 		});
@@ -140,7 +145,7 @@ export class SwarmHost {
 			try { this.#assertProvider(this.#specification().model); }
 			catch (error) {
 				this.#invalidate();
-				this.#modePause = this.pause().catch(failure => this.#errors.push(failure.message));
+				this.#modePause = this.pause().catch(failure => this.#errors.push(failureDiagnostic(failure)));
 				throw error;
 			}
 		}

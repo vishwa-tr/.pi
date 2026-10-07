@@ -81,3 +81,31 @@ test("main history pages preserve positions and omit provider diagnostics, signa
 	assert.equal(next.details.entries.length, 11); assert.equal(next.details.nextOffset, null);
 	assert.equal(entries.length, 31);
 });
+
+test("proposal bookkeeping survives content-only native tool serialization but never grants approval", async () => {
+	const tools = new Map();
+	const proposalId = "11111111-2222-4333-8444-555555555555";
+	registerMainTools({ registerTool: tool => tools.set(tool.name, tool) }, { chatControl: async () => ({
+		awaitingConfirmation: true, proposalId, agreement: "Complete inspected agreement", confirmationPrompt: "Owner confirmation required", expiresAt: 120000,
+	}) });
+	const result = await tools.get("swarm_start").execute("proposal", { objective: "Goal" }, undefined, undefined, {});
+	const contentOnly = result.content.map(part => part.text).join("\n");
+	assert.match(contentOnly, new RegExp(`Proposal ID: ${proposalId}`));
+	assert.match(contentOnly, /bookkeeping only; not approval/);
+	assert.match(contentOnly, /No execution authorized/);
+	assert.equal(result.details.awaitingConfirmation, true);
+});
+
+test("main coordination status bounds entries and allowlists IDs, purposes and stages", () => {
+	const valid = { owner: "1:0:0:assignment", workerId: "builder", taskId: "task", id: 1, kind: "exclusive", purpose: "shell", stage: "approval", cancellationRequested: true };
+	const snapshot = { run: { workers: [], tasks: [], objective: "Goal" }, workspace: { coordinationStatus: {
+		active: [valid, { ...valid, owner: "/private/path", workerId: "echo secret", taskId: "C:\\private", purpose: "private command", stage: "raw exception", command: "private command", paths: ["/private/path"] }],
+		pending: Array.from({ length: 100 }, () => valid), counts: { active: 2, pending: 100, claims: 0 },
+	} } };
+	const summary = swarmSummary(snapshot);
+	assert.equal(summary.coordination.pending.length, 32);
+	assert.equal(summary.coordination.counts.pending, 100);
+	assert.equal(summary.coordination.active[0].stage, "approval");
+	assert.equal(summary.coordination.active[1].workerId, null);
+	assert.doesNotMatch(JSON.stringify(summary.coordination), /private|secret|exception/);
+});

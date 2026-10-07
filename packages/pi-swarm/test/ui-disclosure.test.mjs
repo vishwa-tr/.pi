@@ -80,3 +80,13 @@ test("status never misrepresents usage placeholders as mock-only execution", () 
 	assert.doesNotMatch(statusText({ run: { status: "running" }, errors: [] }), /mock.only/);
 	assert.match(statusText({ run: { status: "running" }, errors: [] }), /cost unknown/);
 });
+
+test("status errors retain safe phase/code but never raw host or driver exceptions", () => {
+	const output = statusText({ run: { status: "running" },
+		errors: ["PRIVATE_PATH command credential", { code: "UNSETTLED", phase: "approval", message: "PRIVATE_PATH exception" }],
+		driver: { errors: [{ code: "PRIVATE_CODE", phase: "PRIVATE_PHASE", message: "PRIVATE_COMMAND" }] },
+	});
+	assert.doesNotMatch(output, /PRIVATE|credential|exception/);
+	assert.match(output, /UNSETTLED/);
+	assert.match(output, /approval/);
+});

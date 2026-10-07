@@ -19,11 +19,9 @@ import subprocess
 import tempfile
 import termios
 import time
+from packet import ANSI, Viewport, capture_packet, compact, display_match_end, verify_expected, PROPOSAL, BOTTOM
 
 HERE = Path(__file__).resolve().parent
-ANSI = re.compile(r"\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[=>]")
-# Whitespace and Pi's transcript scrollbar glyphs; wrapping may split any packet phrase.
-WRAP = re.compile(r"[\s\u2502\u2503\u2588]")
 MANAGED_MARKER = {"kind": "pi-managed-install", "schemaVersion": 1, "layout": "releases-v1"}
 MANAGED_VERSION = re.compile(r"[0-9A-Za-z._+-]+")
 
@@ -95,6 +93,10 @@ class Terminal:
         self.output = ""
         self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self.cursor = 0
+        self.last_input_start = 0
+        self.packet_cache = None
+        self.viewport = Viewport()
+        self.event_file = Path(env["SWARM_TERMINAL_FIXTURE"]) if env.get("SWARM_TERMINAL_FIXTURE") else None
 
     def send(self, value):
         os.write(self.fd, value.encode())
@@ -106,24 +108,21 @@ class Terminal:
             except OSError:
                 data = ""
             self.output += data
+            self.viewport.feed(data)
             # Answer terminal cursor-position requests; no capability extensions claimed.
             if "\x1b[6n" in data:
                 self.send("\x1b[1;1R")
 
     def expect(self, text, timeout=15):
         if re.fullmatch(r"(?:LAUNCH|RESUME|RESTART|RECONCILE) \((?:mock only|Pi native provider)\)", text):
-            # A complete chat packet is taller than the viewport. Pi may initially
-            # emit only its footer; page the real transcript before checking its header.
-            self.expect("Independently establish that ALL" if text.startswith("RECONCILE ")
-                        else "Shall I proceed with this exact Swarm configuration?", timeout)
-            self.read_packet(text)
+            self.read_packet(text, timeout=timeout)
             return
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            plain = ANSI.sub("", self.output[self.cursor:])
-            if text in plain:
+            end = display_match_end(self.output[self.cursor:], text)
+            if end is not None:
                 self.last_expect_start = self.cursor
-                self.cursor = len(self.output)
+                self.cursor += end
                 return
             self.pump()
         raise AssertionError(f"Missing display {text!r}; terminal tail:\n{ANSI.sub('', self.output)[-6000:]}")
@@ -166,6 +165,9 @@ class Terminal:
         self.resize(60, 24)
 
     def line(self, text):
+        self.last_input_start = len(self.output)
+        self.cursor = self.last_input_start
+        self.packet_cache = None
         self.send(text)
         time.sleep(0.1)
         self.send("\r")
@@ -176,29 +178,60 @@ class Terminal:
             time.sleep(0.05)
         self.send("\r")
 
-    def read_packet(self, title):
-        """Page the normal chat transcript through the complete proposal before
-        replying, keeping every page. Stores the packet without wrap whitespace."""
-        header = compact(f"Swarm approval packet: {title}")
-        seen = ANSI.sub("", self.output[self.last_expect_start:])
-        pages = 0
-        while header not in compact(seen):
-            if pages == 60:
-                raise AssertionError(f"Chat proposal {title!r} not found in transcript: {ANSI.sub('', self.output)[-6000:]}")
-            start = len(self.output)
-            self.send("\x1b[5~")
-            pages += 1
-            deadline = time.monotonic() + 0.15
-            while time.monotonic() < deadline:
-                self.pump(0.03)
-            seen += ANSI.sub("", self.output[start:])
-        for _ in range(pages):
-            self.send("\x1b[6~")
-            time.sleep(0.05)
-        self.last_packet = compact(seen)
+    def repaint(self):
+        """Bounded quiet-frame wait: never assert concatenated partial ANSI diffs."""
+        deadline = time.monotonic() + 0.8
+        quiet = 0
+        while time.monotonic() < deadline and quiet < 3:
+            before = len(self.output)
+            self.pump(0.05)
+            quiet = quiet + 1 if len(self.output) == before else 0
+
+    def read_packet(self, title, timeout=15):
+        """Fresh footer first, then real fullscreen transcript pages, then full checks.
+        Duplicate callers for one proposal reuse capture, never stale output offsets."""
+        key = (title, self.last_input_start)
+        if self.packet_cache == key:
+            return
+        footer = ("Independently establish that ALL listed execution has stopped" if title.startswith("RECONCILE ")
+                  else "Shall I proceed with this exact Swarm configuration?")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            fresh = compact(ANSI.sub("", self.output[self.last_input_start:]))
+            if compact(footer) in fresh and "Noexecutionauthorized." in fresh:
+                self.repaint()
+                break
+            self.pump()
+        else:
+            raise AssertionError("Fresh complete confirmation footer not displayed before packet reading")
+
+        def page():
+            self.send("\x1b[5~")  # Pi1.0.4 fullscreen transcript PageUp, not Ctrl+PageUp editor.
+            self.repaint()
+
+        self.last_packet = capture_packet(title, self.viewport.transcript_text, page, required=(footer,))
+        expected = None
+        metadata_deadline = time.monotonic() + 2
+        while time.monotonic() < metadata_deadline:
+            observations = [json.loads(line) for line in self.event_file.read_text().splitlines()] if self.event_file and self.event_file.exists() else []
+            agreements = [row["data"] for row in observations if row.get("type") in ("agreement", "chat-result")
+                          and row.get("data", {}).get("agreement")]
+            if agreements and set(PROPOSAL.findall(self.last_packet)) == {agreements[-1]["proposalId"]}:
+                expected = agreements[-1]
+                break
+            self.pump(0.05)
+        if expected is None:
+            raise AssertionError("Original offline agreement metadata unavailable; cannot verify full values")
+        verify_expected(self.last_packet, expected)
+        self.send(BOTTOM)
+        self.repaint()
+        self.packet_cache = key
+        self.last_expect_start = self.last_input_start
+        self.cursor = self.last_input_start
 
     def resize(self, columns, rows):
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+        self.viewport.resize(columns, rows)
         os.kill(self.process.pid, signal.SIGWINCH)
         time.sleep(0.2)
 
@@ -232,10 +265,6 @@ class Terminal:
                 self.fd = None
 
 
-def compact(text):
-    return WRAP.sub("", text)
-
-
 class DisposableFixture:
     """Never remove child-owned files while child exit remains unconfirmed."""
     def __enter__(self):
@@ -264,7 +293,7 @@ def main():
                "PI_TELEMETRY": "0", "PI_SKIP_VERSION_CHECK": "1", "GIT_CONFIG_NOSYSTEM": "1",
                "GIT_CONFIG_GLOBAL": os.devnull, "SWARM_TERMINAL_FIXTURE": str(root / "events.jsonl")}
         env["PI_SDK_DIR"] = str(sdk)  # The child's sdk-register cannot see the real agent dir.
-        (agent / "settings.json").write_text(json.dumps({"quietStartup": True, "enableInstallTelemetry": False,
+        (agent / "settings.json").write_text(json.dumps({"quietStartup": True, "enableInstallTelemetry": False, "tuiMode": "fullscreen", "fullscreenScrollbar": "always",
             "compaction": {"enabled": False}, "retry": {"enabled": False}}))
         subprocess.run(["git", "init", "-q", str(project)], env=env, check=True)
         (project / ".git" / "info" / "exclude").write_text(".swarms/\n")
@@ -298,7 +327,8 @@ def main():
             terminal.expect("LAUNCH (mock only)")
             # The main-agent-selected agreement is shown in normal chat, in full.
             terminal.read_packet("LAUNCH (mock only)")
-            for value in ('"Edited terminal goal"', '"Observable outcome"', '"Only disposable project"', '"agents": 3'):
+            for value in ('"Edited terminal goal"', '"Observable outcome"', '"Only disposable project"',
+                          '"agents": 3', '"active": 2', '"tasks": 10', '"attempts": 2', '"durationMs": 300000'):
                 assert compact(value) in terminal.last_packet, f"Configuration not shown: {value}"
             assert not any(event["type"] == "worker-start" for event in events()), "No execution before owner chat confirmation"
             terminal.line("yes")

@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
 import { recipientId } from "./messaging.mjs";
-import { basename, join, resolve } from "node:path";
+import { join, resolve, basename } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { privateDirectory } from "./store/files.mjs";
 import { makeSessionTools } from "./session-tools.mjs";
-import { requireCondition as check } from "./errors.mjs";
+import { failureDiagnostic, requireCondition as check } from "./errors.mjs";
 import { pendingMail, sessionWorker } from "./session-state.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
 import { createSdkSession, readSessionHistory } from "./sdk-session.mjs";
@@ -74,7 +74,7 @@ export class SwarmSessions {
 	}
 
 	#recordError(error) {
-		this.#errors.push({ code: error.code ?? "SDK", message: error.message });
+		this.#errors.push(failureDiagnostic(error));
 	}
 
 	async #entry(workerId) {
@@ -146,7 +146,8 @@ export class SwarmSessions {
 					guidanceRevision, guidance, workers, tasks, messages } = state;
 				return {
 					status, revision, cycle, generation, objective, criteria, scope, limits,
-					guidanceRevision, guidance, workers, tasks, messages
+					guidanceRevision, guidance, workers, tasks, messages,
+					coordination: this.#workspace.coordinationStatus(),
 				};
 			}
 			case "swarm_task": {

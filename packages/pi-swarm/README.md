@@ -160,6 +160,27 @@ Traversal, outside-workspace drive/share paths and filesystem aliases remain den
 Mutations recheck the fingerprint after approval. Native read options and Bash
 timeouts are preserved. Receipt IDs are returned alongside native tool output.
 
+Exclusive shell, candidate and review requests fail **before queuing** when another
+assignment retains file claims. They never revoke that assignment's ownership or block
+its next edit while waiting for those claims. Release idle claims and coordinate a quiet
+verification window; do not retry-loop behind a peer who still needs to edit. Admitted
+exclusives remain FIFO and block new mutations; own already-admitted mutations drain first.
+Main and worker status show bounded claim owners, task IDs, operation purposes and stages
+(queued, Safety approval, inspection, execution, settlement or unknown settlement), without
+commands or target paths. Cancellation is only a request until the callback/process settles.
+
+A refused or timed-out worker approval fences further writes/edits/shell requests for that
+assignment/cycle/generation without reopening Safety. Guidance updates do not clear that
+fence; reads, idle claim release and an honest yield/handoff remain available. New authorized
+continuation never replays the denied operation. Independent Safety remains authoritative.
+
+Candidate receipt rejection retains `EVIDENCE` with a precise reason: missing receipt,
+wrong kind/task/assignment/cycle/generation, changed guidance, unsuccessful outcome/exit,
+or stale before/after/current fingerprints. Exit zero does not preserve freshness across a
+later creation or edit. Rejected reports do not produce candidates or leak queued locks;
+fresh current verification may recover. Investigations/planning use messages and yield,
+not fabricated verified candidates. Every later workspace mutation invalidates old evidence.
+
 Pi's default retries and automatic compaction are enabled; cache warming is off. Admission
 is checked on initial requests, tool follow-ups, retries and compaction summaries. An
 exhausted retry sequence counts as one task failure. Pausing aborts retries/compaction and
@@ -297,7 +318,18 @@ or deletion occurs.
 Tests resolve the managed installation automatically. `PI_SDK_DIR` overrides the SDK
 package directory; `PI_BIN` overrides the JavaScript CLI entry, **not** the managed shell
 launcher. Tests do not install dependencies, read personal credentials, or contact live
-providers. Disposable agent directories and projects isolate state.
+providers. Disposable agent directories and projects isolate state. The shared PTY
+`test/terminal/packet.py` helper reconstructs VT viewport cells from diff redraws, waits
+for a fresh no-execution/confirmation footer, pages the fullscreen transcript to the
+current proposal header and verifies every original agreement line/value against rendered
+pages before owner input. Offline result metadata is only a comparison oracle, never consent.
+Pi 1.0.4 uses plain PageUp/PageDown for fullscreen transcript paging, not editor
+Ctrl+PageUp/PageDown; Ctrl+End returns to output. Fixture settings explicitly select
+fullscreen with `fullscreenScrollbar: "always"` in disposable agent settings only,
+so body geometry is deterministic rather than using the default auto-hidden track.
+`test/terminal/packet_test.py` provides pure offline capture regressions,
+also indexed by `test/terminal-packet.test.mjs`. It discovers Python3 (including Windows
+`python3.10`); `SWARM_TEST_PYTHON` selects a test interpreter. No interpreter is installed.
 
 ```bash
 npm --prefix packages/pi-swarm test

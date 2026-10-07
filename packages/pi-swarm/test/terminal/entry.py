@@ -17,7 +17,7 @@ def main(scripted=False, package_root=False):
         env = {'PATH': os.environ['PATH'], 'HOME': str(home), 'TERM': 'xterm-256color',
                'LANG': 'C.UTF-8', 'PI_CODING_AGENT_DIR': str(agent), 'PI_OFFLINE': '1',
                'PI_TELEMETRY': '0', 'SWARM_TERMINAL_FIXTURE': str(fixture.root / 'events.jsonl')}
-        (agent / 'settings.json').write_text(json.dumps({'quietStartup': True, 'enableInstallTelemetry': False,
+        (agent / 'settings.json').write_text(json.dumps({'quietStartup': True, 'enableInstallTelemetry': False, 'tuiMode': 'fullscreen', 'fullscreenScrollbar': 'always',
             'compaction': {'enabled': False}, 'retry': {'enabled': False}, 'cacheWarming': 'off'}))
         (project / 'user.txt').write_text('Preserve fixture work\n')
         (project / '.gitignore').write_bytes(b'# Preserve existing rules\r\n')
