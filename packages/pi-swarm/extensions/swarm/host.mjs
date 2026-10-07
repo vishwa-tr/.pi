@@ -14,7 +14,12 @@ import { WorkspaceRuntime } from "./workspace.mjs";
 import { readSessionHistory } from "./sdk-session.mjs";
 import { DEFAULT_LIMITS, reduceEvent } from "./state.mjs";
 import { ModeGate, requestSafety } from "./host-gates.mjs";
-import { inPhase, requireCondition as check, SwarmError } from "./errors.mjs";
+import {
+	inPhase,
+	SwarmError,
+	failureDiagnostic,
+	requireCondition as check,
+} from "./errors.mjs";
 import { inspectCheckout, specificationFingerprint } from "./host-approval.mjs";
 
 function freeze(value) {
@@ -54,20 +59,18 @@ export class SwarmHost {
 	#runner;
 	#beforePrompt;
 	#pendingSafety = 0;
-	#confirm;
 	#safetySeen = false;
 	#providerCapability;
 	#providerRuntimeBinding;
 	#approvedModel;
 
-	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => { }, confirm, providerCapability }) {
+	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => { }, providerCapability }) {
 		check(typeof requestApproval === "function", "INPUT", "Human approval callback required");
 		for (const timeout of [approvalTimeoutMs, safetyTimeoutMs]) check(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 600000, "INPUT", "Invalid approval timeout");
 		if (providerCapability !== undefined) providerDescriptor(providerCapability);
 		this.#providerCapability = providerCapability;
 		this.#runner = runner;
 		this.#beforePrompt = beforePrompt;
-		this.#confirm = confirm;
 		this.#events = events;
 		this.#sessionId = sessionId;
 		this.#ask = requestApproval;
@@ -80,7 +83,7 @@ export class SwarmHost {
 			events, sessionId, onRevoke: () => {
 				this.#invalidate();
 				if (!this.#lifetime.signal.aborted) {
-					this.#modePause = this.pause().catch(error => this.#errors.push(error.message));
+					this.#modePause = this.pause().catch(error => this.#errors.push(failureDiagnostic(error)));
 				}
 			}
 		});
@@ -142,7 +145,7 @@ export class SwarmHost {
 			try { this.#assertProvider(this.#specification().model); }
 			catch (error) {
 				this.#invalidate();
-				this.#modePause = this.pause().catch(failure => this.#errors.push(failure.message));
+				this.#modePause = this.pause().catch(failure => this.#errors.push(failureDiagnostic(failure)));
 				throw error;
 			}
 		}
@@ -210,11 +213,13 @@ export class SwarmHost {
 			const safety = await requestSafety({ events: this.#events, request: { agent: "swarm", tool: "write", path: "capability probe" }, signal, probe: true });
 			check(safety.claimed || safety.unclaimed && !this.#safetySeen, "AUTHORITY", "Safety provider is malformed, duplicated, or disappeared");
 			if (safety.claimed) this.#safetySeen = true;
-			const integrations = {
+			const integrations = Object.freeze({
 				mode: this.#mode.current().instanceId === "absent" ? "none installed (runs as Off)" : "pi-plan",
-				confirmations: safety.claimed ? "pi-safety" : "Swarm asks for every edit and command"
-			};
-			const request = Object.freeze({ action, provider, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, requiresExistingWorkDecision: inspection.changes.length > 0, requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
+				confirmations: safety.claimed
+					? "pi-safety policy remains enforced and may ask for operation confirmation"
+					: "Selected coding tools are authorized within this bounded run; no Swarm operation prompts"
+			});
+			const request = Object.freeze({ action, provider, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, workspaceFingerprint: inspection.fingerprint, runRevision: this.#controller?.snapshot().revision ?? null, existingChanges: "preserve", requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
 			const answer = structuredClone(await Promise.race([Promise.resolve().then(() => {
 				check(!signal.aborted, "CANCELLED", "Approval cancelled before presentation");
 				return this.#ask(request);
@@ -222,7 +227,7 @@ export class SwarmHost {
 			check(!signal.aborted && performance.now() < deadline, "CANCELLED", "Approval expired");
 			this.#mode.assert(grant.token);
 			check(answer?.approved === true, "AUTHORITY", "User did not approve this action");
-			check(!inspection.changes.length || answer.existingChanges === "preserve", "DIRTY", "Explicit preservation of existing changes is required");
+			// Preservation is the only disposition; approval never grants cleanup authority.
 			check(action === "launch" || action === "reconcile" || answer.reconciled === true, "UNSETTLED", "Explicit workspace reconciliation is required");
 			check(answer.provider === undefined, "PROVIDER", "Approval cannot replace the host provider binding");
 			// Settlement attestation grants no model authority and must remain available after provider failure.
@@ -273,6 +278,7 @@ export class SwarmHost {
 				const signal = AbortSignal.any([request.signal, permit.signal]);
 				const shell = ["shell", "final"].includes(request.kind);
 				const value = { agent: request.workerId ?? "swarm final verification", tool: shell ? "bash" : request.kind };
+				check(this.#specification().codingTools.includes(value.tool), "AUTHORITY", "Operation requires an approved coding tool");
 				if (shell) value.command = request.command;
 				else value.path = resolve(this.#location.workspace, request.paths[0]);
 				let result;
@@ -282,22 +288,10 @@ export class SwarmHost {
 					await this.#beforePrompt();
 					this.#assertAdmission();
 					result = await requestSafety({ events: this.#events, request: value, signal, timeoutMs: this.#safetyTimeout });
-					if (result.unclaimed && !this.#safetySeen && this.#confirm) {
-						const timeout = AbortSignal.timeout(this.#safetyTimeout);
-						const fallbackSignal = AbortSignal.any([signal, timeout]);
-						let cancel;
-						const cancelled = new Promise(resolve => {
-							cancel = () => resolve(false);
-							fallbackSignal.addEventListener("abort", cancel, { once: true });
-							if (fallbackSignal.aborted) cancel();
-						});
-						try {
-							const approved = await Promise.race([cancelled, Promise.resolve().then(() => {
-								if (fallbackSignal.aborted) return false;
-								return this.#confirm(`[${value.agent}] ${value.tool}`, value.command ?? value.path, { signal: fallbackSignal });
-							})]);
-							result = { approved: approved === true && !fallbackSignal.aborted };
-						} finally { fallbackSignal.removeEventListener("abort", cancel); }
+					if (result.unclaimed && !this.#safetySeen) {
+						// The owner approved the disclosed bounded tool policy for this run.
+						// A previously observed or malformed Safety provider never falls back.
+						result = { approved: !signal.aborted };
 					} else if (!result.unclaimed) this.#safetySeen = true;
 				} finally { this.#pendingSafety--; this.#publish("approval.finished"); }
 				this.#assertAdmission();

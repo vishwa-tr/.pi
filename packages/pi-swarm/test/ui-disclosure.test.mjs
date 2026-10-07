@@ -1,35 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { requestUserApproval, statusText } from "../extensions/swarm/ui.mjs";
+import { approvalPacket, registerSwarmRenderers, statusText } from "../extensions/swarm/ui.mjs";
 import { PROVIDER_DATA_SCOPE } from "../extensions/swarm/provider-capability.mjs";
 
-// Scripts native select/input answers and records every packet and dialog in order.
-function fixture(answers = {}) {
-	const log = [];
-	const ctx = { mode: "tui", hasUI: true, ui: {
-		select: async (title, choices, options) => {
-			log.push({ kind: "select", title, choices, signal: options.signal });
-			const answer = answers.select?.shift();
-			return typeof answer === "function" ? answer(title, choices, options) : answer;
-		},
-		input: async (title, _placeholder, options) => {
-			log.push({ kind: "input", title, signal: options.signal });
-			return answers.input?.shift();
-		},
-		notify() {},
-	} };
-	const present = text => log.push({ kind: "packet", text });
-	return { ctx, log, present, packets: () => log.filter(item => item.kind === "packet").map(item => item.text) };
-}
-
+// Presentation never asks a modal question or returns an authority-bearing answer.
 for (const transport of [undefined, "scripted-memory", "pi-native"]) {
-	test(`native agreement discloses ${transport ?? "legacy mock"} without misleading network claims`, async () => {
+	test(`chat agreement discloses ${transport ?? "legacy mock"} without misleading network claims`, () => {
 		const provider = transport ? { transport, provider: "fixture", modelId: "scripted",
 			endpoint: "https://fixture.invalid/v1/chat/completions", outboundData: [...PROVIDER_DATA_SCOPE] } : undefined;
-		const f = fixture({ select: ["Cancel"] });
-		assert.deepEqual(await requestUserApproval(f.ctx, { action: "launch", specification: { objective: "Goal" },
-			changes: [], provider, signal: new AbortController().signal }, f.present), { approved: false });
-		const [summary] = f.packets();
+		const summary = approvalPacket({ action: "launch", specification: { objective: "Goal" }, changes: [], provider });
+		assert.equal(typeof summary, "string");
 		if (transport === "pi-native") {
 			assert.match(summary, /LAUNCH \(Pi native provider\)/);
 			assert.match(summary, /credentials, OAuth, environment and routing/);
@@ -44,86 +24,69 @@ for (const transport of [undefined, "scripted-memory", "pi-native"]) {
 	});
 }
 
-test("every packet is shown in full before its dialog; Cancel is first and titles hold no packet text", async () => {
-	const hostile = "\x1b[2J\x1b]8;;https://untrusted.invalid\x07\r‮⁦";
+test("complete configuration, integration and preservation policy are literal chat data", () => {
+	const specification = { objective: "Goal", criteria: ["Observable outcome"], scope: ["Only this workspace"],
+		limits: { agents: 3, active: 2, tasks: 10, attempts: 2, durationMs: 300000 },
+		model: { provider: "swarm-mock", modelId: "scripted", thinkingLevel: "off" },
+		codingTools: ["read", "edit", "write", "bash"], instructions: "No new dependencies" };
+	const request = { action: "resume", specification, changes: [{ status: "??", path: "dirty.txt" }],
+		integrations: { mode: "pi-plan", confirmations: "pi-safety policy remains enforced and may ask for operation confirmation" },
+		fingerprintScope: "Git tracked and non-ignored files; submodule-aware", existingChanges: "preserve" };
+	const original = structuredClone(request);
+	const packet = approvalPacket(request);
+	assert.ok(packet.includes(JSON.stringify(specification, null, 2)), "Every selected configuration field is shown");
+	assert.match(packet, /pi-plan/);
+	assert.match(packet, /pi-safety policy remains enforced/);
+	assert.match(packet, /submodule-aware/);
+	assert.match(packet, /Preservation: keep existing work, the index, and generated changes/);
+	assert.match(packet, /dirty\.txt/);
+	assert.deepEqual(request, original, "Packet presentation cannot edit the agreement");
+	assert.doesNotMatch(packet, /Preserve and proceed\?|Edit agreement field/);
+});
+
+test("maximum Unicode agreement and hostile paths are shown in full and control-safe", () => {
+	const hostile = "\x1b[2J\x1b]8;;https://untrusted.invalid\x07\r\u202e\u2066";
 	const objective = `${"界🙂é".repeat(3000)}${hostile} last-objective-line`;
-	const f = fixture({ select: ["Approve", "Preserve existing work", "Continue"] });
-	const result = await requestUserApproval(f.ctx, { action: "resume", specification: { objective }, changes: [{ status: "??", path: `dirty${hostile}.txt` }],
-		requiresExistingWorkDecision: true, requiresReconciliation: true, signal: new AbortController().signal }, f.present);
-	assert.deepEqual(result, { approved: true, specification: { objective }, existingChanges: "preserve", reconciled: true });
-	assert.deepEqual(f.log.map(item => item.kind), ["packet", "select", "packet", "select", "select"]);
-	for (const dialog of f.log.filter(item => item.kind === "select")) {
-		assert.equal(dialog.choices[0], "Cancel"); // Enter on the default choice never authorizes.
-		assert.doesNotMatch(dialog.title, /界|dirty|untrusted|[\x00-\x1f‮⁦]/);
-	}
-	assert.deepEqual(f.log.filter(item => item.kind === "select").map(item => item.title.split(":")[0]),
-		["RESUME (mock only)", "Preserve and proceed?", "Workspace reconciliation"]);
-	const [agreement, preservation] = f.packets();
-	assert.ok(agreement.includes("界🙂é".repeat(3000)) && agreement.includes("last-objective-line"));
-	assert.match(preservation, /dirty.*\.txt/);
-	for (const packet of f.packets()) {
-		assert.doesNotMatch(packet, /[\x00-\x09\x0b-\x1f\x7f-\x9f‮⁦]/);
-		assert.match(packet, /\\u001b/);
-	}
+	const packet = approvalPacket({ action: "launch", specification: { objective }, changes: [{ status: "??", path: `dirty${hostile}.txt` }],
+		integrations: { mode: hostile, confirmations: hostile } });
+	assert.ok(packet.includes("界🙂é".repeat(3000)) && packet.includes("last-objective-line"));
+	assert.match(packet, /dirty.*\.txt/);
+	assert.doesNotMatch(packet, /[\x00-\x09\x0b-\x1f\x7f-\x9f\u202e\u2066]/);
+	assert.match(packet, /\\u001b/);
+	assert.match(packet, /\\u202e/);
 });
 
-test("serialized dirty-work and exact-ID/evidence attestation show every packet before deciding", async () => {
-	const f = fixture({ select: ["Approve", "Preserve existing work", "Attest settlement"], input: ["Independently verified all listed work stopped"] });
-	const result = await requestUserApproval(f.ctx, { action: "reconcile", specification: { objective: "Goal" }, changes: { paths: ["dirty.txt"] },
-		recovery: { operations: [{ id: "exact-operation" }], turns: [{ id: "exact-turn" }] }, requiresExistingWorkDecision: true, signal: new AbortController().signal }, f.present);
-	assert.equal(result.approved, true); assert.equal(result.existingChanges, "preserve");
-	assert.deepEqual(result.attestation, { kind: "user-established-settlement", evidence: "Independently verified all listed work stopped" });
-	assert.deepEqual(f.log.map(item => item.kind), ["packet", "select", "packet", "select", "input", "packet", "select"]);
-	const packets = f.packets();
-	assert.match(packets[0], /exact-operation/); assert.match(packets[0], /exact-turn/);
-	assert.match(packets[1], /dirty.txt/);
-	assert.match(packets[2], /exact-operation/); assert.match(packets[2], /exact-turn/);
-	assert.match(packets[2], /Independently verified/);
-	assert.deepEqual(f.log.at(-1).choices, ["Cancel", "Attest settlement"]);
+test("recovery packet shows exact unsettled intent as data, without manufacturing evidence", () => {
+	const recovery = { operations: [{ id: "exact-operation", command: "uncertain operation" }], turns: [{ id: "exact-turn" }], liveUncertainIds: ["exact-operation"] };
+	const packet = approvalPacket({ action: "reconcile", specification: { objective: "Goal" }, changes: [{ path: "dirty.txt" }], recovery });
+	assert.match(packet, /RECONCILE/);
+	assert.match(packet, /Unresolved execution/);
+	assert.ok(packet.includes(JSON.stringify(recovery, null, 2)));
+	assert.match(packet, /dirty\.txt/);
+	assert.doesNotMatch(packet, /user-established-settlement|approved.*true|successfully completed/);
 });
 
-for (const [stage, answers] of [["blank evidence", { select: ["Approve"], input: [" "] }], ["declined attestation", { select: ["Approve", "Cancel"], input: ["Checked"] }],
-	["escaped attestation", { select: ["Approve", undefined], input: ["Checked"] }]]) {
-	test(`reconcile ${stage} is never an attestation`, async () => {
-		const f = fixture(answers);
-		const result = await requestUserApproval(f.ctx, { action: "reconcile", specification: { objective: "Goal" }, changes: [],
-			recovery: { operations: [{ id: "op" }], turns: [] }, signal: new AbortController().signal }, f.present);
-		assert.equal(result.approved, false);
-	});
-}
-
-for (const [stage, select] of [["agreement", []], ["preservation", ["Approve"]], ["reconciliation", ["Approve", "Preserve existing work"]]]) {
-	test(`abort while the ${stage} dialog is open closes it and denies a late answer`, async () => {
-		const abort = new AbortController();
-		const f = fixture({ select: [...select, (_title, _choices, options) => new Promise(resolve => {
-			options.signal.addEventListener("abort", () => resolve(undefined), { once: true });
-			setTimeout(() => abort.abort(), 1);
-		})] });
-		const result = await requestUserApproval(f.ctx, { action: "resume", specification: { objective: "Goal" }, changes: ["dirty"],
-			requiresExistingWorkDecision: true, requiresReconciliation: true, signal: abort.signal }, f.present);
-		assert.deepEqual(result, { approved: false });
-		assert.ok(f.log.filter(item => item.kind === "select").every(item => item.signal === abort.signal));
-	});
-}
-
-test("an already-cancelled request opens no dialog and presents nothing", async () => {
-	const abort = new AbortController(); abort.abort();
-	const f = fixture({ select: ["Approve"] });
-	assert.deepEqual(await requestUserApproval(f.ctx, { action: "launch", specification: { objective: "Goal" }, changes: [], signal: abort.signal }, f.present), { approved: false });
-	assert.deepEqual(f.log, []);
+test("agreement renderer keeps all lines literal and readable at narrow terminal width", () => {
+	const renderers = new Map();
+	registerSwarmRenderers({ registerMessageRenderer: (name, renderer) => renderers.set(name, renderer), registerEntryRenderer() {} });
+	const content = Array.from({ length: 60 }, (_, index) => `packet-line-${index}`).join("\n") + "\n**literal**\n\x1b[2J\u202eend";
+	const rendered = renderers.get("swarm-agreement")({ content }).render(18).join("\n").replace(/\s/g, "");
+	for (let index = 0; index < 60; index++) assert.ok(rendered.includes(`packet-line-${index}`));
+	assert.ok(rendered.includes("**literal**"), "No Markdown interpretation of agreement terms");
+	assert.ok(rendered.endsWith("\\u001b[2J\\u202eend"));
 });
-
-for (const [name, change] of [["rpc", ctx => { ctx.mode = "rpc"; }], ["no UI", ctx => { ctx.hasUI = false; }], ["no packet display", () => {}]]) {
-	test(`${name} context cannot approve and opens no dialog`, async () => {
-		const f = fixture({ select: ["Approve"] });
-		change(f.ctx);
-		const present = name === "no packet display" ? undefined : f.present;
-		await assert.rejects(requestUserApproval(f.ctx, { action: "launch", specification: { objective: "Goal" }, changes: [], signal: new AbortController().signal }, present), { code: "UI" });
-		assert.deepEqual(f.log, []);
-	});
-}
 
 test("status never misrepresents usage placeholders as mock-only execution", () => {
 	assert.doesNotMatch(statusText({ run: { status: "running" }, errors: [] }), /mock.only/);
 	assert.match(statusText({ run: { status: "running" }, errors: [] }), /cost unknown/);
+});
+
+test("status errors retain safe phase/code but never raw host or driver exceptions", () => {
+	const output = statusText({ run: { status: "running" },
+		errors: ["PRIVATE_PATH command credential", { code: "UNSETTLED", phase: "approval", message: "PRIVATE_PATH exception" }],
+		driver: { errors: [{ code: "PRIVATE_CODE", phase: "PRIVATE_PHASE", message: "PRIVATE_COMMAND" }] },
+	});
+	assert.doesNotMatch(output, /PRIVATE|credential|exception/);
+	assert.match(output, /UNSETTLED/);
+	assert.match(output, /approval/);
 });

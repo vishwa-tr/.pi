@@ -12,19 +12,22 @@ export default function (pi) {
 	const model = { id: "first", name: "Entry scripted", provider: "entry-fixture", api: "openai-responses",
 		baseUrl: "https://entry.invalid/v1", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 8192,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+	let pending;
 	const stream = (selected, _context, options) => {
 		if (options.apiKey !== "memory-only-fixture") throw new Error("Fixture auth missing");
 		if (getCurrentTools(_context.messages).some(tool => tool.name === "swarm_start")) {
 			const last = _context.messages.at(-1);
 			const text = typeof last?.content === "string" ? last.content : last?.content?.filter(block => block.type === "text").map(block => block.text).join("\n") ?? "";
-			const action = last?.role === "user" && text.startsWith("fixture chat ") ? text.slice("fixture chat ".length) : undefined;
+			const explicit = last?.role === "user" && /^(?:yes|confirm)[.!]?$/i.test(text.trim()) && pending;
+			const action = explicit ? "confirm" : last?.role === "user" && text.startsWith("fixture chat ") ? text.slice("fixture chat ".length) : undefined;
    const launch = Boolean(action);
-   const name = action === "launch" ? "swarm_start" : action === "status" ? "swarm_status" : "swarm_control";
-   const args = action === "launch" ? { objective: "Fixture chat goal" } : action === "status" ? {} : { action };
+   const name = explicit ? pending.name : action === "launch" ? "swarm_start" : action === "status" ? "swarm_status" : "swarm_control";
+   const args = explicit ? { ...(pending.name === 'swarm_control' ? { action: pending.args.action } : {}), proposalId: pending.proposalId } : action === "launch" ? { objective: "Fixture chat goal" } : action === "status" ? {} : { action };
+   if (explicit || ['pause', 'stop'].includes(action)) pending = undefined;
 			const output = createAssistantMessageEventStream();
 			const message = { role: "assistant", content: launch
 				? [{ type: "toolCall", id: `chat-${Date.now()}`, name, arguments: args }]
-				: [{ type: "text", text: "Fixture main agent returned." }],
+				: [{ type: "text", text: pending ? "Fixture main agent returned. Shall I start or continue Swarm with the objective and full configuration above? Reply yes or confirm to approve, or ask for changes." : "Fixture main agent returned." }],
 				api: selected.api, provider: selected.provider, model: selected.id, timestamp: Date.now(), stopReason: launch ? "toolUse" : "stop",
 				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 			output.push({ type: "done", reason: message.stopReason, message }); output.end();
@@ -48,8 +51,12 @@ export default function (pi) {
 		api: { stream, streamSimple: stream } }));
 	pi.on("agent_settled", () => record({ type: "main-settled" }));
 	pi.on("tool_result", event => {
+		if (event.details?.proposalId && ["swarm_start", "swarm_control"].includes(event.toolName)) pending = { name: event.toolName, args: event.input, proposalId: event.details.proposalId };
 		if (event.toolName === "swarm_start") record({ type: "chat-result", data: event.details });
-		if (event.toolName === "swarm_control") record({ type: "control-result", action: event.input.action });
+		if (event.toolName === "swarm_control") {
+			record({ type: "control-result", action: event.input.action });
+			if (event.details?.awaitingConfirmation) record({ type: "agreement", data: event.details });
+		}
 	});
 	pi.on("session_start", (_event, ctx) => {
 		const names = pi.getAllTools().map(tool => tool.name);

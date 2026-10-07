@@ -30,7 +30,7 @@ def main(native=False):
         label = "Pi native provider" if native else "mock only"
         scope = "Disposable project only; no network"
         env["PI_SDK_DIR"] = str(sdk)  # The child's sdk-register cannot see the real agent dir.
-        settings = {"quietStartup": True, "enableInstallTelemetry": False,
+        settings = {"quietStartup": True, "enableInstallTelemetry": False, "tuiMode": "fullscreen", "fullscreenScrollbar": "always",
                     "compaction": {"enabled": False}, "retry": {"enabled": False}}
         (agent / "settings.json").write_text(json.dumps(settings))
         subprocess.run(["git", "init", "-q", str(project)], env=env, check=True)
@@ -81,7 +81,7 @@ def main(native=False):
         def start():
             terminal.cursor = len(terminal.output)
             terminal.line(f"/fixture-swarm start Production policy acceptance. Only approved benign commands execute. {scope}.")
-            terminal.expect(f"LAUNCH ({label}): review the full packet above, then decide")
+            terminal.expect(f"LAUNCH ({label})")
             if native:
                 terminal.read_packet(f"LAUNCH ({label})")
                 plain = terminal.last_packet
@@ -94,11 +94,8 @@ def main(native=False):
 
         def approve(action):
             terminal.expect(f"{action} ({label})")
-            terminal.choose(1)
-            terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
-            terminal.expect("Workspace reconciliation")
-            terminal.choose(1)
+            terminal.line("yes")
+            terminal.expect("Fixture chat confirmation applied")
 
         def resume(script=None):
             if script:
@@ -138,18 +135,22 @@ def main(native=False):
             wait_count("probe-result", 3)
             assert all(not e["approved"] for e in events() if e["type"] == "probe-result")
 
-            # A restricted selection cancels the real launch approval, not just a stream.
+            # A restricted selection invalidates the pending chat proposal, not just a stream.
             start()
             terminal.send("\x1b[Z")  # production Shift+Tab: Off -> Discuss
             mode("discuss")
-            wait(lambda: any(e["type"] == "command" and e.get("name") in ("swarm", "fixture-swarm") and not e["ok"] for e in events()), "revoked launch")
+            terminal.line("yes")
+            # Revocation removes the proposal before consumption; this is absent
+            # owner authority, not a fresh proposal's restricted-mode inspection.
+            terminal.expect("AUTHORITY")
+            assert count("worker-start") == 0
             assert not (project / ".swarms").exists()
             policy_command("/discuss off")
             mode("off")
             start()
-            terminal.choose(2)
-            terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            assert count("worker-start") == 0, "No execution before genuine owner input"
+            terminal.line("yes")
+            terminal.expect("Fixture chat confirmation applied")
             wait_count("worker-start", 1)
             status("running")
 
@@ -247,15 +248,9 @@ def main(native=False):
                 recovery_packet = terminal.last_packet
                 for value in ('"operations"', '"turns"', '"liveUncertainIds"'):
                     assert value in recovery_packet
-                terminal.choose(1)
-                terminal.expect("Preserve and proceed?")
-                terminal.choose(1)
-                terminal.expect("Describe how you independently established")
-                terminal.line("Fixture runner spawned no process; its promise returned unsettled by design.")
-                terminal.expect("Attest settlement")
-                terminal.read_packet("Attest settlement")
-                evidence_packet = terminal.last_packet
-                terminal.choose(1)
+                terminal.line("I confirm settlement: Fixture runner spawned no process; its promise returned unsettled by design.")
+                terminal.expect("Fixture chat confirmation applied")
+                evidence_packet = compact(ANSI.sub("", terminal.output))
                 time.sleep(0.4)
                 status("paused")
                 stable_workers()
@@ -291,7 +286,7 @@ def main(native=False):
             assert any(e["decision"] == "approved" for e in audit)
             assert any(e["decision"] == "denied" for e in audit)
             assert "phase8-" not in (agent / "safety-audit.jsonl").read_text(), "Audit must omit arguments"
-            print("PASS: production Plan/Safety native dialogs, queued/active cancellation, selected/enforced transitions, dashboard exclusion, no auto-resume, native reload/shutdown, durable command evidence and isolation")
+            print("PASS: owner chat lifecycle consent with no Swarm modals; independent Plan/Safety dialogs, queued/active cancellation, selected/enforced transitions, no auto-resume, offline reload/shutdown, durable command evidence and isolation")
         finally:
             terminal.close()
 

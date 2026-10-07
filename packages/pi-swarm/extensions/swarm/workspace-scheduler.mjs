@@ -23,8 +23,9 @@
  *
  * Overlapping mutations queue FIFO; disjoint mutations may bypass them. An exclusive
  * request blocks fresh claims/mutations with BUSY, drains already admitted mutations,
- * and relinquishes ALL requesters' claims after their own mutations settle, preventing
- * competing-upgrade deadlock. Foreign claims require explicit release. Exclusives run
+ * and relinquishes the requester's claims after its own mutations settle. Foreign
+ * claims reject the exclusive BEFORE enqueue: waiting would prevent their owners
+ * from finishing edits. No foreign claims are revoked. Exclusives run
  * FIFO; cancelled queued exclusives are removed (released claims are not restored).
  * Callbacks must not await nested conflicting scheduler operations: locks are not
  * reentrant. Fenced identities cannot be reused; create a fresh assignment identity.
@@ -68,8 +69,14 @@ function overlaps(left, right) {
 	return contains(left, right) || contains(right, left);
 }
 
+const PURPOSES = new Set(["mutation", "exclusive", "write", "edit", "shell", "submit", "review", "final"]);
+const STAGES = new Set(["approval", "inspection", "execution", "settlement", "unknown-settlement", "recording", "candidate", "review"]);
+
 function operationView(operation) {
-	return { id: operation.id, kind: operation.kind, owner: operation.owner, paths: [...operation.paths] };
+	return {
+		id: operation.id, kind: operation.kind, owner: operation.owner, paths: [...operation.paths],
+		purpose: operation.purpose, stage: operation.stage, cancellationRequested: operation.controller.signal.aborted,
+	};
 }
 
 export class WorkspaceScheduler {
@@ -110,7 +117,7 @@ export class WorkspaceScheduler {
 		this.#pump();
 	}
 
-	async withMutation(owner, paths, fn, { signal } = {}) {
+	async withMutation(owner, paths, fn, { signal, purpose = "mutation" } = {}) {
 		this.#requireOwner(owner);
 		const requested = validatePaths(paths);
 		this.#validateCallback(fn, signal);
@@ -119,13 +126,16 @@ export class WorkspaceScheduler {
 		if (requested.some(path => ![...claims].some(claim => contains(claim, path)))) {
 			throw failure("CLAIM_REQUIRED", "Every mutation path requires an owner claim");
 		}
-		return this.#enqueue("mutation", owner, requested, fn, signal);
+		return this.#enqueue("mutation", owner, requested, fn, signal, purpose);
 	}
 
-	async withExclusive(owner, fn, { signal } = {}) {
+	async withExclusive(owner, fn, { signal, purpose = "exclusive" } = {}) {
 		this.#requireOwner(owner);
 		this.#validateCallback(fn, signal);
-		return this.#enqueue("exclusive", owner, [], fn, signal);
+		const blockers = [...this.#claims.keys()].filter(claimOwner => claimOwner !== owner)
+			.map(claimOwner => ({ owner: claimOwner, kind: "claim", stage: "claims-held" }));
+		if (blockers.length) throw failure("BUSY", "Foreign claims must be released before exclusive admission; request was not queued", blockers.slice(0, 8));
+		return this.#enqueue("exclusive", owner, [], fn, signal, purpose);
 	}
 
 	cancelOwner(owner, reason = failure("ABORTED", "Assignment cancelled")) {
@@ -172,7 +182,7 @@ export class WorkspaceScheduler {
 
 	#requireAdmission() {
 		const exclusives = [...this.#exclusives, ...this.#active].filter(operation => operation.kind === "exclusive");
-		if (exclusives.length) throw failure("BUSY", "Exclusive workspace access is pending or active", exclusives.map(operationView));
+		if (exclusives.length) throw failure("BUSY", "Exclusive workspace access is pending or active", exclusives.slice(0, 8).map(operationView));
 	}
 
 	#validateCallback(fn, signal) {
@@ -185,9 +195,10 @@ export class WorkspaceScheduler {
 		return [...this.#mutations, ...this.#active].some(operation => operation.owner === owner && operation.kind === "mutation");
 	}
 
-	#enqueue(kind, owner, paths, fn, signal) {
+	#enqueue(kind, owner, paths, fn, signal, purpose) {
+		if (!PURPOSES.has(purpose)) throw failure("INPUT", "Unknown operation purpose");
 		return new Promise((resolve, reject) => {
-			const operation = { id: ++this.#serial, kind, owner, paths, fn, resolve, reject, controller: new AbortController(), cleanup: () => {} };
+			const operation = { id: ++this.#serial, kind, owner, paths, fn, purpose, stage: "queued", resolve, reject, controller: new AbortController(), cleanup: () => {} };
 			if (signal) {
 				const abort = () => {
 					if (this.#active.has(operation)) operation.controller.abort(signal.reason);
@@ -243,12 +254,17 @@ export class WorkspaceScheduler {
 	}
 
 	#start(operation) {
+		operation.stage = "execution";
 		this.#active.add(operation);
 		// Reserve the lock synchronously; execute user code outside scheduler transitions.
 		Promise.resolve().then(async () => {
 			const signal = operation.controller.signal;
 			signal.throwIfAborted();
-			const result = await operation.fn(signal);
+			const setStage = stage => {
+				if (!STAGES.has(stage)) throw failure("INPUT", "Unknown operation stage");
+				operation.stage = stage;
+			};
+			const result = await operation.fn(signal, setStage);
 			signal.throwIfAborted();
 			return result;
 		}).then(

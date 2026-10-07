@@ -46,11 +46,21 @@ export function requireCandidate(state, taskId, assignmentId) {
 	if (assignmentId !== undefined) check(candidate.assignmentId === assignmentId, "EVIDENCE", "Candidate belongs to an earlier build assignment");
 }
 
+function receiptRejection(state, receipt, fingerprint) {
+	if (!receipt) return "missing-receipt";
+	if (receipt.outcome !== "succeeded") return "unsuccessful-outcome";
+	if (receipt.exitCode !== 0) return "unsuccessful-exit";
+	if (receipt.cycle !== state.cycle) return "wrong-cycle";
+	if (receipt.generation !== state.generation) return "wrong-generation";
+	if (receipt.guidanceRevision !== state.guidanceRevision) return "changed-guidance";
+	if (receipt.before !== fingerprint && receipt.after !== fingerprint) return "stale-before-and-after";
+	if (receipt.before !== fingerprint) return "stale-before";
+	if (receipt.after !== fingerprint) return "stale-after";
+	return null;
+}
+
 function receiptUsable(state, receipt, fingerprint) {
-	return receipt && receipt.outcome === "succeeded" && receipt.exitCode === 0
-		&& receipt.before === fingerprint && receipt.after === fingerprint
-		&& receipt.cycle === state.cycle && receipt.generation === state.generation
-		&& receipt.guidanceRevision === state.guidanceRevision;
+	return receiptRejection(state, receipt, fingerprint) === null;
 }
 
 export function requireFinalEvidence(state, evidenceId) {
@@ -151,7 +161,10 @@ export function reduceWorkspace(state, event) {
 			check(Array.isArray(p.receipts) && p.receipts.length > 0 && new Set(p.receipts).size === p.receipts.length, "EVIDENCE", "Verification receipts required");
 			for (const id of p.receipts) {
 				const receipt = workspace.receipts.find(receipt => receipt.id === id);
-				check(receipt?.kind === "shell" && receipt.taskId === p.taskId && receipt.assignmentId === p.assignmentId && receiptUsable(state, receipt, p.fingerprint), "EVIDENCE", "Receipt is fabricated, stale, unrelated, or unsuccessful");
+				const reason = !receipt ? "missing-receipt" : receipt.kind !== "shell" ? "wrong-kind"
+					: receipt.taskId !== p.taskId ? "wrong-task" : receipt.assignmentId !== p.assignmentId ? "wrong-assignment"
+						: receiptRejection(state, receipt, p.fingerprint);
+				check(reason === null, "EVIDENCE", `Verification receipt rejected: ${reason}`);
 			}
 			workspace.candidates = workspace.candidates.filter(candidate => candidate.taskId !== task.id);
 			workspace.candidates.push({ ...structuredClone(p), guidanceRevision: state.guidanceRevision });

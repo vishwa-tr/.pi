@@ -59,6 +59,7 @@ assert.equal(modes.filter(event => !event.ready).length, 2, "Both instances publ
 const opens = observations.filter(event => event.type === "dialog-open");
 const closes = observations.filter(event => event.type === "dialog-close");
 assert.equal(opens.length, closes.length);
+assert.equal(opens.filter(event => event.owner === "swarm" && event.kind !== "custom").length, 0, "Swarm owns no modal confirmation/input dialogs; independently enabled Safety is unchanged");
 assert.ok(opens.every(event => event.active === 1), "Production dialogs never overlap");
 assert.ok(closes.every(event => event.active === 0));
 assert.equal(opens.filter(event => event.owner === "safety").length, nativeProvider ? 9 : 8, "Worker gates plus two uncancelled queue positions per instance");

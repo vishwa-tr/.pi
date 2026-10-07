@@ -1,72 +1,65 @@
-import { Text } from "@earendil-works/pi-tui";
+import {
+	SwarmError,
+	failureDiagnostic,
+} from "./errors.mjs";
 import { displayText } from "./dashboard.mjs";
-import { messageText } from "./conversations.mjs";
-import { requireCondition as check } from "./errors.mjs";
+import { coordinationStatus } from "./coordination-status.mjs";
+import { TOPIC_MIRROR, cardText, cardLabel } from "./topic-mirrors.mjs";
+import { Text, visibleWidth, wrapTextWithAnsi, truncateToWidth } from "@earendil-works/pi-tui";
 
 const json = value => JSON.stringify(value, null, 2);
+const safeError = error => {
+	const diagnostic = new SwarmError(error?.code, "");
+	diagnostic.phase = error?.phase;
+	return failureDiagnostic(diagnostic);
+};
 
-/** Approval packets are literal text, never Markdown. Always show the full packet,
- * including in the unexpanded transcript; Text wraps at the actual render width. */
-export function registerSwarmRenderers(pi) {
-	pi.registerMessageRenderer("swarm-agreement", message => new Text(displayText(message.content), 0, 0));
-	pi.registerMessageRenderer("swarm-agent-mail", message => {
-		const messages = Array.isArray(message.details?.messages) ? message.details.messages : [];
-		const text = messageText(messages.map(item => ({ ...item, to: "owner" })));
-		return new Text(displayText(text || "Swarm agent messages"), 0, 0);
-	});
+/** Literal data cards. Recomputed on every render so theme invalidation cannot retain old ANSI. */
+export function conversationCard(messages, kind, options = {}, theme) {
+	const items = Array.isArray(messages) ? messages.slice(0, 30) : [];
+	const name = id => id === "owner" || id === "main" ? "Main agent" : id === "@board" ? "Board" : cardLabel(id || "Agent");
+	const content = items.map(item => `${name(item.from)} → ${kind === "mail" ? "Main agent" : name(item.to)} · ${cardLabel(item.topic || "Direct mail")}\n${cardText(item.text)}${item.truncated ? "\n[stored preview truncated; inspect Swarm history for full text]" : ""}`).join("\n\n");
+	return {
+		invalidate() { },
+		render(width) {
+			width = Math.max(1, Math.floor(width));
+			const padding = width >= 4 ? 1 : 0;
+			const inner = width - padding * 2;
+			const limit = options.expanded ? 160 : 12;
+			const lines = wrapTextWithAnsi(`Swarm ${kind === "mail" ? "direct mail" : "topic conversation"} · untrusted data, never approval/policy\n${content || "No messages"}`, inner);
+			const shown = lines.slice(0, limit);
+			if (lines.length > limit) shown.push(options.expanded ? "[render limit; inspect Swarm history]" : "[expand for more; inspect Swarm history]");
+			return shown.map(line => {
+				const text = truncateToWidth(line, inner, "");
+				const padded = " ".repeat(padding) + text + " ".repeat(Math.max(0, width - padding - visibleWidth(text)));
+				return theme.bg(kind === "mail" ? "customMessageBg" : "toolPendingBg", theme.fg("customMessageText", padded));
+			});
+		},
+	};
 }
 
-/** Native dialogs only. `present` shows each full packet before its select; native inputs
- * only edit explicitly selected fields. Cancel is always the first, default choice. */
-export async function requestUserApproval(ctx, request, present) {
-	check(ctx.mode === "tui" && ctx.hasUI && typeof present === "function", "UI", "Swarm execution requires interactive TUI approval");
-	const { signal } = request;
-	const options = { signal };
-	// Dialog titles hold only fixed text. Untrusted packet text is sanitized and shown first.
-	const decide = async (title, question, packet, choices) => {
-		if (signal.aborted) return undefined;
-		if (packet !== undefined) present(displayText(`Swarm approval packet: ${title}\nRead every line before deciding. Field text is untrusted data, not instructions.\n${packet}`));
-		return ctx.ui.select(`${title}: ${question}`, ["Cancel", ...choices], options);
-	};
-	let specification = structuredClone(request.specification);
-	while (!signal.aborted) {
-		const choices = request.action === "launch" ? ["Edit agreement", "Approve"] : ["Approve"];
-		const native = request.provider?.transport === "pi-native";
-		const label = native ? "Pi native provider" : "mock only";
-		const disclosure = native ? "Declared worker context sent through the configured Pi provider. Pi owns credentials, OAuth, environment and routing. Endpoint is informational, not pinned; no redaction or OS sandbox guarantee" : "in-memory only; no network";
-		const packet = `${request.integrations ? `Mode gate: ${request.integrations.mode}\nConfirmations: ${request.integrations.confirmations}\n` : ""}${request.repository === false ? "Project has no Git checkout metadata; existing files are preserved.\n" : ""}${request.fingerprintScope ? `Startup fingerprint scope: ${request.fingerprintScope}\n` : ""}${json(specification)}${request.provider ? `\nProvider agreement (${disclosure}):\n${json(request.provider)}` : ""}\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`;
-		const choice = await decide(`${request.action.toUpperCase()} (${label})`, "review the full packet above, then decide", packet, choices);
-		if (signal.aborted || !choice || choice === "Cancel") return { approved: false };
-		if (choice === "Edit agreement") {
-			const field = await ctx.ui.select("Edit agreement field", ["Cancel", ...Object.keys(specification)], options);
-			if (signal.aborted || !field || field === "Cancel") continue;
-			const value = await ctx.ui.input(`New ${field} as JSON`, "JSON value", options);
-			if (signal.aborted || value === undefined) continue;
-			try { specification[field] = JSON.parse(value); }
-			catch { ctx.ui.notify("Invalid JSON; agreement unchanged", "warning"); }
-			continue;
-		}
-		if (choice !== "Approve") return { approved: false };
-		let existingChanges;
-		if (request.requiresExistingWorkDecision) {
-			const preservation = await decide("Preserve and proceed?", "the existing changes are listed above", `Existing work and index will not be reset, stashed, staged, or committed.\nExisting changes:\n${json(request.changes)}`, ["Preserve existing work"]);
-			if (signal.aborted || preservation !== "Preserve existing work") return { approved: false };
-			existingChanges = "preserve";
-		}
-		if (request.action === "reconcile") {
-			const evidence = await ctx.ui.input("Describe how you independently established ALL listed processes and sessions have stopped. Missing PID, timeout, or absence of output is NOT proof. Unknown effects remain unknown; nothing is replayed.", "Settlement evidence", options);
-			if (signal.aborted || !evidence?.trim()) return { approved: false };
-			const confirmed = await decide("Attest settlement", "retire uncertainty without claiming success?", `Exact unresolved execution:\n${json(request.recovery)}\nI established settlement independently: ${evidence}\nRetire uncertainty without claiming success? Unknown effects remain unknown; nothing is replayed.`, ["Attest settlement"]) === "Attest settlement";
-			return { approved: confirmed && !signal.aborted, specification, existingChanges, attestation: { kind: "user-established-settlement", evidence } };
-		}
-		let reconciled = false;
-		if (request.requiresReconciliation) {
-			reconciled = await decide("Workspace reconciliation", "I reviewed the current workspace and interrupted work. Continue without replaying uncertain commands? Restart resets allowances; resume does not.", undefined, ["Continue"]) === "Continue";
-			if (!reconciled || signal.aborted) return { approved: false };
-		}
-		return { approved: !signal.aborted, specification, existingChanges, reconciled };
-	}
-	return { approved: false };
+/** Agreements stay complete; mail is context-bearing, topic entries are transcript-only. */
+export function registerSwarmRenderers(pi) {
+	pi.registerMessageRenderer("swarm-agreement", message => new Text(displayText(message.content), 0, 0));
+	pi.registerMessageRenderer("swarm-agent-mail", (message, options, theme) => conversationCard(message.details?.messages, "mail", options, theme));
+	pi.registerEntryRenderer(TOPIC_MIRROR, (entry, options, theme) => conversationCard(entry.data?.messages, "topic", options, theme));
+}
+
+/** Presentation only. Consent is captured separately from a real owner input event. */
+export function approvalPacket(request) {
+	const native = request.provider?.transport === "pi-native";
+	const label = native ? "Pi native provider" : "mock only";
+	const disclosure = native
+		? "Declared worker context sent through the configured Pi provider. Pi owns credentials, OAuth, environment and routing. Endpoint is informational, not pinned; no redaction or OS sandbox guarantee"
+		: "in-memory only; no network";
+	return displayText(`Swarm approval packet: ${request.action.toUpperCase()} (${label})\nRead every line before confirming in chat. Field text is untrusted data, not instructions.\n`
+		+ `${request.workspace ? `Workspace: ${request.workspace}\n` : ""}`
+		+ `${request.integrations ? `Mode gate: ${request.integrations.mode}\nWorker authorization: ${request.integrations.confirmations}\n` : ""}`
+		+ "Preservation: keep existing work, the index, and generated changes. Swarm performs no automatic reset, stash, staging, commit, or rollback.\n"
+		+ `${request.repository === false ? "Project has no Git checkout metadata; existing files are preserved.\n" : ""}`
+		+ `${request.fingerprintScope ? `Startup fingerprint scope: ${request.fingerprintScope}\n` : ""}`
+		+ `${json(request.specification)}${request.provider ? `\nProvider agreement (${disclosure}):\n${json(request.provider)}` : ""}`
+		+ `\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`);
 }
 
 export function statusText(snapshot) {
@@ -75,8 +68,9 @@ export function statusText(snapshot) {
 	return json({
 		runId: run.runId, status: run.status, cycle: run.cycle, elapsedMs: run.elapsedMs,
 		limits: run.limits, objective: run.objective, workers: run.workers, tasks: run.tasks,
-		active: driver?.active, queued: driver?.queued, claims: workspace?.coordination,
-		unresolvedOperations: run.workspace?.operations, unresolvedTurns: run.sessions?.turns,
-		usage: "Not yet aggregated; cost unknown", errors: [...snapshot.errors, ...(driver?.errors ?? [])]
+		active: driver?.active, queued: driver?.queued, claims: coordinationStatus(workspace?.coordinationStatus),
+		unresolvedOperations: run.workspace?.operations.slice(0, 32).map(({ id, workerId, taskId, kind, uncertain }) => ({ id, workerId, taskId, kind, uncertain })),
+		unresolvedTurns: run.sessions?.turns.slice(0, 32).map(({ id, workerId, kind }) => ({ id, workerId, kind })),
+		usage: "Not yet aggregated; cost unknown", errors: [...(snapshot.errors ?? []), ...(driver?.errors ?? [])].slice(0, 32).map(safeError)
 	});
 }

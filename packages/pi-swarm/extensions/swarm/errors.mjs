@@ -23,7 +23,7 @@ export async function inPhase(phase, operation) {
 
 const FAILURE_MESSAGES = {
 	INPUT: "Check the tool arguments and agreement fields.",
-	UI: "Interactive Pi dialogs are required for this action.",
+	UI: "Interactive owner chat confirmation is required for this action.",
 	SESSION: "A persisted owning session is required.",
 	MODEL: "Select an available physical model before starting.",
 	MODE_DENIED: "Use unrestricted mode and wait for policy readiness.",
@@ -36,6 +36,7 @@ const FAILURE_MESSAGES = {
 	PATH: "Workspace path or file identity is unsupported.",
 	PROVIDER: "The selected provider no longer matches the approved configuration.",
 	OWNERSHIP: "Session or controller ownership changed or is unavailable.",
+	RESERVED: "This project is reserved by an existing Swarm. Restore that run and explicitly stop it before launching another; do not delete its reservation.",
 	UNSETTLED: "Execution remains unsettled; inspect before recovery.",
 	BUSY: "Another Swarm operation is still active.",
 	STATE: "This action is unavailable in the current run state.",

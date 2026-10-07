@@ -1,8 +1,8 @@
-import { after } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after } from "node:test";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { DEFAULT_LIMITS, reduceEvent } from "../extensions/swarm/state.mjs";
 
 const testAgentDir = mkdtempSync(join(tmpdir(), "swarm-test-agent-"));
@@ -15,6 +15,21 @@ export function repository(t, ignored = true) {
 	if (ignored) writeFileSync(join(root, ".gitignore"), "/.swarms/\n");
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	return root;
+}
+
+/** A local-only Git submodule fixture; never fetches a remote repository. */
+export function addSubmodule(t, root, path = "modules/shared") {
+	const source = repository(t, false);
+	writeFileSync(join(source, ".gitignore"), "/ignored/\n");
+	writeFileSync(join(source, "tracked.txt"), "original\n");
+	execFileSync("git", ["-C", source, "add", "."]);
+	commitFixture(source);
+	execFileSync("git", ["-C", root, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", "--", source, path]);
+	return join(root, path);
+}
+
+export function commitFixture(root) {
+	execFileSync("git", ["-C", root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "commit.gpgSign=false", "-c", `core.hooksPath=${join(root, ".git", "swarm-fixture-no-hooks")}`, "commit", "--quiet", "-m", "Fixture"]);
 }
 
 export function machine(overrides = {}) {

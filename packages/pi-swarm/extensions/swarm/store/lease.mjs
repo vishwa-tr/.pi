@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { requireCondition } from "../errors.mjs";
 import { lstatSync, mkdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { atomicJson, invariant, privateDirectory, readPrivate, syncDirectory, validId } from "./files.mjs";
 
@@ -56,7 +57,7 @@ export function acquireLease(layout, { ownerSessionId } = {}) {
 
 	try {
 		const reservation = readReservation(layout.reservationPath);
-		invariant(!reservation || reservation.runId === layout.runId, "Checkout belongs to another running or paused swarm");
+		requireCondition(!reservation || reservation.runId === layout.runId, "RESERVED", "Checkout belongs to another running or paused swarm");
 		if (!reservation) atomicJson(layout.reservationPath, { version: 1, runId: layout.runId });
 	} catch (error) {
 		// Never remove another run's reservation, even if acquisition failed.

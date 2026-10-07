@@ -121,10 +121,13 @@ root `.agents/skills/` is the canonical global skill library.
   messaging. `pi-merge` synthesizes selected session branches into a new session
   while leaving source branches intact.
 - **Swarm:** `pi-swarm` is managed through the main agent's start/status/control/history
-  tools, with explicit human approval in native Cancel-default dialogs. The only direct
-  user command is `/swarm stop`. Its read-only Messages/Agents/Topics view joins Pi agent navigation; the main agent
-  handles messaging and controls. Plan and Safety are optional
-  integrations; without Safety, Swarm asks before every mutation and command. Durable
+  tools. The agent proposes sensible settings and explains the full objective and
+  configuration in chat; execution waits for your explicit confirmation there. Swarm
+  opens no confirmation dialogs and preserves existing work by default. The only direct
+  user command is `/swarm stop`. Its read-only Messages/Agents/Topics view joins Pi agent
+  navigation; the main agent handles messaging and controls. Plan and Safety are optional
+  integrations. Without Safety, your confirmed bounded run policy authorizes the selected
+  worker coding tools; an enabled Safety provider still applies its own policy. Durable
   state lives beside Pi's project sessions, and another session can restore a run paused.
   Loading, reload and session resume never dispatch work automatically. See its
   [usage and recovery](packages/pi-swarm/README.md).

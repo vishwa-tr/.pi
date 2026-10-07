@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { repository } from "./helpers.mjs";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
+import { requestSafety } from "../extensions/swarm/host-gates.mjs";
+import { reduceWorkspace } from "../extensions/swarm/workspace-state.mjs";
+import { statusText } from "../extensions/swarm/ui.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { WorkspaceRuntime } from "../extensions/swarm/workspace.mjs";
 
@@ -293,4 +300,145 @@ test("ignored-file observation scope survives a controller reload", async t => {
 		await controller.owner("run.pause");
 		await controller.system("run.settle");
 	} finally { await controller.close(); }
+});
+
+test("concurrent claimant edit and rejected submission preserve progress and strict freshness", async t => {
+	const f = await fixture(t, { runner: async () => success });
+	const checked = await f.worker.shell("offline verification");
+	await f.c.owner("task.create", { id: "task2", title: "Other work", criteria: [0], dependencies: [] });
+	await f.c.worker("other").dispatch("task.claim", { taskId: "task2", kind: "build", assignmentId: "build2" });
+	const other = f.runtime.worker("other");
+	other.claim(["source.txt"]); await other.read("source.txt");
+	await assert.rejects(f.worker.submit("not queued", [checked.executionId]), error => {
+		assert.equal(error.code, "BUSY");
+		assert.match(error.message, /"workerId":"other"/);
+		assert.match(error.message, /"stage":"claims-held"/);
+		assert.ok(!error.message.includes("source.txt"));
+		return true;
+	});
+	assert.equal(f.runtime.snapshot().coordination.pending.length, 0);
+	await other.edit("source.txt", [{ oldText: "original", newText: "created after verification" }]);
+	other.release();
+	for (let attempt = 0; attempt < 3; attempt++) {
+		await assert.rejects(f.worker.submit("stale", [checked.executionId]), { code: "EVIDENCE", message: "Verification receipt rejected: stale-before-and-after" });
+		assert.equal(f.runtime.snapshot().coordination.active.length, 0);
+		assert.equal(f.runtime.snapshot().coordination.pending.length, 0);
+		assert.equal(f.c.snapshot().tasks[0].pending, null);
+	}
+	const current = await f.worker.shell("offline current verification");
+	await f.worker.submit("current", [current.executionId]); await f.runtime.settle("task1");
+	assert.equal(f.c.snapshot().tasks[0].status, "submitted");
+	await drain(f);
+});
+
+test("receipt rejection diagnoses every unchanged safety predicate without leaking receipt data", async t => {
+	const f = await fixture(t, { runner: async () => success });
+	const checked = await f.worker.shell("offline verification");
+	const initial = f.c.snapshot();
+	const event = { actor: "system", type: "workspace.candidate", payload: {
+		taskId: "task1", assignmentId: "build1", fingerprint: initial.workspace.fingerprint, receipts: [checked.executionId],
+	} };
+	const changed = "a".repeat(64) === initial.workspace.fingerprint ? "b".repeat(64) : "a".repeat(64);
+	for (const [fields, reason] of [
+		[{ kind: "write" }, "wrong-kind"], [{ taskId: "task2" }, "wrong-task"], [{ assignmentId: "other" }, "wrong-assignment"],
+		[{ outcome: "failed" }, "unsuccessful-outcome"], [{ outcome: "unknown" }, "unsuccessful-outcome"], [{ exitCode: 7 }, "unsuccessful-exit"],
+		[{ cycle: 0 }, "wrong-cycle"], [{ generation: 99 }, "wrong-generation"], [{ guidanceRevision: 1 }, "changed-guidance"],
+		[{ before: changed }, "stale-before"], [{ after: changed }, "stale-after"], [{ before: changed, after: changed }, "stale-before-and-after"],
+	]) {
+		const state = structuredClone(initial);
+		Object.assign(state.workspace.receipts[0], fields);
+		assert.throws(() => reduceWorkspace(state, event), { code: "EVIDENCE", message: `Verification receipt rejected: ${reason}` });
+	}
+	const missing = structuredClone(initial); missing.workspace.receipts = [];
+	assert.throws(() => reduceWorkspace(missing, event), { code: "EVIDENCE", message: "Verification receipt rejected: missing-receipt" });
+	reduceWorkspace(structuredClone(initial), event);
+	await drain(f);
+});
+
+test("queued submission exposes active Safety stage and cancellation waits for approval settlement", async t => {
+	let requests = 0; const entered = deferred(); const approval = deferred();
+	const f = await fixture(t, { runner: async () => success, authorize: async () => {
+		if (++requests === 1) return true;
+		entered.resolve(); return approval.promise;
+	} });
+	await f.c.owner("task.create", { id: "task2", title: "Other work", criteria: [0], dependencies: [] });
+	await f.c.worker("other").dispatch("task.claim", { taskId: "task2", kind: "build", assignmentId: "build2" });
+	const other = f.runtime.worker("other");
+	const receipt = await other.shell("private fixture command");
+	const shell = f.worker.shell("another private fixture command"); const rejectedShell = assert.rejects(shell);
+	await entered.promise;
+	const submit = other.submit("queued behind approval", [receipt.executionId]); const rejectedSubmit = assert.rejects(submit);
+	const status = f.runtime.coordinationStatus();
+	assert.equal(status.active[0].workerId, "builder"); assert.equal(status.active[0].purpose, "shell");
+	assert.equal(status.active[0].stage, "approval"); assert.equal(status.pending[0].purpose, "submit");
+	assert.equal(status.pending[0].stage, "queued");
+	const mainStatus = statusText({ run: f.c.snapshot(), workspace: f.runtime.snapshot(), errors: [] });
+	assert.match(mainStatus, /"stage": "approval"/); assert.ok(!mainStatus.includes("private fixture command"));
+	await f.c.owner("run.pause"); await rejectedSubmit;
+	assert.equal(f.runtime.coordinationStatus().active[0].cancellationRequested, true);
+	await assert.rejects(f.runtime.settle("task1"), code("UNSETTLED"));
+	approval.resolve(true); await rejectedShell;
+	assert.equal(f.c.snapshot().workspace.operations.length, 0);
+	for (const id of ["task1", "task2"]) await f.runtime.settle(id);
+	await f.c.system("run.settle");
+	assert.equal(f.runtime.coordinationStatus().counts.active, 0);
+	await f.c.owner("run.resume", { reconciled: true });
+	await f.c.worker("builder").dispatch("task.unblock", { taskId: "task1" });
+	await f.c.worker("builder").dispatch("task.claim", { taskId: "task1", kind: "build", assignmentId: "after-resume" });
+	const resumed = f.runtime.worker("builder"); resumed.claim(["source.txt"]);
+	await assert.rejects(resumed.write("source.txt", "without fresh read"), code("STALE"));
+	await resumed.read("source.txt"); resumed.release();
+	await drain(f);
+});
+
+test("concurrent same-assignment authorization requests settle one denial without reprompting", async t => {
+	const entered = deferred(); const decision = deferred(); let requests = 0;
+	const f = await fixture(t, { authorize: async () => { requests++; entered.resolve(); return decision.promise; } });
+	f.worker.claim(["source.txt"]); await f.worker.read("source.txt");
+	const first = assert.rejects(f.worker.write("source.txt", "first"), code("AUTHORITY"));
+	await entered.promise;
+	const second = assert.rejects(f.worker.write("source.txt", "second"), code("AUTHORITY"));
+	const third = assert.rejects(f.worker.write("source.txt", "third"), code("AUTHORITY"));
+	assert.equal(requests, 1);
+	decision.resolve(false); await Promise.all([first, second, third]);
+	assert.equal(requests, 1);
+	assert.equal(f.runtime.coordinationStatus().counts.active, 0);
+	assert.equal(f.c.snapshot().workspace.operations.length, 0);
+	assert.equal(readFileSync(join(f.root, "source.txt"), "utf8"), "original\n");
+	f.worker.release(); await drain(f);
+});
+
+for (const refusal of ["denied", "timed-out"]) test(`Safety ${refusal} cannot re-prompt even after changed guidance`, async t => {
+	let requests = 0;
+	const events = { emit(_name, { claim }) { requests++; claim(() => refusal === "denied" ? { approved: false } : new Promise(() => {})); } };
+	const f = await fixture(t, { authorize: async request => (await requestSafety({ events,
+		request: { agent: request.workerId, tool: request.kind, path: request.paths[0] }, signal: request.signal, timeoutMs: 10,
+	})).approved });
+	f.worker.claim(["source.txt"]); await f.worker.read("source.txt");
+	await assert.rejects(f.worker.write("source.txt", "denied"), code("AUTHORITY"));
+	for (let i = 0; i < 3; i++) await assert.rejects(f.worker.shell("no retry"), code("AUTHORITY"));
+	await f.c.owner("run.redirect", { text: "Refined objective, not new permission" });
+	await f.c.worker("builder").dispatch("worker.ack", { revision: 1 });
+	await assert.rejects(f.worker.shell("still no retry"), code("AUTHORITY"));
+	assert.equal(requests, 1);
+	f.worker.claim(["source.txt"]); await f.worker.read("source.txt"); f.worker.release();
+	await f.c.worker("builder").dispatch("task.yield", { taskId: "task1", blocker: "Owner policy decision needed" });
+	await f.runtime.settle("task1");
+	assert.equal(f.c.snapshot().tasks[0].assignment, null);
+	assert.equal(f.runtime.coordinationStatus().counts.claims, 0);
+	assert.equal(readFileSync(join(f.root, "source.txt"), "utf8"), "original\n");
+	await drain(f);
+});
+
+for (const action of ["fail", "yield"]) test(`${action} report retains claims until actual assignment settlement`, async t => {
+	const f = await fixture(t);
+	f.worker.claim(["source.txt"]); await f.worker.read("source.txt");
+	await f.c.worker("builder").dispatch(`task.${action}`, { taskId: "task1", ...(action === "fail" ? { reason: "Reported failure" } : { blocker: null }) });
+	assert.equal(f.runtime.coordinationStatus().counts.claims, 1);
+	assert.ok(f.c.snapshot().tasks[0].assignment);
+	await f.runtime.settle("task1");
+	assert.equal(f.runtime.coordinationStatus().counts.claims, 0);
+	assert.equal(f.c.snapshot().tasks[0].assignment, null);
+	assert.equal(f.c.snapshot().tasks[0].failures, action === "fail" ? 1 : 0);
+	await drain(f);
 });
