@@ -56,10 +56,13 @@ unrelated existing changes part of the objective; conflicting or unclear work st
 clarification. The objective is preserved in full. Defaults seed criteria and scope without
 a model call; the main agent can choose settings appropriate to the task.
 
-No affirmative reply means no execution. Proposals expire after 120 seconds. Confirmation
-is single-use and bound to the owning session/project, host model and thinking level,
-provider, mode, ownership, run revision and inspected workspace. Changes invalidate it;
-request a fresh proposal rather than replaying confirmation. Pause, stop, reload and
+No affirmative reply means no execution. Chat proposals have no time limit: taking a break
+before replying, or before the main agent consumes confirmation, does not expire them.
+Confirmation is still single-use and bound to the owning session/project, host model and
+thinking level, provider, mode, ownership, run revision and inspected workspace. Execution
+revalidates the complete agreement and current workspace; changes invalidate it and require
+a fresh proposal rather than replaying confirmation. Inspection, host approval callbacks and
+independent Safety requests retain their separate bounded timeouts. Pause, stop, reload and
 shutdown cancel pending proposals. Resume preserves allowances; restart explicitly
 begins a fresh cycle. Neither undoes changes, and unsettled work blocks continuation.
 

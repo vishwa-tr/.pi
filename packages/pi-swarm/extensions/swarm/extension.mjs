@@ -391,11 +391,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 						return { approved: true, specification: request.specification, existingChanges: "preserve", reconciled: true,
 							...(accepted.recovery ? { attestation: { kind: "user-established-settlement", evidence: accepted.evidence } } : {}) };
 					}
-					const expiresAt = Date.now() + approvalTimeoutMs;
-					const deadline = performance.now() + approvalTimeoutMs;
+					// Owner chat may resume much later; context and packet checks, not elapsed time, fence consent.
 					created = { id: randomUUID(), action, args: structuredClone(args), fingerprint, gate, revoked, confirmed: false,
-						recovery: ["reconcile", "release-lease"].includes(request.action), expiresAt,
-						assertCurrent: candidate => { assertCurrent(candidate); check(performance.now() < deadline, "CANCELLED", "Proposal expired"); } };
+						recovery: ["reconcile", "release-lease"].includes(request.action), assertCurrent };
 					created.agreement = approvalPacket({ ...request, workspace: cwd });
 					created.confirmationPrompt = created.recovery
 						? "Independently establish that ALL listed execution has stopped, then reply: I confirm settlement: <how you established this>. Missing PID, timeout or no output is not proof. Unknown effects stay unknown; nothing is replayed."
@@ -410,7 +408,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					if (!accepted && created && error.code === "AUTHORITY") {
 						created.assertCurrent(ctx);
 						proposal = created;
-						return { ...inspect(ctx), awaitingConfirmation: true, proposalId: created.id, action, expiresAt: created.expiresAt,
+						return { ...inspect(ctx), awaitingConfirmation: true, proposalId: created.id, action,
 							agreement: created.agreement, confirmationPrompt: created.confirmationPrompt };
 					}
 					throw error;
@@ -433,7 +431,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		const inspect = ctx => {
 			check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot inspect the Swarm host");
 			return { ...swarmSummary(host?.snapshot()), restorePending: Boolean(restoreLink),
-				...(proposal ? { pendingAuthorization: { proposalId: proposal.id, action: proposal.action, confirmed: proposal.confirmed, expiresAt: proposal.expiresAt } } : {}) };
+				...(proposal ? { pendingAuthorization: { proposalId: proposal.id, action: proposal.action, confirmed: proposal.confirmed } } : {}) };
 		};
 		registerMainTools(pi, {
 			control, chatControl, inspect, revoke: ctx => { inspect(ctx); cancel(); }, messages: ctx => { inspect(ctx); return host?.snapshot().run?.messages ?? []; }, history: (workerId, ctx) => {

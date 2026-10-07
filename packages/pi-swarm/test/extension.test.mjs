@@ -13,6 +13,12 @@ import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 async function until(predicate) { for (let i = 0; i < 1000; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); } assert.fail("Condition did not settle"); }
+function mockElapsedTime(t) {
+	const initialTime = performance.now();
+	let elapsed = 0;
+	t.mock.method(performance, "now", () => initialTime + elapsed);
+	return milliseconds => { elapsed += milliseconds; };
+}
 async function fixture(t, { script = () => ({ text: "Mock planning complete" }), runner, entries = [], root, mock, approvalTimeoutMs } = {}) {
 	root ??= repository(t); mock ??= await createMockRuntime(script);
 	const events = new EventEmitter(), handlers = new Map(), commands = new Map(), tools = new Map(), notices = [], packets = [], messages = [], replies = [];
@@ -71,17 +77,61 @@ for (const action of ["pause", "stop", "shutdown", "tree", "mode"]) test(`${acti
 	if (action === "shutdown") await f.event("session_shutdown"); else if (action === "tree") await f.event("session_before_tree"); else if (action === "mode") { Object.assign(f.mode, { revision: 2, selectedMode: "plan" }); f.events.emit("pi-plan:mode-changed", { ...f.mode }); } else await f.command(action);
 	await f.input("yes"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.mock.calls.length, 0); assert.equal(existsSync(prepareLayout(f.root, "run1").stateRoot), false);
 });
-test("expired proposal cannot launch", async t => { const f = await fixture(t, { approvalTimeoutMs: 100 }), p = await f.propose({ objective: "goal" }); await new Promise(resolve => setTimeout(resolve, 110)); await f.input("yes"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.mock.calls.length, 0); });
+test("pending and confirmed chat proposals survive long inactivity without authorizing execution", async t => {
+	const advanceTime = mockElapsedTime(t);
+	const f = await fixture(t, { approvalTimeoutMs: 1000 }), p = await f.propose({ objective: "goal" });
+	assert.equal(Object.hasOwn(p, "expiresAt"), false);
+	advanceTime(3600000);
+	const pending = (await f.tool("swarm_status", {})).details.pendingAuthorization;
+	assert.equal(pending.proposalId, p.proposalId);
+	assert.equal(pending.confirmed, false);
+	assert.equal(Object.hasOwn(pending, "expiresAt"), false);
+	assert.equal(f.mock.calls.length, 0);
+	assert.equal(f.entries.length, 0);
+	await f.input("yes");
+	advanceTime(3600000);
+	assert.equal((await f.tool("swarm_status", {})).details.pendingAuthorization.confirmed, true);
+	assert.equal(f.mock.calls.length, 0);
+	assert.equal((await f.consume(p)).details.status, "running");
+	await until(() => f.mock.calls.length === 1);
+	assert.equal((await f.consume(p)).isError, true, "confirmation remains single-use");
+});
+test("late confirmation still rejects workspace changes before execution", async t => {
+	const advanceTime = mockElapsedTime(t);
+	const f = await fixture(t), p = await f.propose({ objective: "goal" });
+	advanceTime(3600000);
+	await f.input("yes");
+	advanceTime(3600000);
+	writeFileSync(join(f.root, "user.txt"), "Changed after confirmation");
+	const result = await f.consume(p);
+	assert.equal(result.isError, true);
+	assert.equal(result.details.diagnostic.code, "STALE");
+	assert.equal(f.mock.calls.length, 0);
+	assert.equal(f.entries.length, 0);
+	assert.equal((await f.consume(p)).isError, true, "a stale attempt cannot replay consent");
+});
 test("maximum objective is preserved without duplication into seeded fields", async t => {
 	const f = await fixture(t), constraints = "\nOnly src/example.js; no new dependencies; run tests", objective = "x".repeat(32768 - constraints.length) + constraints;
 	await f.command(`start ${objective}`); await until(() => f.mock.calls.length === 1); assert.equal((await f.status()).objective, objective);
 	assert.ok(JSON.stringify(f.mock.calls[0].context).includes(JSON.stringify(JSON.stringify(objective)).slice(1, -1)));
 });
 test("busy main tool returns a proposal instead of waiting for user input", async t => { const f = await fixture(t); f.ctx.isIdle = () => false; assert.equal((await f.propose({ objective: "goal" })).awaitingConfirmation, true); assert.equal(f.mock.calls.length, 0); });
-test("reload stays paused; resume/restart each need fresh chat confirmation", async t => {
+test("reload stays paused; resume/restart accept delayed fresh chat confirmation", async t => {
+	const advanceTime = mockElapsedTime(t);
 	const f = await fixture(t); await f.command("start goal"); await until(() => f.mock.calls.length === 1); await f.event("session_shutdown");
 	const next = await fixture(t, { root: f.root, mock: f.mock, entries: f.entries }); await next.event("session_start", { reason: "reload" }); assert.equal((await next.status()).status, "paused");
-	for (const action of ["resume", "restart"]) { const p = (await next.tool("swarm_control", { action })).details; assert.equal(p.awaitingConfirmation, true); assert.equal(f.mock.calls.length, action === "resume" ? 1 : 2); await next.input("yes"); assert.equal((await next.consume(p)).details.status, "running"); await until(() => f.mock.calls.length === (action === "resume" ? 2 : 3)); assert.equal((await next.status()).cycle, action === "resume" ? 1 : 2); await next.command("stop"); }
+	for (const action of ["resume", "restart"]) {
+		const p = (await next.tool("swarm_control", { action })).details;
+		assert.equal(p.awaitingConfirmation, true);
+		assert.equal(f.mock.calls.length, action === "resume" ? 1 : 2);
+		advanceTime(3600000);
+		await next.input("yes");
+		advanceTime(3600000);
+		assert.equal((await next.consume(p)).details.status, "running");
+		await until(() => f.mock.calls.length === (action === "resume" ? 2 : 3));
+		assert.equal((await next.status()).cycle, action === "resume" ? 1 : 2);
+		await next.command("stop");
+	}
 });
 test("run links follow active branch and forks do not inherit control", async t => {
 	const f = await fixture(t); await f.command("start goal"); await f.command("pause"); await f.event("session_shutdown");

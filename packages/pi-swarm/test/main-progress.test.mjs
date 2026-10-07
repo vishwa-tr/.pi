@@ -86,14 +86,17 @@ test("proposal bookkeeping survives content-only native tool serialization but n
 	const tools = new Map();
 	const proposalId = "11111111-2222-4333-8444-555555555555";
 	registerMainTools({ registerTool: tool => tools.set(tool.name, tool) }, { chatControl: async () => ({
-		awaitingConfirmation: true, proposalId, agreement: "Complete inspected agreement", confirmationPrompt: "Owner confirmation required", expiresAt: 120000,
+		awaitingConfirmation: true, proposalId, agreement: "Complete inspected agreement", confirmationPrompt: "Owner confirmation required",
 	}) });
 	const result = await tools.get("swarm_start").execute("proposal", { objective: "Goal" }, undefined, undefined, {});
 	const contentOnly = result.content.map(part => part.text).join("\n");
 	assert.match(contentOnly, new RegExp(`Proposal ID: ${proposalId}`));
 	assert.match(contentOnly, /bookkeeping only; not approval/);
 	assert.match(contentOnly, /No execution authorized/);
+	assert.match(contentOnly, /no time limit; workspace and policy are revalidated/);
+	assert.doesNotMatch(contentOnly, /expires at|Invalid Date/);
 	assert.equal(result.details.awaitingConfirmation, true);
+	assert.equal(Object.hasOwn(result.details, "expiresAt"), false);
 });
 
 test("main coordination status bounds entries and allowlists IDs, purposes and stages", () => {
