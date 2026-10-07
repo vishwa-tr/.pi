@@ -8,14 +8,35 @@ a saved run never authorize worker execution.
 ## Use through the main agent
 
 Ask the main agent to start Swarm with your complete objective, inspect progress, pause,
-restore a run, resume, restart, or reconcile interrupted work. The main agent supplies the
-objective and invokes the tools below. You review the full agreement and answer native Pi
-dialogs yourself. Tool arguments, model output, and transcript text cannot approve work.
+restore a run, resume, restart, or reconcile interrupted work. It chooses sensible settings,
+explains the objective and complete configuration in chat, and asks for your explicit
+confirmation before starting. Swarm opens no confirmation dialogs.
+
+1. The agent prepares a proposal with `swarm_start`. Inspection returns the full agreement;
+   no run starts and no worker is dispatched.
+2. Review the objective, criteria, scope/exclusions, selected coding tools and instructions,
+   model/thinking level, provider/outbound context, integrations, existing files and limits.
+   Ask for changes if needed; the agent must prepare a fresh proposal for revised settings.
+3. Reply **`yes`** or **`confirm`** in the owning main chat to confirm the single current
+   proposal. Replies are case-insensitive, optionally ending with `.` or `!`. Other input
+   cancels the pending proposal rather than guessing your intent.
+4. The agent calls `swarm_start` again with **only** the returned `proposalId` (for lifecycle
+   controls, only `action` and `proposalId`). This consumes one-shot
+   authorization only after rechecking the exact configuration, workspace and host context.
+   The tool returns after launch, before worker completion.
+
+Proposal IDs are tool bookkeeping, not a command you must type. Only a real interactive
+owner input can confirm; tool arguments, model output, transcript quotations, worker mail,
+and extension/RPC input cannot approve work. The agent must wait for your reply, not infer
+consent from the original request. While a proposal is pending, it must ask only its explicit
+Swarm confirmation question, not unrelated yes/no questions. Native UI prompts cancel pending
+confirmation. A plain `yes` cannot semantically distinguish an unrelated normal-chat question;
+this question discipline is required.
 
 **`/swarm stop` is the only direct user command.** It immediately fences new work,
 cancels pending approvals and worker requests, and aborts native Bash process trees
 without an extra model call. It is recognized before focused dialogs and overlays:
-type the literal command and press Enter, even while a worker confirmation is open.
+type the literal command and press Enter, even while an independent Safety prompt is open.
 The captured command appears in the status area; Escape cancels it. Pasting the command
 still requires a separate Enter. Other `/swarm` arguments display guidance without
 changing state. Immediate notifications distinguish a requested stop from established
@@ -24,27 +45,35 @@ or kills the main Pi process or unrelated processes.
 
 | Main-agent tool | Behavior |
 |---|---|
-| `swarm_start` | Takes the complete objective and opens a native agreement dialog within the tool call. Returns after launch, before worker completion. |
+| `swarm_start` | Prepares a chat proposal from `objective` and optional `criteria`, `scope`, `limits`, `codingTools` and `instructions`. A later call with `proposalId` consumes actual owner chat confirmation and launches after revalidation. |
 | `swarm_status` | Returns the run ID, bounded progress, workers, tasks and unresolved-operation counts; never wakes workers. |
-| `swarm_control` | `pause`, `stop`, `resume`, `restart`, `restore`, `reconcile`, or `view`. `restore` requires `runId`; `reconcile` accepts it for a crashed controller. |
+| `swarm_control` | `pause` and `stop` act immediately. `resume`, `restart` and `reconcile` prepare fresh chat proposals, then consume confirmation with `proposalId`. `restore` requires `runId` and attaches paused; `reconcile` accepts `runId` for a crashed controller. `view` inspects; `send` delivers mail within an approved running run. |
 | `swarm_history` | Reads bounded pages of worker history without constructing or waking workers. |
 
-All approval choices default to **Cancel**. Launch agreements disclose the model,
-thinking level, outbound context, integrations, scope, criteria, existing files and limits.
-The objective is preserved in full, with editable criteria and scope seeded without a
-model call. Agreements can be edited before approval. Existing-work preservation and
-continuation reconciliation receive separate confirmation. Commands and approvals are
-fenced when the session, project, model, thinking level, mode or ownership changes.
+Existing work and Swarm changes are **kept by default**, without a disposition question.
+Swarm performs no automatic stash, reset, discard, staging, commit or push. Disclosure does not make
+unrelated existing changes part of the objective; conflicting or unclear work still needs
+clarification. The objective is preserved in full. Defaults seed criteria and scope without
+a model call; the main agent can choose settings appropriate to the task.
 
-Launch, resume, restart and recovery require an interactive TUI. Print, JSON and RPC
-contexts cannot supply approval. Checkout inspection and each approval revalidation run without blocking the host event
-loop: Git is asynchronous and content fingerprints run in a cancellable worker.
+No affirmative reply means no execution. Proposals expire after 120 seconds. Confirmation
+is single-use and bound to the owning session/project, host model and thinking level,
+provider, mode, ownership, run revision and inspected workspace. Changes invalidate it;
+request a fresh proposal rather than replaying confirmation. Pause, stop, reload and
+shutdown cancel pending proposals. Resume preserves allowances; restart explicitly
+begins a fresh cycle. Neither undoes changes, and unsettled work blocks continuation.
+
+Launch, resume, restart and recovery require the interactive main chat in a TUI. Print,
+JSON and RPC contexts cannot supply approval. Checkout inspection and each approval
+revalidation run without blocking the host event loop: Git is asynchronous and content
+fingerprints run in a cancellable worker.
 Git checkouts fingerprint tracked and non-ignored files plus Git control state, not entire
 ignored dependency/build/worktree trees. The approval packet discloses this scope. Tracked
 files remain covered even if an ignore rule matches them. Without Git, inspection retains
 a full-directory fallback off-thread. Each inspection has a separate 120-second deadline and a 64 MiB Git output limit.
 File lists are revalidated after hashing. Snapshot paths cannot follow replaced directory
-symlinks; Git submodule directories require a separate workspace.
+symlinks. Git submodules are inspected with their own tracked/non-ignored file lists,
+recursively; direct submodule mutations require a separate workspace.
 Workspace attachment and receipt/candidate checks use the same nonblocking inspection.
 Explicit edit/write targets are additionally fingerprinted even when ignored; fresh-read,
 claim and immediate pre-edit checks remain mandatory. Explicit target observations survive
@@ -53,8 +82,9 @@ shell commands are not globally detected: receipts are observations of this scop
 that ignored content was unchanged. Shell authorization is still required. Stop, shutdown and
 reload cancel pending admission inspection without granting authority; scoped changes still
 require fresh approval. Post-execution settlement observations remain bounded and are not
-aborted merely because execution was cancelled, so receipts can record its effects. The default agreement deadline is 120 seconds; worker
-confirmation defaults to 30 seconds. A refusal or timeout does not start an automatic retry.
+aborted merely because execution was cancelled, so receipts can record its effects.
+Independent Safety requests remain bounded by their confirmation deadline. A refusal or
+timeout does not start an automatic retry.
 
 Failed main-agent tool calls return a constant, safe diagnostic with the failing phase
 and an error code. Inspection timeouts and output limits are distinguished from user
@@ -75,17 +105,47 @@ or edit ignore files. Existing project files and Git changes are disclosed and f
   a gate that has never observed one treats the mode as Off. A provider appearing later
   revokes existing approval; disappearance, duplicate responses and malformed responses
   fail closed.
-- With **pi-safety**, worker writes, edits and commands use its confirmation bridge.
-  Without a claimant, Swarm presents the complete operation and asks for **every** edit,
-  write and command using a Cancel-default native dialog. Read-only Bash commands also
-  require this fallback confirmation. Losing a previously observed Safety provider or
-  receiving malformed/duplicate claims denies access.
+- With **pi-safety**, worker writes, edits and commands still use its confirmation bridge.
+  Its independently configured policy may display operation dialogs or deny requests;
+  chat approval does not bypass it. A fully dialog-free run is therefore incompatible with
+  Safety settings that require dialogs; Swarm does not silently change those settings.
+- Without a Safety provider, your explicit chat approval authorizes the selected worker
+  coding tools under the disclosed bounded run policy, not per-operation Swarm prompts.
+  Objective/scope, limits, current-task admission, claims, fresh reads, serialized mutations,
+  exclusive Bash access, submodule read-only boundaries and settlement safeguards remain.
+  These are cooperative controls, not an OS sandbox. Losing a previously observed Safety
+  provider or receiving malformed/duplicate claims denies access rather than falling back.
 
 Swarm imports Pi and Node APIs, with no runtime imports from sibling packages. Normal
 package loading uses the current public Pi model registry, physical model and thinking
-selection. Pi owns credentials, OAuth and provider routing; the displayed endpoint is
-informational. No credentials are copied into run records. Provider context includes the
+selection. All workers inherit the approved main-agent model and thinking level; changing
+that selection invalidates authorization rather than silently migrating workers. Pi owns
+credentials, OAuth and provider routing; the displayed endpoint is informational.
+No credentials are copied into run records. Provider context includes the
 objective, instructions, workspace content, tool results, history and compaction summaries.
+
+## Submodule workspaces
+
+A parent checkout may contain clean or dirty Git submodules. Inspection recognizes
+Git index gitlinks and fingerprints the indexed commits, checked-out HEADs, each
+initialized submodule's tracked/non-ignored contents, and Git control state. Nested
+submodules use their own Git scopes, up to 32 levels. Dirty-to-dirty file edits are
+covered by content hashes, not just status flags. Every repository's file list and
+status are revalidated after hashing under the same inspection deadline and cancellation.
+Ignored dependency/build trees remain excluded in each repository.
+
+Missing or empty uninitialized submodules are recorded without fetching or initializing
+them. A nonempty directory without checkout metadata, aliased checkout, or unexpected
+directory in a regular file scope fails closed. Arbitrary nested repositories are not
+automatically treated as submodules.
+
+Workers may read ordinary submodule files, including instructions. Parent-workspace
+claims, edits and writes into submodules are denied, including missing checkouts and
+Windows case aliases. To change submodule files, use a separate Swarm workspace rooted
+at that submodule. Bash remains a cooperative, host-authorized operation, not an OS
+sandbox: shell commands must not bypass this boundary. Non-ignored submodule effects
+are included in before/after receipts; indirect ignored-file effects remain outside
+coverage. No submodule commits, resets, updates or cleanup are performed by inspection.
 
 ## Workers and safeguards
 
@@ -116,7 +176,7 @@ unknown custom-runner outcomes require explicit reconciliation and are never rep
 
 Swarm uses Pi's existing agent indicator and **Alt+N** navigation when
 `pi-status-line` is loaded. It joins the same cycle as Teams and Subagents.
-**Escape** returns to the main chat. Native dialogs dismiss the focused view;
+**Escape** returns to the main chat. Independent Safety dialogs dismiss the focused view;
 main-agent work continues in the background. Ask the main agent to open the view
 (`swarm_control`, action `view`) when the status-line package is not loaded.
 
@@ -200,12 +260,21 @@ Restore takes exclusive ownership and attaches **paused**, without worker reques
 the saved model first. Resume requires a fresh agreement and workspace reconciliation.
 Reload discovers the active-branch run link but never resumes execution automatically.
 
-If a crashed controller's lease blocks restore, ask the main agent to reconcile that run ID.
-The dialog identifies the previous session and PID. Independently establish that the old
-process **and its commands** have stopped, then explicitly approve release. A live PID or
-changed lease refuses release. The reservation and journal are retained. Restore again,
-then reconcile any journaled interrupted operations with an explicit settlement attestation.
-Unknown effects remain unknown; reconciliation does not manufacture success or replay them.
+If a crashed controller's lease blocks restore, reopen its **original owning Pi session**
+and ask the main agent there to reconcile that run ID. Lease release is refused from other
+sessions or when the recorded owner is missing/unknown, including legacy leases. There is
+no automatic takeover; recovery when that session is unavailable remains a user-only/manual
+design question, not permission to remove lease metadata or bypass fencing.
+
+The chat proposal identifies the previous session and PID. Independently establish that the
+old process **and its commands** have stopped, then reply in the owning main chat:
+**`I confirm settlement: <how you independently established settlement>`**. A plain `yes`
+is insufficient for recovery. Missing PID, timeout or silence alone is not evidence of
+settlement. A live PID or changed lease refuses release. The reservation and journal are
+retained. Restore again, then reconcile any journaled interrupted operations with the same
+explicit evidence-bearing chat attestation. Reconciliation does not resume execution;
+request and confirm a fresh resume/restart proposal afterward. Unknown effects remain
+unknown; reconciliation does not manufacture success or replay them.
 
 Runs from the former project-local `.swarms/` layout cannot be restored by this version.
 They receive a specific legacy-run error and are left untouched. No automatic migration
@@ -216,7 +285,7 @@ or deletion occurs.
 | Modules | Responsibility |
 |---|---|
 | `extension.mjs`, `main-tools.mjs` | Main-agent tools, stop-only slash command, context fencing and host lifecycle |
-| `host.mjs`, `host-gates.mjs`, `ui.mjs` | Agreements, optional integrations, native confirmation and recovery |
+| `host.mjs`, `host-gates.mjs`, `ui.mjs` | Agreement disclosures, optional integrations, bounded run policy and recovery |
 | `core.mjs`, `state.mjs`, `*-state.mjs` | Journaled controller, pure reducers, task/session/workspace state |
 | `sessions.mjs`, `sdk-session.mjs`, `native-provider.mjs` | Native Pi sessions, host runtime selection, retries/compaction admission |
 | `session-tools.mjs`, `workspace.mjs`, `workspace-scheduler.mjs`, `workspace-files.mjs` | Native tool wrappers, claims, receipts and read-only fingerprints |
@@ -240,10 +309,11 @@ python3 packages/pi-swarm/test/terminal/entry.py --package-root
 python3 packages/pi-swarm/test/terminal/focus.py --composer
 ```
 
-Unit/integration coverage includes native coding, fresh-read/claim/permission guards,
-retries, automatic compaction, fencing, exactly-once task failure, standalone confirmation,
-cross-session restore, legacy refusal and explicit lease recovery. POSIX PTYs exercise
-native dialogs and real main-agent tool calls with offline scripted models. The fixture-only
+Unit/integration checks cover native coding, fresh-read/claim/permission guards,
+retries, automatic compaction, fencing, exactly-once task failure, bounded run policy,
+chat proposal/owner-confirmation binding, cross-session restore, legacy refusal and explicit
+lease recovery. POSIX PTY checks exercise real main-agent tools and interactive owner
+chat confirmation with offline scripted models, plus independent Safety policy dialogs. The fixture-only
 `/fixture-swarm` command in some harnesses drives the registered main tools; it is never
 registered by the production package. No paid/live-provider trial is part of these checks.
 

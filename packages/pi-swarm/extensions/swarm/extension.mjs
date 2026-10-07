@@ -7,13 +7,13 @@ import { prepareLayout } from "./store/layout.mjs";
 import { requireCondition as check } from "./errors.mjs";
 import { createNativeRuntime } from "./native-provider.mjs";
 import { createEmergencyInput } from "./emergency-input.mjs";
-import { displayText, showDashboard } from "./dashboard.mjs";
+import { showDashboard } from "./dashboard.mjs";
 import { specificationFingerprint } from "./host-approval.mjs";
 import { requestLaunchSpecification } from "./launch-input.mjs";
 import { registerMainTools, swarmSummary } from "./main-tools.mjs";
 import { inspectLease, releaseStaleLease } from "./store/lease.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
-import { registerSwarmRenderers, requestUserApproval, statusText } from "./ui.mjs";
+import { registerSwarmRenderers, approvalPacket, statusText } from "./ui.mjs";
 
 const LINK = "swarm-run-v1";
 
@@ -61,9 +61,15 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		let emergencyInput;
 		let emergencyStop;
 		let promptDepth = 0;
+		let proposal;
+		const clearProposal = () => {
+			const previous = proposal;
+			proposal = undefined;
+			previous?.gate.dispose();
+		};
 		const progressContext = () => !retired && context && (!owner || owner === context.sessionManager.getSessionId()) ? context : undefined;
 		let progress = createProgress(pi, progressContext);
-		const cancel = () => { contextEpoch++; command?.abort(); };
+		const cancel = () => { contextEpoch++; clearProposal(); command?.abort(); };
 		const notify = (ctx, text, level = "info") => { if (ctx.hasUI) ctx.ui.notify(text, level); };
 		const contextGuard = (ctx, signal) => {
 			const epoch = contextEpoch;
@@ -82,7 +88,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			check(host && typeof args.to === "string" && typeof args.text === "string" && args.text.trim() && args.text.length <= 32768, "INPUT", "A recipient and message are required");
 			return host.send(args.to, args.text, args.topic);
 		};
-		const ensureHost = async ctx => {
+		const ensureHost = async (ctx, { retainPreparation = false } = {}) => {
 			const sessionId = ctx.sessionManager.getSessionId();
 			check(ctx.sessionManager.getSessionFile(), "SESSION", "A persisted owner session is required");
 			check(!owner || owner === sessionId, "OWNERSHIP", "Another session owns this host");
@@ -96,7 +102,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			}
 			const current = contextGuard(ctx);
 			// Cancelled input/approval must not cache a startup model for the next launch.
-			if (resolveSelection && host && !host.snapshot().run) {
+			if (resolveSelection && host && !host.snapshot().run && !retainPreparation) {
 				await host.close();
 				host = undefined;
 				check(current(), "OWNERSHIP", "Swarm context changed during preparation");
@@ -107,17 +113,6 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				host = new SwarmHost({
 					events: pi.events, sessionId, codingTools, instructions, runner, tickIntervalMs, approvalTimeoutMs, ...selection,
 					requestApproval: request => approve ? approve(request) : { approved: false },
-					confirm: async (title, body, { signal }) => {
-						const ctx = context;
-						if (ctx?.mode !== "tui" || !ctx.hasUI || signal.aborted) return false;
-						const current = contextGuard(ctx, signal);
-						// Native notifications render immediately even during a main turn, unlike
-						// deferred custom messages. Keep the complete, sanitized command above
-						// the short Cancel-default dialog so the user can scroll through it.
-						ctx.ui.notify(displayText(`${title}\n${body}`), "warning");
-						const choice = await ctx.ui.select("Allow this worker operation? Read the command/path above.", ["Cancel", "Allow once"], { signal });
-						return current() && choice === "Allow once";
-					},
 					beforePrompt: async () => { if (viewing) { cancel(); await dashboard; } }
 				});
 				progress.bind(host);
@@ -186,7 +181,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			if (ctx.mode !== "tui" || !ctx.hasUI || !ctx.ui.onTerminalInput) return;
 			emergencyInput = createEmergencyInput({
 				enabled: () => !retired && (!owner || owner === ctx.sessionManager.getSessionId())
-					&& Boolean(command || restoreLink || host?.snapshot().run),
+					&& Boolean(command || proposal || restoreLink || host?.snapshot().run),
 				canCapture: () => promptDepth > 0 || viewing || focus?.active || !ctx.ui.getEditorText?.(),
 				pendingChanged: text => ctx.ui.setStatus?.("swarm-emergency", text || undefined),
 				stop: () => {
@@ -200,12 +195,29 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		// The raw listener runs before dialogs/overlays; a slash handler alone cannot
 		// receive /swarm stop when a worker confirmation owns terminal focus.
 		pi.on("agent_settled", () => progress.settled());
-		pi.on("input", event => { if (event.source !== "extension") progress.input(); });
-		pi.on("ui_prompt_start", event => { promptDepth++; focus?.hide(); if (viewing && event.kind !== "custom") cancel(); });
+		pi.on("input", (event, ctx) => {
+			if (event.source !== "extension") progress.input();
+			// Only new input from the owning interactive editor can grant consent.
+			// Extension/worker messages, RPC input, tool arguments and old transcripts cannot.
+			if (event.source !== "interactive" || !proposal) return;
+			const pending = proposal;
+			try {
+				pending.assertCurrent(ctx);
+				const text = typeof event.text === "string" ? event.text.trim() : "";
+				if (pending.recovery) {
+					const match = /^I confirm settlement:\s*([\s\S]+)$/i.exec(text);
+					const evidence = match?.[1].trim();
+					check(evidence?.length > 0 && evidence.length <= 4096, "UNSETTLED", "Independent settlement evidence is required");
+					pending.evidence = evidence;
+				} else check(/^(?:yes|confirm)[.!]?$/i.test(text), "AUTHORITY", "Confirm the exact pending proposal");
+				pending.confirmed = true;
+			} catch { clearProposal(); }
+		});
+		pi.on("ui_prompt_start", event => { promptDepth++; focus?.hide(); clearProposal(); if (viewing && event.kind !== "custom") cancel(); });
 		pi.on("ui_prompt_end", () => { promptDepth = Math.max(0, promptDepth - 1); });
 
 		// `ask` and `present` belong to the main tool call; the public command only stops.
-		const control = async (args, ctx, signal, ask, present) => {
+		const control = async (args, ctx, signal, ask, present, launchOptions, retainPreparation = false) => {
 			const [action = "", ...rest] = args.trim().split(/\s+/);
 			check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot control the Swarm host");
 			if (action === "pause" || action === "stop") {
@@ -221,12 +233,13 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				check(ctx.mode === "tui" && ctx.hasUI, "AUTHORITY", "Interactive recovery is required");
 				const layout = prepareLayout(ctx.cwd, runId);
 				const lease = inspectLease(layout);
-				check(lease && lease.runId === runId, "OWNERSHIP", "No matching controller lease to reconcile");
+				check(lease && lease.runId === runId && lease.ownerSessionId === ctx.sessionManager.getSessionId(), "OWNERSHIP", "Reconcile the controller lease from its original owning session");
 				const current = contextGuard(ctx, signal);
-				present?.(displayText(`Previous controller: session ${lease.ownerSessionId ?? "unknown"}, PID ${lease.pid ?? "unknown"}. Independently establish that this process AND all its commands have stopped before releasing the lease.`));
-				const approved = await ctx.ui.select("Release the controller lease after establishing settlement?", ["Cancel", "Release settled controller lease"], { signal, timeout: approvalTimeoutMs });
+				check(typeof ask === "function", "AUTHORITY", "Chat settlement attestation is required");
+				const answer = await ask({ action: "release-lease", specification: {}, changes: [], recovery: { runId, lease }, signal });
 				check(current(), "CANCELLED", "Recovery context changed");
-				if (approved === "Release settled controller lease") releaseStaleLease(layout, lease, { settled: true });
+				check(answer?.approved === true && answer.attestation?.evidence?.trim(), "AUTHORITY", "Independent settlement attestation is required");
+				releaseStaleLease(layout, lease, { settled: true });
 				return;
 			}
 			// Startup handler order does not establish policy readiness. Native reload
@@ -251,7 +264,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				let selected = action;
 				if (!selected || selected === "dashboard") {
 					const source = Object.freeze({ snapshot: () => host?.snapshot(), history: workerId => host.history(workerId) });
-					check(!host?.snapshot().pendingApproval, "BUSY", "A Swarm approval dialog is already active");
+					check(!host?.snapshot().pendingApproval, "BUSY", "A Swarm operation approval is already active");
 					try {
 						dashboard = showDashboard(ctx, source, pending.signal, () => { viewing = true; });
 						selected = await dashboard;
@@ -271,13 +284,13 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 						setupGate.assert(permission.token);
 					};
 					assertCurrent();
-					const specification = await requestLaunchSpecification(ctx, args.trimStart().replace(/^start(?:\s|$)/, ""), pending.signal, current);
+					const specification = await requestLaunchSpecification(ctx, launchOptions ?? { objective: args.trimStart().replace(/^start(?:\s|$)/, "") }, pending.signal, current);
 					if (!current() || !specification) return;
 					assertCurrent();
 					const finishedGate = setupGate;
 					setupGate = undefined;
 					finishedGate.dispose();
-					activeHost = await ensureHost(ctx);
+					activeHost = await ensureHost(ctx, { retainPreparation });
 					if (!current()) return;
 					present?.("Inspecting Swarm workspace before approval. Git checkouts fingerprint tracked and non-ignored files; ignored files remain protected by per-operation checks. Inspection is cancellable and has a 120-second deadline. No worker has started.");
 					await activeHost.launch({ workspace: ctx.cwd, runId: randomUUID(), specification });
@@ -321,19 +334,28 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				if (command === pending) { command = undefined; approve = undefined; }
 			}
 		};
-		// One tool call: the human decides in native dialogs inside this owning interactive
-		// session. Tool arguments and chat text never reach the approval answer.
+		// A proposal returns before the human replies. No tool frame waits for chat;
+		// only a later owner input event can mint its one-shot execution capability.
 		const chatControl = async (action, args, ctx, signal, update) => {
 			if (action === "send") {
 				await sendMessage(args, ctx, signal);
 				return inspect(ctx);
 			}
 			if (["pause", "stop", "status", "view"].includes(action)) { await control(action === "view" ? "dashboard" : action, ctx, signal); return inspect(ctx); }
+			check(!retired && !command && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "Swarm control context is unavailable");
+			check(ctx.mode === "tui" && ctx.hasUI, "UI", "Swarm approval requires interactive owner chat");
+			let accepted;
+			if (args.proposalId !== undefined) {
+				check(Object.keys(args).every(key => ["action", "proposalId"].includes(key)), "INPUT", "Confirmation cannot replace proposal fields");
+				check(proposal?.id === args.proposalId && proposal.action === action && proposal.confirmed, "AUTHORITY", "Current explicit owner confirmation is required");
+				accepted = proposal;
+				// Consume before any await. Errors and cancellation never restore consent.
+				proposal = undefined;
+				args = accepted.args;
+			} else clearProposal();
 			check(!["restore", "reconcile"].includes(action) || args.runId === undefined || /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(args.runId), "INPUT", "Invalid run identifier");
 			check(action !== "restore" || args.runId, "INPUT", "Restore requires a run identifier");
-			check(ctx.mode === "tui" && ctx.hasUI && typeof update === "function", "UI", "Swarm approval requires interactive CLI mode");
-			check(action !== "start" || (typeof args.objective === "string" && args.objective.trim().length > 0 && args.objective.length <= 32768), "INPUT", "A complete objective is required");
-			const revoked = new AbortController();
+			const revoked = accepted?.revoked ?? new AbortController();
 			const current = contextGuard(ctx, signal);
 			const model = specificationFingerprint(ctx.model ?? null);
 			const thinking = pi.getThinkingLevel?.();
@@ -341,28 +363,61 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			const cwd = ctx.cwd;
 			const sessionId = ctx.sessionManager.getSessionId();
 			const sessionFile = ctx.sessionManager.getSessionFile();
-			const gate = new ModeGate({ events: pi.events, sessionId, onRevoke: () => revoked.abort() });
+			const gate = accepted?.gate ?? new ModeGate({ events: pi.events, sessionId, onRevoke: () => {
+				revoked.abort();
+				if (proposal?.gate === gate) clearProposal();
+			} });
+			let created;
 			try {
 				const permission = gate.capture();
-				// The human may take a while: re-check the calling context once the dialogs return.
-				const assertCurrent = () => {
-					check(current() && ctx.mode === "tui" && ctx.hasUI
-						&& ctx.sessionManager.getSessionId() === sessionId && ctx.sessionManager.getSessionFile() === sessionFile
-						&& ctx.cwd === cwd && ctx.modelRegistry === registry
-						&& specificationFingerprint(ctx.model ?? null) === model && pi.getThinkingLevel?.() === thinking, "OWNERSHIP", "Approval context changed");
+				const assertCurrent = (candidate = ctx) => {
+					check(current() && candidate?.mode === "tui" && candidate.hasUI
+						&& candidate.sessionManager.getSessionId() === sessionId && candidate.sessionManager.getSessionFile() === sessionFile
+						&& candidate.cwd === cwd && candidate.modelRegistry === registry
+						&& specificationFingerprint(candidate.model ?? null) === model && pi.getThinkingLevel?.() === thinking, "OWNERSHIP", "Approval context changed");
 					gate.assert(permission.token);
 				};
-				// Mid-turn chat messages are deferred, so the packet streams as this tool's partial result.
-				const present = text => update({ content: [{ type: "text", text }], details: {} });
+				accepted?.assertCurrent(ctx);
+				assertCurrent();
+				const present = text => update?.({ content: [{ type: "text", text }], details: {} });
 				const ask = async request => {
-					const answer = await requestUserApproval(ctx, request, present);
 					assertCurrent();
-					return answer;
+					check(!request.signal?.aborted, "CANCELLED", "Approval cancelled before presentation");
+					const { signal: _signal, ...packet } = request;
+					const fingerprint = specificationFingerprint(packet);
+					if (accepted) {
+						accepted.assertCurrent(ctx);
+						check(fingerprint === accepted.fingerprint, "STALE", "Proposal workspace, run or provider changed; propose again");
+						return { approved: true, specification: request.specification, existingChanges: "preserve", reconciled: true,
+							...(accepted.recovery ? { attestation: { kind: "user-established-settlement", evidence: accepted.evidence } } : {}) };
+					}
+					const expiresAt = Date.now() + approvalTimeoutMs;
+					const deadline = performance.now() + approvalTimeoutMs;
+					created = { id: randomUUID(), action, args: structuredClone(args), fingerprint, gate, revoked, confirmed: false,
+						recovery: ["reconcile", "release-lease"].includes(request.action), expiresAt,
+						assertCurrent: candidate => { assertCurrent(candidate); check(performance.now() < deadline, "CANCELLED", "Proposal expired"); } };
+					created.agreement = approvalPacket({ ...request, workspace: cwd });
+					created.confirmationPrompt = created.recovery
+						? "Independently establish that ALL listed execution has stopped, then reply: I confirm settlement: <how you established this>. Missing PID, timeout or no output is not proof. Unknown effects stay unknown; nothing is replayed."
+						: "Shall I proceed with this exact Swarm configuration? Reply yes or confirm to approve, or ask for changes. Resume preserves allowances; restart resets them. Existing and generated changes are kept.";
+					present(`${created.agreement}\n${created.confirmationPrompt}`);
+					return { approved: false }; // Inspection only: no storage or workers.
 				};
 				const stop = AbortSignal.any([revoked.signal, ...(signal ? [signal] : [])]);
-				await control(action === "start" ? `start ${args.objective}` : `${action}${args.runId ? ` ${args.runId}` : ""}`, ctx, stop, ask, present);
+				try {
+					await control(action === "start" ? "start" : `${action}${args.runId ? ` ${args.runId}` : ""}`, ctx, stop, ask, present, action === "start" ? args : undefined, Boolean(accepted));
+				} catch (error) {
+					if (!accepted && created && error.code === "AUTHORITY") {
+						created.assertCurrent(ctx);
+						proposal = created;
+						return { ...inspect(ctx), awaitingConfirmation: true, proposalId: created.id, action, expiresAt: created.expiresAt,
+							agreement: created.agreement, confirmationPrompt: created.confirmationPrompt };
+					}
+					throw error;
+				}
+				assertCurrent();
 				return inspect(ctx);
-			} finally { gate.dispose(); }
+			} finally { if (proposal?.gate !== gate) gate.dispose(); }
 		};
 		pi.registerCommand("swarm", {
 			description: "Emergency stop only: /swarm stop. Ask the main agent for all other Swarm actions.",
@@ -377,10 +432,11 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		});
 		const inspect = ctx => {
 			check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot inspect the Swarm host");
-			return { ...swarmSummary(host?.snapshot()), restorePending: Boolean(restoreLink) };
+			return { ...swarmSummary(host?.snapshot()), restorePending: Boolean(restoreLink),
+				...(proposal ? { pendingAuthorization: { proposalId: proposal.id, action: proposal.action, confirmed: proposal.confirmed, expiresAt: proposal.expiresAt } } : {}) };
 		};
 		registerMainTools(pi, {
-			control, chatControl, inspect, messages: ctx => { inspect(ctx); return host?.snapshot().run?.messages ?? []; }, history: (workerId, ctx) => {
+			control, chatControl, inspect, revoke: ctx => { inspect(ctx); cancel(); }, messages: ctx => { inspect(ctx); return host?.snapshot().run?.messages ?? []; }, history: (workerId, ctx) => {
 				inspect(ctx);
 				check(host, "STATE", "No attached Swarm run");
 				return host.history(workerId);
@@ -410,7 +466,17 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		for (const event of ["session_before_switch", "session_before_fork", "session_before_tree"]) {
 			pi.on(event, async (_event, ctx) => {
 				const result = await brake(ctx);
-				if (result.settled) progress.dispose();
+				if (result.settled) {
+					progress.dispose();
+					// Preparation without durable ownership must not strand the next session.
+					if (host && !host.snapshot().run) {
+						await host.close();
+						host = undefined;
+						owner = undefined;
+						focus?.dispose();
+						focus = undefined;
+					}
+				}
 				return { cancel: !result.settled };
 			});
 		}

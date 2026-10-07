@@ -18,15 +18,13 @@ export class WorkspaceRuntime {
 		controller.assertOwned();
 		const state = controller.snapshot();
 		check(["paused", "pausing", "stopping", "failing", "stopped", "completed", "failed"].includes(state.status), "STATE", "Attach before resuming work");
-		const files = new WorkspaceFiles(state.workspaceRoot);
 		attached.add(controller);
 		try {
-			if (!state.workspace) {
-				const inspection = await inspectCheckout(state.workspaceRoot, { signal });
-				check(!signal?.aborted, "CANCELLED", "Workspace attachment was cancelled");
-				controller.assertOwned();
-				await controller.owner("workspace.enable", { fingerprint: inspection.fingerprint });
-			}
+			const inspection = await inspectCheckout(state.workspaceRoot, { signal });
+			check(!signal?.aborted, "CANCELLED", "Workspace attachment was cancelled");
+			controller.assertOwned();
+			const files = new WorkspaceFiles(state.workspaceRoot, { submodulePaths: inspection.submodules.map(module => module.path) });
+			if (!state.workspace) await controller.owner("workspace.enable", { fingerprint: inspection.fingerprint });
 			return new WorkspaceRuntime(construction, controller, files, authorize, runner, admission);
 		} catch (error) {
 			attached.delete(controller);
@@ -121,12 +119,13 @@ export class WorkspaceRuntime {
 		return Object.freeze({
 			read: (path, call = {}, params = {}) => {
 				const context = this.#context(binding);
-				const canonical = this.#files.path(path);
-				const fingerprint = this.#files.fingerprint(path);
+				const readOptions = { allowSubmodules: true };
+				const canonical = this.#files.path(path, readOptions);
+				const fingerprint = this.#files.fingerprint(path, readOptions);
 				return this.#tools.get("read").execute(call.toolCallId ?? randomUUID(), { ...params, path: canonical }, context.signal, call.onUpdate, call.ctx).then(result => {
 					this.#check(context);
-					check(this.#files.fingerprint(canonical) === fingerprint, "STALE", "File changed while being read");
-					this.#reads.get(context.owner).set(this.#files.identity(canonical), fingerprint);
+					check(this.#files.fingerprint(canonical, readOptions) === fingerprint, "STALE", "File changed while being read");
+					this.#reads.get(context.owner).set(this.#files.identity(canonical, readOptions), fingerprint);
 					return result;
 				});
 			},

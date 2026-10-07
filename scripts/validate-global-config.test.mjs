@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -12,11 +12,20 @@ test("configuration validation follows the portable skill layout and retains saf
   const temporary = mkdtempSync(join(tmpdir(), "pi-config-validation-"));
   const fixture = join(temporary, "repository");
   try {
-    execFileSync("git", ["-c", "protocol.file.allow=always", "clone", "--quiet", "--no-hardlinks", "--single-branch", root, fixture], {
+    execFileSync("git", ["-c", "core.symlinks=true", "-c", "protocol.file.allow=always", "clone", "--quiet", "--no-hardlinks", "--single-branch", root, fixture], {
       stdio: "pipe",
     });
     execFileSync("git", ["-C", fixture, "config", "submodule..agents.url", join(root, ".agents")]);
+    execFileSync("git", ["-C", fixture, "config", "core.symlinks", "true"]);
     execFileSync("git", ["-C", fixture, "-c", "protocol.file.allow=always", "submodule", "update", "--init"], { stdio: "pipe" });
+    // Git can create dangling directory links as file links before submodules exist on Windows.
+    if (process.platform === "win32") {
+      for (const name of ["skills", "subagents", "procedures"]) {
+        const path = join(fixture, "agent", name);
+        rmSync(path);
+        symlinkSync(`../.agents/${name}`, path, "dir");
+      }
+    }
     // Exercise the working validator against an isolated copy of committed resources.
     for (const path of ["scripts/validate-global-config.mjs", ".gitignore"]) {
       copyFileSync(join(root, path), join(fixture, path));
@@ -29,14 +38,14 @@ test("configuration validation follows the portable skill layout and retains saf
     });
     await t.test("requires built-in MCP credentials to remain ignored in both layouts", () => {
       withChangedFile(fixture, ".gitignore",
-        (text) => text.replace(/^\/(?:agent\/)?mcp-auth\.json\*\n/gm, ""), () => {
+        (text) => text.replace(/^\/(?:agent\/)?mcp-auth\.json\*\r?\n/gm, ""), () => {
           assertFailure(fixture, "expected ignored path is not covered: mcp-auth.json");
           assertFailure(fixture, "expected ignored path is not covered: agent/mcp-auth.json");
         });
     });
     await t.test("requires rotated MCP logs to remain ignored in both layouts", () => {
       withChangedFile(fixture, ".gitignore",
-        (text) => text.replace(/^\/(?:agent\/)?mcp\.log\*\n/gm, ""), () => {
+        (text) => text.replace(/^\/(?:agent\/)?mcp\.log\*\r?\n/gm, ""), () => {
           assertFailure(fixture, "expected ignored path is not covered: mcp.log.1");
           assertFailure(fixture, "expected ignored path is not covered: agent/mcp.log.1");
         });

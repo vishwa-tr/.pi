@@ -1,19 +1,19 @@
-import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
+import { join } from "node:path";
+import { writeFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
-import { writeFileSync } from "node:fs";
-import { SwarmHost } from "../extensions/swarm/host.mjs";
-import { SwarmController } from "../extensions/swarm/core.mjs";
-import { reduceEvent } from "../extensions/swarm/state.mjs";
-import { openJournal } from "../extensions/swarm/store/journal.mjs";
-import { createMockRuntime } from "./sdk-env.mjs";
 import { repository } from "./helpers.mjs";
+import { createMockRuntime } from "./sdk-env.mjs";
+import { SwarmHost } from "../extensions/swarm/host.mjs";
+import { reduceEvent } from "../extensions/swarm/state.mjs";
+import { SwarmController } from "../extensions/swarm/core.mjs";
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
+import { openJournal } from "../extensions/swarm/store/journal.mjs";
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
-const approve = request => ({ approved: true, existingChanges: "preserve", reconciled: true, attestation: { kind: "user-established-settlement", evidence: "Fixture has no remaining sessions or processes" } });
+const approve = () => ({ approved: true, reconciled: true, attestation: { kind: "user-established-settlement", evidence: "Fixture has no remaining sessions or processes" } });
 async function orphanFixture(t, approval = approve) {
 	const root = repository(t); const mock = await createMockRuntime([]); const events = new EventEmitter();
 	events.on("pi-plan:query-mode", request => request.respond({ version: 1, instanceId: "mode1", revision: 1, contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "off", enforcedMode: "off", runMode: null, pendingChange: false }));
@@ -60,7 +60,7 @@ test("host restores orphan execution fenced, records user evidence, and retires 
 for (const answer of [{ approved: true, settled: true }, { approved: true, attestation: { kind: "user-established-settlement", evidence: "" } }, { approved: true, attestation: { kind: "process-missing", evidence: "No PID" } }]) {
 	test("bare or malformed settlement assertions cannot retire orphan intent", async t => {
 		let valid = false;
-		const f = await orphanFixture(t, request => valid ? approve(request) : { ...answer, existingChanges: "preserve" });
+		const f = await orphanFixture(t, request => valid ? approve(request) : answer);
 		await assert.rejects(f.host.reconcile(), { code: "UNSETTLED" });
 		assert.equal(f.host.snapshot().run.workspace.operations.length, 1);
 		assert.equal(f.host.snapshot().run.settlementAttestations, undefined);

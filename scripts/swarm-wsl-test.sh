@@ -6,7 +6,7 @@
 #
 #   WORKTREE   Windows git worktree to test (default: the current repository root).
 #              Its HEAD commit, uncommitted diff and untracked files are all included.
-#   --pty      Also run test/terminal/run.py, production.py and native.py.
+#   --pty      Also run test/terminal/run.py, production.py, native.py and entry.py.
 #   --distro   WSL distribution (default: Ubuntu-24.04).
 #
 # Prerequisites inside WSL: git, python3, Node >= 22.19 at ~/.local/share/pi-node/current,

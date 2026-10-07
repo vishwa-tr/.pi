@@ -32,9 +32,9 @@ for (const broken of ['malformed', 'duplicate']) test(`${broken} Plan never beco
  assert.throws(() => gate.capture()); events.removeAllListeners('pi-plan:query-mode'); assert.throws(() => gate.capture()); gate.dispose();
 });
 
-for (const allow of [true, false, undefined]) test(`standalone native write uses explicit fallback approval (${allow})`, async t => {
+for (const codingTools of [undefined, ['write'], ['read']]) test(`standalone native write uses the approved bounded tool selection (${codingTools ?? 'defaults'}) without Swarm prompts`, async t => {
  const project = join(repository(t), 'plain'); mkdirSync(project);
- let confirmations = 0; const agreements = [];
+ const allow = codingTools === undefined || codingTools.includes('write'); const agreements = [];
  const mock = await createMockRuntime(({ context }) => {
   const results = context.messages.filter(message => message.role === 'toolResult');
   const call = (name, args) => ({ toolCalls: [{ id: `call-${results.length}`, name, arguments: args }] });
@@ -45,27 +45,26 @@ for (const allow of [true, false, undefined]) test(`standalone native write uses
   return { text: 'Turn finished' };
  });
  const host = new SwarmHost({ events: new EventEmitter(), sessionId: 'owner', modelRuntime: mock.modelRuntime,
-  mainModel: mock.model, tickIntervalMs: 0, requestApproval(request) { agreements.push(request); return approve(); },
-  ...(allow === undefined ? {} : { confirm: async (_title, body) => { confirmations++; assert.match(body, /result.txt/); return allow; } }) });
+  mainModel: mock.model, tickIntervalMs: 0, requestApproval(request) { agreements.push(request); return approve(); } });
  t.after(() => host.close());
- await host.launch({ workspace: project, runId: 'standalone', specification });
+ await host.launch({ workspace: project, runId: 'standalone', specification: { ...specification, ...(codingTools ? { codingTools } : {}) } });
  await host.recruit({ id: 'builder', specialization: 'Build', brief: 'Write file', reason: 'Independent task' });
  host.wake('builder'); await host.idle();
- assert.equal(existsSync(join(project, 'result.txt')), allow === true);
- assert.equal(confirmations, allow === undefined ? 0 : 1);
+ assert.equal(existsSync(join(project, 'result.txt')), allow);
+ if (codingTools) assert.deepEqual(host.snapshot().run.sessions.codingTools, codingTools);
  assert.equal(existsSync(join(project, '.git')), false); assert.equal(existsSync(join(project, '.gitignore')), false);
  assert.match(agreements[0].integrations.mode, /none installed/);
- assert.match(agreements[0].integrations.confirmations, /every edit/);
+ assert.match(agreements[0].integrations.confirmations, /Selected coding tools are authorized within this bounded run; no Swarm operation prompts/);
  if (allow) assert.equal(readFileSync(join(project, 'result.txt'), 'utf8'), 'native write');
  const write = mock.calls.at(-1).context.messages.find(message => message.role === 'toolResult' && message.toolName === 'write');
  assert.equal(Boolean(write.isError), !allow);
 });
 
-test('duplicate Safety claimants deny before approval and never invoke standalone confirmation', async t => {
+test('duplicate Safety claimants deny before approval and never fall back to bounded run policy', async t => {
  const root = repository(t); const mock = await createMockRuntime([]); const events = new EventEmitter();
  for (let i = 0; i < 2; i++) events.on('swarm:confirm-request', ({ claim }) => claim(() => assert.fail('must not invoke')));
  const host = new SwarmHost({ events, sessionId: 'owner', modelRuntime: mock.modelRuntime, mainModel: mock.model,
-  requestApproval: () => assert.fail('invalid integration'), confirm: () => assert.fail('must not fall back') });
+  requestApproval: () => assert.fail('invalid integration') });
  await assert.rejects(host.launch({ workspace: root, runId: 'duplicate', specification }), { code: 'AUTHORITY' }); await host.close();
 });
 

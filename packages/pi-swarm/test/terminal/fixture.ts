@@ -34,10 +34,10 @@ export default async function (pi) {
 		selectedMode: "off", enforcedMode: "off", runMode: null, pendingChange: false,
 	}));
 	pi.on("session_start", (event, ctx) => { context = ctx; record({ type: "start", reason: event.reason }); });
-	const unsubscribeSafety = pi.events.on("swarm:confirm-request", envelope => envelope.claim(async request => ({
-		approved: await context.ui.confirm("Fixture shell permission", "Allow simulated uncertain operation? No process will be spawned.", { signal: request.signal }),
-	})));
-	pi.on("session_shutdown", () => { unsubscribe(); unsubscribeSafety(); record({ type: "shutdown" }); });
+	// No Safety provider here: approved bounded Swarm policy must authorize the
+	// selected worker tools without Swarm-owned operation/lifecycle dialogs.
+	// production-fixture separately verifies independently enabled pi-safety.
+	pi.on("session_shutdown", () => { unsubscribe(); record({ type: "shutdown" }); });
 	// Observe real methods without replacing native dialogs or command dispatch.
 	const instrumented = Object.create(pi);
 	instrumented.registerCommand = (name, definition) => pi.registerCommand(name, {

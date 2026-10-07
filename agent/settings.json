@@ -1,7 +1,7 @@
 {
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6.1-sol",
-  "defaultThinkingLevel": "medium",
+  "defaultThinkingLevel": "low",
   "theme": "void-agent-gruvbox",
   "packages": [
     "./packages/pi-teams",
@@ -40,6 +40,6 @@
   "skills": [
     "./skills"
   ],
-  "lastChangelogVersion": "0.85.1",
+  "lastChangelogVersion": "1.0.4",
   "enableInstallTelemetry": false
 }

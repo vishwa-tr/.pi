@@ -1,7 +1,14 @@
+import {
+	lstatSync,
+	opendirSync,
+	readdirSync,
+	readlinkSync,
+	realpathSync,
+	readFileSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { requireCondition as check } from "./errors.mjs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 
 export function hash(value) { return createHash("sha256").update(value).digest("hex"); }
 
@@ -10,7 +17,8 @@ export class WorkspaceFiles {
 	#root;
 	#identity;
 	#protected;
-	constructor(root, { protectedPaths = [] } = {}) {
+	#submodules;
+	constructor(root, { protectedPaths = [], submodulePaths = [] } = {}) {
 		check(typeof root === "string" && isAbsolute(root), "INPUT", "Expected absolute workspace root");
 		this.#root = realpathSync(root);
 		check(this.#root === resolve(root), "PATH", "Workspace aliases are unsupported");
@@ -18,8 +26,9 @@ export class WorkspaceFiles {
 		check(stat.isDirectory(), "PATH", "Workspace must be a directory");
 		this.#identity = [stat.dev, stat.ino, stat.birthtimeMs].join(":");
 		this.#protected = protectedPaths;
+		this.#submodules = submodulePaths;
 	}
-	path(path) {
+	path(path, { allowSubmodules = false } = {}) {
 		this.#checkRoot();
 		check(typeof path === "string" && path.length > 0 && !path.includes("\0"), "INPUT", "Invalid workspace path");
 		const parts = (process.platform === "win32" ? path.toLowerCase() : path).replaceAll("\\", "/").split("/");
@@ -29,42 +38,79 @@ export class WorkspaceFiles {
 		const protectedIdentity = value => process.platform === "win32" ? value.replaceAll("\\", "/").toLowerCase() : value;
 		const identity = protectedIdentity(normalized);
 		check(!this.#protected.some(part => identity === protectedIdentity(part) || identity.startsWith(`${protectedIdentity(part)}/`)), "PATH", "Protected path");
+		check(allowSubmodules || !this.#submodules.some(part => identity === protectedIdentity(part) || identity.startsWith(`${protectedIdentity(part)}/`)),
+			"PATH", "Submodule mutations require a separate workspace");
 		let current = this.#root;
 		const components = normalized.split(sep);
+		checkComponentAliases(components);
 		for (let i = 0; i < components.length; i++) {
 			current = join(current, components[i]);
 			const stat = statOrMissing(current);
 			if (!stat) break;
 			check(!stat.isSymbolicLink(), "PATH", "Workspace file aliases are unsupported");
+			checkFilesystemSpelling(current);
 			check(i === components.length - 1 ? stat.isFile() && stat.nlink === 1 : stat.isDirectory(), "PATH", "Expected ordinary file and directory parents");
+			check(allowSubmodules || !stat.isDirectory() || !statOrMissing(join(current, ".git")),
+				"PATH", "Nested repository mutations require a separate workspace");
 		}
 		return normalized.split(sep).join("/");
 	}
-	identity(path) {
-		const canonical = this.path(path);
+	identity(path, options) {
+		const canonical = this.path(path, options);
 		// Conservatively serialize case aliases on Windows, without changing IO spelling.
 		return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 	}
-	fingerprint(path) {
-		const normalized = this.path(path);
+	fingerprint(path, options) {
+		const normalized = this.path(path, options);
 		return hash(JSON.stringify(capture(join(this.#root, normalized))));
 	}
-	snapshot({ includeGit = true, paths } = {}) {
+	/** Validate a gitlink before running Git there; never follow directory aliases. */
+	submoduleRoot(path) {
+		this.#checkRoot();
+		const stat = scopedStat(this.#root, path, true);
+		if (!stat) return null;
+		check(stat.isDirectory() && !stat.isSymbolicLink(), "PATH", "Submodule checkout must be an ordinary directory");
+		const root = join(this.#root, path);
+		const control = statOrMissing(join(root, ".git"));
+		if (!control) {
+			const directory = opendirSync(root);
+			try { check(directory.readSync() === null, "PATH", "Uninitialized submodule must be empty"); }
+			finally { directory.closeSync(); }
+			return null;
+		}
+		check(!control.isSymbolicLink() && (control.isFile() || control.isDirectory()), "PATH", "Submodule Git metadata must not be aliased");
+		return root;
+	}
+	snapshot(options = {}) {
+		const fingerprint = this.#captureSnapshot(options);
+		check(this.#captureSnapshot(options) === fingerprint, "STALE", "Workspace changed during snapshot");
+		return fingerprint;
+	}
+	#captureSnapshot({ includeGit = true, paths, submodules = [] } = {}) {
 		this.#checkRoot();
 		if (paths !== undefined) {
 			check(Array.isArray(paths), "INPUT", "Invalid snapshot file scope");
 			for (const path of paths) {
 				const parts = path.replaceAll("\\", "/").split("/");
-				check(path && !isAbsolute(path) && !parts.some(part => ["..", ".git", ""].includes(part)), "PATH", "Invalid snapshot path");
+				check(path && !isAbsolute(path) && !parts.some(part => ["..", ".git", "", "."].includes(process.platform === "win32" ? part.toLowerCase() : part)), "PATH", "Invalid snapshot path");
+				checkComponentAliases(parts);
 			}
 		}
-		const contents = () => paths === undefined ? capture(this.#root, true)
-			: paths.map(path => [path, captureScoped(this.#root, path)]);
-		const snapshot = () => hash(JSON.stringify([contents(), includeGit ? gitState(this.#root) : null]));
-		const fingerprint = snapshot();
-		check(snapshot() === fingerprint, "STALE", "Workspace changed during snapshot");
+		const gitlinks = new Map(submodules.map(module => [module.path, module]));
+		const contents = paths === undefined ? capture(this.#root, true)
+			: paths.map(path => [path, gitlinks.has(path) ? this.#captureSubmodule(gitlinks.get(path)) : captureScoped(this.#root, path)]);
+		const fingerprint = hash(JSON.stringify([contents, includeGit ? gitState(this.#root) : null]));
 		this.#checkRoot();
 		return fingerprint;
+	}
+	#captureSubmodule(module) {
+		const root = this.submoduleRoot(module.path);
+		check(Boolean(root) === (module.checkout !== null), "STALE", "Submodule initialization changed during inspection");
+		// The public snapshot makes two full-tree passes; nested repositories make
+		// one pass each so verification grows linearly rather than doubling per level.
+		const fingerprint = root ? new WorkspaceFiles(root).#captureSnapshot({ paths: module.checkout.paths, submodules: module.checkout.submodules })
+			: scopedStat(this.#root, module.path, true)?.mode ?? null;
+		return ["submodule", module.entries, module.head, fingerprint];
 	}
 	#checkRoot() {
 		const stat = lstatSync(this.#root);
@@ -101,16 +147,34 @@ function gitState(root) {
 }
 
 function captureScoped(root, path) {
+	if (!scopedStat(root, path)) return null;
+	return capture(join(root, path));
+}
+
+function scopedStat(root, path, allowDirectory = false) {
 	const parts = path.replaceAll("\\", "/").split("/");
+	check(path && !isAbsolute(path) && !parts.some(part => ["..", ".git", "", "."].includes(process.platform === "win32" ? part.toLowerCase() : part)), "PATH", "Invalid snapshot path");
+	checkComponentAliases(parts);
 	let current = root;
 	for (let i = 0; i < parts.length; i++) {
 		current = join(current, parts[i]);
 		const stat = statOrMissing(current);
 		if (!stat) return null;
 		check(i === parts.length - 1 || stat.isDirectory() && !stat.isSymbolicLink(), "PATH", "Snapshot directory aliases are unsupported");
-		// A Git file list can include a submodule directory. Do not recursively
-		// hash its ignored tree while claiming a tracked-file-only scope.
-		check(i !== parts.length - 1 || !stat.isDirectory(), "PATH", "Nested repository directories require a separate workspace");
+		if (!stat.isSymbolicLink()) checkFilesystemSpelling(current);
+		// Only Git-identified submodule entries may name directories in a file scope.
+		check(i !== parts.length - 1 || allowDirectory || !stat.isDirectory(), "PATH", "Unexpected directory in snapshot file scope");
+		if (i === parts.length - 1) return stat;
 	}
-	return capture(current);
+}
+
+function checkComponentAliases(parts) {
+	if (process.platform !== "win32") return;
+	check(!parts.some(part => /[. ]$|:/.test(part)), "PATH", "Windows path component aliases are unsupported");
+}
+
+function checkFilesystemSpelling(path) {
+	if (process.platform !== "win32") return;
+	// GetFinalPathName expands existing DOS short names; case-only aliases remain valid.
+	check(realpathSync.native(path).toLowerCase() === resolve(path).toLowerCase(), "PATH", "Filesystem path aliases are unsupported");
 }

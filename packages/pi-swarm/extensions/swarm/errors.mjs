@@ -23,7 +23,7 @@ export async function inPhase(phase, operation) {
 
 const FAILURE_MESSAGES = {
 	INPUT: "Check the tool arguments and agreement fields.",
-	UI: "Interactive Pi dialogs are required for this action.",
+	UI: "Interactive owner chat confirmation is required for this action.",
 	SESSION: "A persisted owning session is required.",
 	MODEL: "Select an available physical model before starting.",
 	MODE_DENIED: "Use unrestricted mode and wait for policy readiness.",

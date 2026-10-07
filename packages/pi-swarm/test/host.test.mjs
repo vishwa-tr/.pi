@@ -1,4 +1,3 @@
-import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -8,9 +7,10 @@ import { createMockRuntime } from "./sdk-env.mjs";
 import { SwarmHost } from "../extensions/swarm/host.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 
 const code = expected => error => error.code === expected;
-const approved = request => ({ approved: true, existingChanges: "preserve", reconciled: request.requiresReconciliation });
+const approved = request => ({ approved: true, reconciled: request.requiresReconciliation });
 const specification = { objective: "Implement invitations", criteria: ["Invitations work"], scope: ["src"] };
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
 function modeBus() {
@@ -24,7 +24,7 @@ async function fixture(t, options = {}) {
 	const bus = modeBus();
 	const mock = await createMockRuntime(options.script ?? []);
 	const host = new SwarmHost({ events: bus.events, sessionId: "owner1", requestApproval: options.approval ?? approved, modelRuntime: mock.modelRuntime, mainModel: mock.model, tickIntervalMs: 0, approvalTimeoutMs: options.timeout ?? 1000, safetyTimeoutMs: 1000 });
-	const launch = () => host.launch({ workspace: root, runId: "run1", specification });
+	const launch = () => host.launch({ workspace: root, runId: "run1", specification: { ...specification, ...options.specification } });
 	return { root, ...bus, mock, host, launch };
 }
 
@@ -52,7 +52,12 @@ test("launch waits for explicit human approval before creating storage or sessio
 	const f = await fixture(t, { approval: request => { presented.resolve(request); return decision.promise; } });
 	const launch = f.launch(); const request = await presented.promise;
 	assert.equal(request.action, "launch");
-	assert.equal(request.requiresExistingWorkDecision, true);
+	assert.equal(request.requiresExistingWorkDecision, undefined);
+	assert.equal(request.existingChanges, "preserve");
+	assert.match(request.workspaceFingerprint, /^[a-f0-9]{64}$/);
+	assert.equal(request.runRevision, null);
+	assert.match(request.integrations.confirmations, /Selected coding tools.*no Swarm operation prompts/);
+	assert.equal(Object.isFrozen(request.integrations), true);
 	assert.equal(f.mock.calls.length, 0);
 	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
 	decision.resolve(approved(request)); await launch;
@@ -63,7 +68,7 @@ test("launch waits for explicit human approval before creating storage or sessio
 });
 
 for (const action of ["pause", "close"]) {
-	test(`${action} cancels pre-dialog inspection without authority and a new host can request fresh approval`, async t => {
+	test(`${action} cancels pre-proposal inspection without authority and a new host can request fresh approval`, async t => {
 		let prompts = 0;
 		const f = await fixture(t, { approval: request => { prompts++; return approved(request); } });
 		const rejected = assert.rejects(f.launch(), code("CANCELLED"));
@@ -83,12 +88,34 @@ for (const action of ["pause", "close"]) {
 	});
 }
 
-test("dirty checkout requires an explicit preservation decision", async t => {
-	const f = await fixture(t, { approval: () => ({ approved: true }) });
+test("dirty checkout is preserved by default across launch, resume, restart and close", async t => {
+	const requests = [];
+	const f = await fixture(t, { approval: request => { requests.push(request); return approved(request); } });
+	const path = join(f.root, "user.txt");
+	writeFileSync(path, "user work\n");
+	await f.launch();
+	assert.equal(readFileSync(path, "utf8"), "user work\n");
+	await f.host.pause();
+	writeFileSync(path, "user work plus later changes\n");
+	const pausedRevision = f.host.snapshot().run.revision;
+	await f.host.resume();
+	assert.equal(requests.at(-1).runRevision, pausedRevision);
+	await f.host.pause({ stop: true });
+	await f.host.resume({ restart: true });
+	assert.deepEqual(requests.map(request => request.action), ["launch", "resume", "restart"]);
+	assert.ok(requests.every(request => request.existingChanges === "preserve" && request.requiresExistingWorkDecision === undefined));
+	assert.ok(f.host.snapshot().run.hostApprovals.every(approval => approval.existingChanges === "preserve"));
+	await f.host.close();
+	assert.equal(readFileSync(path, "utf8"), "user work plus later changes\n");
+});
+
+test("refusing a proposal preserves dirty work without creating run storage", async t => {
+	const f = await fixture(t, { approval: () => ({ approved: false }) });
 	writeFileSync(join(f.root, "user.txt"), "user work\n");
-	await assert.rejects(f.launch(), code("DIRTY"));
+	await assert.rejects(f.launch(), code("AUTHORITY"));
 	assert.equal(readFileSync(join(f.root, "user.txt"), "utf8"), "user work\n");
 	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
+	assert.equal(f.mock.calls.length, 0);
 	await f.host.close();
 });
 
@@ -117,7 +144,7 @@ test("mode ABA and late approval cannot revive cancelled launch", async t => {
 	const rejected = assert.rejects(f.launch()); await presented.promise;
 	f.change({ selectedMode: "plan", enforcedMode: "plan" });
 	f.change({ selectedMode: "off", enforcedMode: "off" });
-	decision.resolve({ approved: true, existingChanges: "preserve" }); await rejected;
+	decision.resolve({ approved: true }); await rejected;
 	assert.equal(existsSync(join(prepareLayout(f.root, "run1").stateRoot)), false);
 	assert.equal(f.mock.calls.length, 0);
 	await f.host.close();
@@ -159,7 +186,7 @@ test("approval timeout aborts its provider and ignores later completion", async 
 	const f = await fixture(t, { timeout: 5, approval: request => { signal = request.signal; return decision.promise; } });
 	await assert.rejects(f.launch(), code("CANCELLED"));
 	assert.equal(signal.aborted, true);
-	decision.resolve({ approved: true, existingChanges: "preserve" });
+	decision.resolve({ approved: true });
 	await Promise.resolve();
 	assert.equal(f.host.snapshot().run, null);
 	await f.host.close();
@@ -292,11 +319,74 @@ async function wakeBuilder(f) {
 	f.host.wake("builder");
 }
 
-test("missing safety provider denies actual SDK shell execution", async t => {
+test("without safety, the approved bounded tool policy authorizes SDK shell execution without prompts", async t => {
 	const f = await fixture(t, { script: shellScript }); await f.launch(); await wakeBuilder(f); await f.host.idle();
-	assert.equal(existsSync(join(f.root, "marker")), false);
+	assert.equal(readFileSync(join(f.root, "marker"), "utf8"), "unsafe");
 	assert.equal(f.host.snapshot().run.workspace.operations.length, 0);
-	assert.ok(f.mock.calls.some(call => call.context.messages.some(message => message.role === "toolResult" && message.isError)));
+	assert.equal(f.host.snapshot().run.workspace.receipts.at(-1).outcome, "succeeded");
+	await f.host.close();
+});
+
+test("a read-only tool selection cannot acquire shell authorization", async t => {
+	const f = await fixture(t, { script: shellScript, specification: { codingTools: ["read"] } });
+	await f.launch(); await wakeBuilder(f); await f.host.idle();
+	assert.equal(existsSync(join(f.root, "marker")), false);
+	assert.equal(f.host.snapshot().run.workspace.receipts.length, 0);
+	assert.deepEqual(f.host.snapshot().run.sessions.codingTools, ["read"]);
+	assert.ok(f.mock.calls.some(call => call.context.messages.some(message => message.role === "toolResult" && message.toolName === "bash" && message.isError)));
+	await f.host.close();
+});
+
+for (const policy of ["deny", "duplicate", "malformed"]) {
+	test(`an independently installed safety provider ${policy} never falls back to run authorization`, async t => {
+		const f = await fixture(t, { script: shellScript });
+		await f.launch();
+		let calls = 0;
+		f.events.on("swarm:confirm-request", request => {
+			const provider = () => { calls++; return { approved: false }; };
+			request.claim(policy === "malformed" ? {} : provider);
+			if (policy === "duplicate") request.claim(provider);
+		});
+		await wakeBuilder(f); await f.host.idle();
+		assert.equal(existsSync(join(f.root, "marker")), false);
+		assert.equal(f.host.snapshot().run.workspace.operations.length, 0);
+		assert.equal(calls, policy === "deny" ? 1 : 0);
+		await f.host.close();
+	});
+}
+
+test("an observed safety provider disappearing cannot restore policy fallback", async t => {
+	const script = [...shellScript.slice(0, 2),
+		{ toolCalls: [{ id: "first", name: "bash", arguments: { command: "printf approved > first-marker" } }] },
+		{ toolCalls: [{ id: "second", name: "bash", arguments: { command: "printf bypass > second-marker" } }] },
+		{ text: "Settled" }];
+	const f = await fixture(t, { script });
+	await f.launch();
+	f.events.on("swarm:confirm-request", request => request.claim(() => {
+		f.events.removeAllListeners("swarm:confirm-request");
+		return { approved: true };
+	}));
+	await wakeBuilder(f); await f.host.idle();
+	assert.equal(readFileSync(join(f.root, "first-marker"), "utf8"), "approved");
+	assert.equal(existsSync(join(f.root, "second-marker")), false);
+	assert.equal(f.host.snapshot().run.workspace.receipts.length, 1);
+	await f.host.pause();
+	await assert.rejects(f.host.resume(), code("AUTHORITY"));
+	await f.host.close();
+});
+
+test("stop cancels external safety approval and late approval cannot run a command", async t => {
+	const decision = deferred(); const presented = deferred();
+	const f = await fixture(t, { script: shellScript });
+	f.events.on("swarm:confirm-request", request => request.claim(value => { presented.resolve(value); return decision.promise; }));
+	await f.launch(); await wakeBuilder(f);
+	const request = await presented.promise;
+	await f.host.pause({ stop: true });
+	assert.equal(request.signal.aborted, true);
+	decision.resolve({ approved: true });
+	await f.host.idle();
+	assert.equal(existsSync(join(f.root, "marker")), false);
+	assert.equal(f.host.snapshot().run.status, "stopped");
 	await f.host.close();
 });
 

@@ -111,6 +111,13 @@ class Terminal:
                 self.send("\x1b[1;1R")
 
     def expect(self, text, timeout=15):
+        if re.fullmatch(r"(?:LAUNCH|RESUME|RESTART|RECONCILE) \((?:mock only|Pi native provider)\)", text):
+            # A complete chat packet is taller than the viewport. Pi may initially
+            # emit only its footer; page the real transcript before checking its header.
+            self.expect("Independently establish that ALL" if text.startswith("RECONCILE ")
+                        else "Shall I proceed with this exact Swarm configuration?", timeout)
+            self.read_packet(text)
+            return
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             plain = ANSI.sub("", self.output[self.cursor:])
@@ -170,14 +177,14 @@ class Terminal:
         self.send("\r")
 
     def read_packet(self, title):
-        """With the native dialog open, page Pi's fullscreen transcript up to the packet shown
-        before it, keeping every page, then page back. Stores it without wrap whitespace."""
+        """Page the normal chat transcript through the complete proposal before
+        replying, keeping every page. Stores the packet without wrap whitespace."""
         header = compact(f"Swarm approval packet: {title}")
         seen = ANSI.sub("", self.output[self.last_expect_start:])
         pages = 0
         while header not in compact(seen):
             if pages == 60:
-                raise AssertionError(f"Approval packet {title!r} not found above its dialog: {ANSI.sub('', self.output)[-6000:]}")
+                raise AssertionError(f"Chat proposal {title!r} not found in transcript: {ANSI.sub('', self.output)[-6000:]}")
             start = len(self.output)
             self.send("\x1b[5~")
             pages += 1
@@ -284,29 +291,18 @@ def main():
             terminal.expect("Use /swarm stop")
             assert not (project / ".swarms").exists()
             terminal.resize(60, 24)
-            terminal.line("/fixture-swarm start Terminal goal")
+            configuration = {"objective": "Edited terminal goal", "criteria": ["Observable outcome"],
+                             "scope": ["Only disposable project"],
+                             "limits": {"agents": 3, "active": 2, "tasks": 10, "attempts": 2, "durationMs": 300000}}
+            terminal.line("/fixture-swarm-config " + json.dumps(configuration))
             terminal.expect("LAUNCH (mock only)")
-            terminal.choose(1)
-            terminal.expect("Edit agreement field")
-            terminal.choose(1)
-            terminal.expect("New objective as JSON")
-            terminal.line('"Edited terminal goal"')
-            terminal.expect("LAUNCH (mock only)")
-            for index, field, value in [(2, "criteria", '["Observable outcome"]'),
-                                        (3, "scope", '["Only disposable project"]')]:
-                terminal.choose(1)
-                terminal.expect("Edit agreement field")
-                terminal.choose(index)
-                terminal.expect(f"New {field} as JSON")
-                terminal.line(value)
-                terminal.expect("LAUNCH (mock only)")
-            # The edited agreement is shown in full before the final decision.
+            # The main-agent-selected agreement is shown in normal chat, in full.
             terminal.read_packet("LAUNCH (mock only)")
-            for value in ('"Edited terminal goal"', '"Observable outcome"', '"Only disposable project"'):
-                assert compact(value) in terminal.last_packet, f"Edited agreement not shown: {value}"
-            terminal.choose(2)
-            terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
+            for value in ('"Edited terminal goal"', '"Observable outcome"', '"Only disposable project"', '"agents": 3'):
+                assert compact(value) in terminal.last_packet, f"Configuration not shown: {value}"
+            assert not any(event["type"] == "worker-start" for event in events()), "No execution before owner chat confirmation"
+            terminal.line("yes")
+            terminal.expect("Fixture chat confirmation applied")
             terminal.expect_status("running")
             wait_event("worker-start")
             terminal.line("/fixture-swarm dashboard")
@@ -327,11 +323,8 @@ def main():
             terminal.expect_status("paused")
             terminal.line("/fixture-swarm resume")
             terminal.expect("RESUME (mock only)")
-            terminal.choose(1)
-            terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
-            terminal.expect("Workspace reconciliation")
-            terminal.choose(1)
+            terminal.line("yes")
+            terminal.expect("Fixture chat confirmation applied")
             terminal.expect_status("running")
             wait_event("worker-start", 2)
             terminal.line("/reload")
@@ -349,11 +342,8 @@ def main():
             time.sleep(0.2)
             terminal.line("/fixture-swarm resume")
             terminal.expect("RESUME (mock only)")
-            terminal.choose(1)
-            terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
-            terminal.expect("Workspace reconciliation")
-            terminal.choose(1)
+            terminal.line("yes")
+            terminal.expect("Fixture chat confirmation applied")
             wait_event("worker-start", 3)
             terminal.line("/fixture-swarm dashboard")
             terminal.expect("Swarm · running")
@@ -370,13 +360,8 @@ def main():
             terminal.expect("Uncertain fixture armed")
             terminal.line("/fixture-swarm restart")
             terminal.expect("RESTART (mock only)")
-            terminal.choose(1)
-            terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
-            terminal.expect("Workspace reconciliation")
-            terminal.choose(1)
-            terminal.expect("Fixture shell permission")
-            terminal.choose(0)
+            terminal.line("yes")
+            terminal.expect("Fixture chat confirmation applied")
             wait_event("uncertain-runner")
             time.sleep(0.2)
             # Recovery must be navigable at ordinary terminal dimensions.
@@ -387,16 +372,10 @@ def main():
             recovery_packet = terminal.last_packet
             assert '"operations"' in recovery_packet and '"turns"' in recovery_packet
             assert '"liveUncertainIds"' in recovery_packet
-            terminal.choose(1)
-            terminal.expect("Preserve and proceed?")
-            terminal.choose(1)
-            terminal.expect("Describe how you independently established")
-            terminal.line("Fixture runner spawned no process; its promise returned unsettled by design.")
-            terminal.expect("Attest settlement")
-            terminal.read_packet("Attest settlement")
-            evidence_packet = terminal.last_packet
+            terminal.line("I confirm settlement: Fixture runner spawned no process; its promise returned unsettled by design.")
+            terminal.expect("Fixture chat confirmation applied")
+            evidence_packet = compact(ANSI.sub("", terminal.output))
             assert compact("Fixture runner spawned no process") in evidence_packet
-            terminal.choose(1)
             # The durable attestation is asserted below; fullscreen may clip notifications.
             time.sleep(0.3)
             terminal.line("/fixture-swarm status")
@@ -422,7 +401,7 @@ def main():
             finishes = [event for event in journal if event["type"] == "workspace.finish"]
             assert len(finishes) == 1 and finishes[0]["payload"]["outcome"] == "unknown"
             assert not any(event["type"] == "run.complete" for event in journal), "Stopped is not completed"
-            print("PASS: native cancellation, 60-column launch/edit/preservation, live dashboard refresh/history/pause/resume/stop, streaming reload, restart, uncertain-operation attestation")
+            print("PASS: 60-column full configuration and owner chat consent without Swarm dialogs, dashboard/history/pause/resume/stop, offline reload, restart, uncertain-operation chat attestation")
         finally:
             terminal.close()
 

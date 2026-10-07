@@ -23,6 +23,12 @@ Use a deterministic controller for scheduling, ownership, persistence, limits, a
 
 ### Decision status
 
+**Current lifecycle workflow:** the chat-based launch and preservation decisions below
+supersede earlier Swarm confirmation-dialog and separate dirty-work-disposition requirements.
+Earlier implementation and test sections remain historical records, not verification of
+this migration. See the [package README](../../../../../packages/pi-swarm/README.md)
+for the current tool contract, recovery steps and verification commands.
+
 **Confirmed recruitment policy:** agents can recruit peers independently within user-approved run limits, without main-agent approval for each recruitment. The extension enforces the limits; agents cannot raise them. Exceeding them requires explicit user approval. Defaults are confirmed in section 4.6.
 
 **Confirmed specialist reuse policy:** prefer an existing suitable specialist. Before recruiting another, check current work, queued work, task dependencies, likely file overlap, and whether enough independent work exists to benefit from parallel execution. Require a concrete justification for another specialist. Being busy alone is insufficient; do not use a repeated-busy-check count or arbitrary busy threshold. Another specialist is allowed for useful, independent parallel work within approved limits.
@@ -54,7 +60,7 @@ Record decisions in this document as discussion proceeds and update affected sec
 
 **Confirmed remaining guardrails:** default to a configurable ceiling of 100 tasks per execution cycle. Reaching it blocks new task creation and requests user authorization for an increase; existing work may continue. Restart resets the allowance, with carried-over unfinished tasks counting toward the new cycle while completed historical tasks remain recorded without consuming its allowance. Do not impose fixed model-response counts per assignment or across the run; use the approved runtime, task-attempt, and stalled-work policies instead.
 
-**Confirmed launch experience:** clarify ambiguous requests with focused questions, then present one user-approved launch summary containing the objective, acceptance criteria, scope and exclusions, model/thinking selection, and configured limits. Resolve handling of pre-existing uncommitted changes with the user before starting. Allow the user to adjust the summary. After approval, the swarm investigates, decomposes the objective, and proceeds without a second planning checkpoint; the user need not design its task list.
+**Confirmed launch experience:** clarify ambiguous requests with focused questions, choose sensible settings, and explain the complete objective and configuration in chat: acceptance criteria, scope and exclusions, model/thinking selection, limits, outbound context, integrations and existing-work preservation. Ask for explicit user confirmation in chat before worker execution; Swarm opens no confirmation dialog. Allow changes to the proposal before confirmation. Model output, tool arguments and worker mail cannot supply user consent. After approval, the swarm investigates, decomposes the objective, and proceeds without a second planning checkpoint; the user need not design its task list. Resume, restart and recovery also use chat, retaining fresh authorization, ownership checks and explicit settlement evidence where required. Without a Safety provider, the confirmed bounded run policy authorizes selected worker coding tools; independently enabled Safety policy is not bypassed.
 
 **Confirmed restart eligibility and safeguards:** paused, stopped, completed, and failed runs support explicit user-authorized restart. Restart begins a fresh execution cycle with reset limit allowances while preserving history, agent context, and completed work; resume only continues a paused run with remaining allowances. Keep completed tasks completed unless relevant follow-up work requires reopening them, and confirm scope changes. Restart must refuse to proceed while prior execution remains unsettled, another run owns the checkout, or saved state is corrupted; resolve those conditions first. Restart is not a bypass for ownership, state validation, or cancellation safeguards.
 
@@ -62,7 +68,7 @@ Record decisions in this document as discussion proceeds and update affected sec
 
 **Confirmed blocker policy:** a local blocker pauses the affected task, not independent work. Record the blocker, ask the relevant peer, and either take another suitable task or wait without occupying an execution slot. Decisions requiring user authorization, such as scope expansion or destructive migration approval, must be escalated rather than guessed. A run-wide blocker pauses the swarm with a clear explanation of the needed decision. Repeated failed attempts escalate instead of retrying indefinitely; the default task-attempt limit is three; other escalation thresholds remain to be decided.
 
-**Confirmed pre-existing-change policy:** if launch preflight finds uncommitted changes, present the situation and ask the user how to proceed before dispatching swarm work. Do not automatically continue on unaffected files or infer that existing changes belong to the objective. Preserve user work and the index; no automatic stash, reset, discard, or commit. The exact choice presentation remains to be designed.
+**Confirmed pre-existing-change policy:** disclose existing files and uncommitted changes in the chat proposal and preserve them by default, without a separate disposition question. Do not infer that existing changes belong to the objective; unrelated work stays outside the approved scope. Preserve user work and the index; no automatic stash, reset, discard, commit or push. Conflicting changes or unclear authority still require a focused clarification, not cleanup.
 
 **Confirmed external-edit handling:** reject an agent’s stale edit if the target changed after its read. Have the agent reread and reassess before continuing; incorporate external changes only when safe. If changes conflict or user intent is unclear, block the affected task and ask the user. Never automatically undo user edits to restore an expected version. This is stale-state detection, not an operating-system lock against external writers.
 
@@ -311,7 +317,7 @@ Do not claim another global shortcut in v1. Put pause and stop controls prominen
 
 | Tool | Inputs and behavior |
 |---|---|
-| `swarm_start` | Objective, acceptance criteria, scope paths/exclusions, model/thinking selection, and limits. Clarify ambiguity first; present one editable approval summary and resolve existing-change handling before dispatch. Approval authorizes autonomous investigation, decomposition, and execution within that agreement, without a second planning checkpoint. |
+| `swarm_start` | Prepare the complete objective, acceptance criteria, scope and limits as a chat proposal using sensible settings and the current host model/thinking selection. Disclose outbound context, integrations and existing work preserved by default. Wait for explicit user confirmation tied to that proposal before dispatch; do not use a Swarm confirmation dialog or ask for a separate existing-work disposition. Approval authorizes autonomous investigation, decomposition, and execution within that agreement, without a second planning checkpoint. |
 | `swarm_status` | Run summary, task board, generated specializations, workers, claims, limits, or bounded transcript tail. |
 | `swarm_await` | Explicit run ID, optional task IDs, bounded timeout. Return completed, attention, paused, stopped, failed, or timeout. |
 | `swarm_control` | Pause, stop, or steer within the approved objective. User redirection becomes durable shared guidance for every swarm agent, with affected tasks updated and conflicting work paused. Cannot authorize resume/restart, scope expansion, or raised limits. |
@@ -489,14 +495,18 @@ Forked sessions do not inherit control of the original swarm. Session-tree navig
 
 #### Safety integration
 
-Add `swarm:confirm-request` to pi-safety using its existing request shape.
+Use `swarm:confirm-request` with pi-safety's existing request shape when installed.
 
 Swarm’s bridge:
 
-- Fails closed when no provider claims.
-- Uses a bounded timeout and cancellation.
+- Preserves independently enabled Safety policy, including its operation prompts or denials.
+- Without a provider ever observed, authorizes selected coding tools only under the explicit
+  chat-approved bounded run policy, without a Swarm-owned fallback dialog.
+- Fails closed on malformed/duplicate claims or loss of a previously observed provider.
+- Uses a bounded timeout and cancellation for independent Safety decisions.
 - Rechecks generation and permissions after approval.
-- Never interprets peer or main-agent messages as human confirmation.
+- Never interprets peer or model messages as human confirmation; lifecycle authorization
+  comes only from a real interactive owner reply tied to the exact pending proposal.
 
 Protect controller state and repository control metadata from direct worker file mutation; preserve existing host protections for shared configuration resources.
 
@@ -524,7 +534,7 @@ Do not add Swarm delegation tools to pi-plan’s restricted allowlists.
 
 - Current minimum target: Pi 1.0.0, Node 22.19+, local Unix checkout with Git and Bash. Only Pi 1.0.0 is currently verified; revalidate newer versions. Earlier phase results below are historical.
 - Use public package-root SDK imports only.
-- v1 execution requires TUI confirmation; other modes may inspect stored status but fail closed on launch.
+- Execution requires interactive owner chat confirmation in a TUI; other modes may inspect stored status but fail closed on launch.
 - Subagents and Teams retain their current behavior and definitions.
 - Swarm coordinates its own members, not arbitrary pre-existing agents or external editors.
 - Detect external drift where possible; never automatically undo it.
@@ -1625,3 +1635,43 @@ model/thinking snapshot, prerequisites, recovery and disable procedure. Global a
 broader live compatibility, human visual acceptance, richer UI/usage reporting and all prior
 semantic-scope/remote-cancellation/recovery limitations remain separately gated. Changes remain
 uncommitted for review; this preparation does not supersede those product acceptance gates.
+
+### 27. Chat-based Swarm workflow and default preservation
+
+Current authorized direction supersedes the earlier modal launch, continuation, recovery
+and Swarm-owned worker-confirmation interfaces. It does not change ownership, cancellation,
+settlement, scope or independent-review requirements, nor authorize another live trial.
+
+- The main agent chooses sensible settings and prepares a full inspected agreement using
+  `swarm_start`; preparation alone starts no run and dispatches no worker. It explains the
+  complete objective/configuration in normal chat and asks for explicit user confirmation.
+- A real interactive owner reply of `yes` or `confirm` confirms the single pending proposal.
+  Proposal IDs remain tool bookkeeping. Tool arguments, quoted transcript text, worker mail,
+  model output and extension/RPC input cannot mint user authorization. Main must ask only
+  the Swarm confirmation question while pending; ordinary `yes` cannot semantically identify
+  an unrelated normal-chat question. Native UI prompts cancel the proposal.
+- The next tool call consumes one-shot confirmation only after validating the exact packet,
+  workspace, owner/session, provider/model/thinking selection, mode and run revision.
+  Proposals expire after 120 seconds. Other chat input, revised settings or changed context
+  require a fresh proposal; pause, stop, reload and shutdown cancel pending authorization.
+- Existing and generated changes are kept by default, without a separate disposition ask.
+  No automatic stash, reset, discard, stage, commit, push or submodule mutation is implied.
+- Resume/restart use fresh proposals and reconciliation, with unchanged settlement and
+  ownership gates. Resume retains allowances; restart begins an explicitly approved cycle.
+  Restore attaches paused and never starts workers automatically.
+- Lease release and unresolved-operation reconciliation require independent evidence in the
+  owner reply: `I confirm settlement: <evidence>`. A plain affirmation, missing PID, timeout
+  or silence is insufficient. Lease release also requires the original owning Pi session;
+  foreign or missing/unknown legacy owners fail closed. If that session is unavailable,
+  user-only/manual recovery design remains unresolved, with no automatic takeover or
+  permission to delete lease metadata. Live/changed leases refuse release; uncertain effects
+  are not success and are never replayed. Reconciliation does not authorize execution.
+- Without Safety, the confirmed bounded run policy authorizes only selected worker coding
+  tools, retaining task admission, claims, fresh reads, mutation serialization, exclusive
+  Bash access, receipts and read-only submodule boundaries. This is not an OS sandbox.
+  Independently enabled pi-safety remains authoritative and may display its own dialogs;
+  Swarm does not silently weaken it to promise a completely dialog-free integrated run.
+
+Use current offline unit/integration and supported Linux PTY checks from the package README;
+prior test counts and historical live outcomes do not validate this migration. Native Windows
+terminal behavior and live-provider operation require separate verification.

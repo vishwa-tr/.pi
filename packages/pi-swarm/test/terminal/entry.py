@@ -53,16 +53,21 @@ def main(scripted=False, package_root=False):
             if scripted:
                 terminal.line('/fixture-model'); terminal.expect('Entry model changed')
                 terminal.line('fixture chat launch'); terminal.expect('LAUNCH (Pi native provider)')
-                # A focused native approval must not swallow the emergency command.
-                terminal.line('/swarm stop'); terminal.expect('Fixture main agent returned')
+                terminal.expect('Fixture main agent returned')
+                # Stop invalidates a pending proposal immediately without a focused dialog.
+                terminal.line('/swarm stop'); terminal.expect('Swarm stopped.')
+                terminal.line('yes'); terminal.expect('Fixture main agent returned')
                 assert 'Swarm emergency stop requested' in ANSI.sub('', terminal.output)
-                assert 'Swarm stopped.' in ANSI.sub('', terminal.output)
                 assert not any(row['type'] == 'dispatch' for row in events())
                 terminal.line('fixture chat launch'); terminal.expect('LAUNCH (Pi native provider)')
+                terminal.expect('Fixture main agent returned')
                 terminal.read_packet('LAUNCH (Pi native provider)')
                 assert compact('"objective": "Fixture chat goal"') in terminal.last_packet
-                terminal.choose(2); terminal.expect('Preserve and proceed?'); terminal.choose(1)
+                assert not any(row['type'] == 'dispatch' for row in events()), 'Proposal alone never executes'
+                terminal.line('yes')
                 terminal.expect('Fixture main agent returned'); wait_event('dispatch')
+                terminal.line('yes'); terminal.expect('Fixture main agent returned')
+                assert sum(row['type'] == 'dispatch' for row in events()) == 1, 'Repeated reply cannot replay approval'
                 assert [row['model'] for row in events() if row['type'] == 'dispatch'] == ['second']
                 terminal.send('\x1bn'); terminal.expect('╭ Messages')
                 terminal.send('\t'); terminal.expect('Main agent')
@@ -81,8 +86,9 @@ def main(scripted=False, package_root=False):
                 terminal.line('fixture chat status'); terminal.expect('Fixture main agent returned')
                 assert sum(row['type'] == 'dispatch' for row in events()) == 1
                 terminal.line('fixture chat resume'); terminal.expect('RESUME (Pi native provider)')
-                terminal.choose(1); terminal.expect('Preserve and proceed?'); terminal.choose(1)
-                terminal.expect('Workspace reconciliation'); terminal.choose(1)
+                terminal.expect('Fixture main agent returned')
+                assert sum(row['type'] == 'dispatch' for row in events()) == 1
+                terminal.line('yes')
                 terminal.expect('Fixture main agent returned'); wait_event('dispatch', 2)
                 terminal.send('\x1bn'); terminal.expect('╭ Messages')
                 # Stop while the read-only overview owns terminal focus.
@@ -98,7 +104,7 @@ def main(scripted=False, package_root=False):
             raise AssertionError(f'{error}\nRecent offline fixture events: {events()[-15:]}') from error
         finally:
             terminal.close()
-    print('PASS: main-agent tools, approval/overlay emergency stop, read-only dashboard and reload' if scripted else
+    print('PASS: real main-agent tools, genuine owner chat confirmation, cancelled/replayed reply exclusion, overlay emergency stop, dashboard and offline reload' if scripted else
           'PASS: normal entry exposes only /swarm stop without model dispatch')
 
 if __name__ == '__main__':
