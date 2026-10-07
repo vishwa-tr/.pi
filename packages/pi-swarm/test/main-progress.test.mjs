@@ -20,7 +20,7 @@ function fixture(t) {
 
 const delay = () => new Promise(resolve => setTimeout(resolve, 800));
 
-test("routine progress stays on passive status surfaces, never transcript or model messages", async t => {
+test("routine progress produces no status row, transcript or model messages", async t => {
 	const f = fixture(t); f.progress.launched();
 	for (let i = 0; i < 40; i++) f.update();
 	f.snapshot.run.tasks.push({ id: "task", title: "Task", status: "done", assignment: null });
@@ -29,7 +29,7 @@ test("routine progress stays on passive status surfaces, never transcript or mod
 	await delay();
 	assert.deepEqual(f.messages, []);
 	assert.deepEqual(f.notifications, []);
-	assert.match(f.statuses.at(-1)[1], /Swarm completed · 1\/1 tasks/);
+	assert.deepEqual(f.statuses, []);
 });
 
 test("important errors and stops remain notifications; approval/Safety surfaces are not replaced", async t => {

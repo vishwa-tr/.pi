@@ -8,7 +8,7 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsMana
 import { createMockRuntime } from "./sdk-env.mjs";
 import { resolvePiPackageDir } from "./pi-install.mjs";
 import { createProgress } from "../extensions/swarm/progress.mjs";
-import { createTopicMirrors, TOPIC_MIRROR } from "../extensions/swarm/topic-mirrors.mjs";
+import { createTopicMirrors, MAIL_MIRROR, TOPIC_MIRROR } from "../extensions/swarm/topic-mirrors.mjs";
 import { registerSwarmRenderers } from "../extensions/swarm/ui.mjs";
 import { persistedMessageIds } from "../extensions/swarm/mail.mjs";
 
@@ -144,7 +144,7 @@ test("appendEntry during an actual streaming SDK turn creates no continuation or
 	assert.deepEqual(f.errors, []);
 });
 
-test("actual default compaction, subsequent/reopened requests and default tree summary exclude transcript-only topic content", async t => {
+test("actual default compaction, subsequent/reopened requests and default tree summary exclude all visual cards", async t => {
 	const usage = { input: 120000, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 120005,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 	const f = await fixture(t, [
@@ -154,7 +154,9 @@ test("actual default compaction, subsequent/reopened requests and default tree s
 	]);
 	let current = await f.open();
 	await current.session.prompt("Original decision. ".repeat(8000));
+	f.state.run.messages.push({ id: "visual-owner-mail", from: "worker", to: "owner", text: ownerSentinel });
 	addTopics(f); f.publish();
+	assert.equal(current.manager.getBranch().filter(entry => entry.type === "custom" && entry.customType === MAIL_MIRROR).length, 1);
 	await current.session.prompt("Recent context. ".repeat(8000));
 	await current.session.waitForIdle();
 	assert.equal(f.calls.length, 3, "two owner prompts plus the expected automatic default compaction request");
@@ -176,11 +178,11 @@ test("actual default compaction, subsequent/reopened requests and default tree s
 	assert.ok(result.summaryEntry && !result.summaryEntry.fromHook);
 	assert.equal(f.calls.length, 7, "only requested prompts, default compaction and requested branch summary call");
 	assert.match(JSON.stringify(f.calls[6].context), /Explore alternate branch/);
-	for (const call of f.calls) assert.doesNotMatch(JSON.stringify(call.context), /TOPIC_ONLY_SENTINEL/);
+	for (const call of f.calls) assert.doesNotMatch(JSON.stringify(call.context), /TOPIC_ONLY_SENTINEL|OWNER_MAIL_CONTEXT_SENTINEL/);
 	assert.deepEqual(f.errors, []);
 });
 
-test("real extension owner mail retains context, wakeup and durable acknowledgement with no mirror or duplicate delivery", async t => {
+test("real extension owner mail retains automatic delivery with separate non-context visual cards", async t => {
 	const f = await fixture(t);
 	const current = await f.open();
 	await current.session.prompt("Initial owner conversation");
@@ -189,10 +191,19 @@ test("real extension owner mail retains context, wakeup and durable acknowledgem
 	addTopics(f); f.publish();
 	await until(() => persistedMessageIds(current.context(), f.state.run.runId).has("owner-finding") && f.calls.length === 2);
 	await current.session.waitForIdle();
-	assert.match(JSON.stringify(f.calls[1].context), /OWNER_MAIL_CONTEXT_SENTINEL/);
-	assert.doesNotMatch(JSON.stringify(f.calls[1].context), /TOPIC_ONLY_SENTINEL/);
+	assert.equal(JSON.stringify(f.calls[1].context).match(/OWNER_MAIL_CONTEXT_SENTINEL/g)?.length, 1);
+	assert.doesNotMatch(JSON.stringify(f.calls[1].context), /TOPIC_ONLY_SENTINEL|swarm-mail-mirror/);
+	const cards = current.manager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "swarm-mail-mirror");
+	assert.equal(cards.length, 1);
+	assert.match(JSON.stringify(cards[0].data), /OWNER_MAIL_CONTEXT_SENTINEL/);
+	themes.initTheme("dark", false);
+	const component = new CustomEntryComponent(cards[0], current.session.extensionRunner.getEntryRenderer(MAIL_MIRROR));
+	assert.equal(component.hasContent(), true);
+	assert.match(component.render(80).join("\n"), /Swarm direct mail|OWNER_MAIL_CONTEXT_SENTINEL/);
 	assert.equal(mirrorEntries(current.manager).flatMap(entry => entry.data.messageIds).includes("owner-finding"), false);
-	assert.equal(current.manager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "swarm-agent-mail").length, 1);
+	const deliveries = current.manager.getBranch().filter(entry => entry.type === "custom_message" && entry.customType === "swarm-agent-mail");
+	assert.equal(deliveries.length, 1);
+	assert.equal(deliveries[0].display, false);
 	f.publish(); await delay(850);
 	assert.equal(f.calls.length, 2);
 	const reopened = current.reopenManager(); current.close();
@@ -200,7 +211,33 @@ test("real extension owner mail retains context, wakeup and durable acknowledgem
 	assert.equal(f.calls.length, 2, "reload does not redeliver acknowledged owner mail or wake the model");
 	await next.session.prompt("Subsequent owner prompt");
 	assert.equal(f.calls.length, 3);
-	assert.match(JSON.stringify(f.calls[2].context), /OWNER_MAIL_CONTEXT_SENTINEL/);
-	assert.doesNotMatch(JSON.stringify(f.calls[2].context), /TOPIC_ONLY_SENTINEL/);
+	assert.equal(JSON.stringify(f.calls[2].context).match(/OWNER_MAIL_CONTEXT_SENTINEL/g)?.length, 1);
+	assert.doesNotMatch(JSON.stringify(f.calls[2].context), /TOPIC_ONLY_SENTINEL|swarm-mail-mirror/);
+	assert.deepEqual(f.errors, []);
+});
+
+test("owner mail arriving during main-agent streaming is queued and handled once without visual context", async t => {
+	let release;
+	const held = new Promise(resolve => { release = resolve; });
+	t.after(() => release());
+	const f = await fixture(t, async ({ index }) => {
+		if (index === 0) await held;
+		return { text: "Offline reply to owner mail" };
+	});
+	const current = await f.open();
+	current.progress.launched();
+	const prompt = current.session.prompt("Held main-agent request");
+	await until(() => f.calls.length === 1);
+	f.state.run.messages.push({ id: "busy-owner-mail", from: "worker", to: "owner", text: ownerSentinel });
+	f.publish();
+	await until(() => current.session.agent.peekQueuedMessages().length === 1);
+	assert.equal(current.manager.getBranch().filter(entry => entry.type === "custom" && entry.customType === MAIL_MIRROR).length, 1);
+	release(); await prompt; await current.session.waitForIdle();
+	assert.equal(f.calls.length, 2);
+	assert.equal(JSON.stringify(f.calls[1].context).match(/OWNER_MAIL_CONTEXT_SENTINEL/g)?.length, 1);
+	assert.doesNotMatch(JSON.stringify(f.calls[1].context), /swarm-mail-mirror/);
+	assert.ok(persistedMessageIds(current.context(), f.state.run.runId).has("busy-owner-mail"));
+	f.publish(); await delay(850);
+	assert.equal(f.calls.length, 2);
 	assert.deepEqual(f.errors, []);
 });

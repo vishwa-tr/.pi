@@ -4,7 +4,7 @@ import {
 } from "./errors.mjs";
 import { displayText } from "./dashboard.mjs";
 import { coordinationStatus } from "./coordination-status.mjs";
-import { TOPIC_MIRROR, cardText, cardLabel } from "./topic-mirrors.mjs";
+import { MAIL_MIRROR, TOPIC_MIRROR, cardText, cardLabel } from "./topic-mirrors.mjs";
 import { Text, visibleWidth, wrapTextWithAnsi, truncateToWidth } from "@earendil-works/pi-tui";
 
 const json = value => JSON.stringify(value, null, 2);
@@ -38,10 +38,11 @@ export function conversationCard(messages, kind, options = {}, theme) {
 	};
 }
 
-/** Agreements stay complete; mail is context-bearing, topic entries are transcript-only. */
+/** Cards are transcript-only; hidden actionable mail keeps its model delivery. */
 export function registerSwarmRenderers(pi) {
 	pi.registerMessageRenderer("swarm-agreement", message => new Text(displayText(message.content), 0, 0));
 	pi.registerMessageRenderer("swarm-agent-mail", (message, options, theme) => conversationCard(message.details?.messages, "mail", options, theme));
+	pi.registerEntryRenderer(MAIL_MIRROR, (entry, options, theme) => conversationCard(entry.data?.messages, "mail", options, theme));
 	pi.registerEntryRenderer(TOPIC_MIRROR, (entry, options, theme) => conversationCard(entry.data?.messages, "topic", options, theme));
 }
 
