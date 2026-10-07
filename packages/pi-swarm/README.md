@@ -243,15 +243,21 @@ Board messages reach peers once each, excluding their sender. `main` and `board`
 remain convenient aliases when no worker has that name; explicit `@` recipients
 always address the coordinator or board and never shadow an existing peer. Worker conversations
 inherit their assigned task as a topic when no topic is supplied. Candidate/review
-reports also reach the main agent with their task topic; they still require independent
+reports also appear in the main chat with their task topic; they still require independent
 review and final verification before completion. Messages never grant approval.
 
-Messages addressed to main are coalesced into Pi's native message queue and wake it
-while Swarm is running. Progress notices remain passive; pausing/stopping does not
-request another main-agent turn. Mail is acknowledged only after a complete entry
-exists in the main session file. Interrupted deliveries remain available after reload;
-durable mail is not repeated. If delivery was interrupted, the next user input
-or worker event retries the pending mail without using chat text as approval. `swarm_history { channel: "messages", workerId?, topic?,
+Main-chat conversation cards are rendered, non-context session entries: they are
+visual-only and add no model input, including on later prompts or reload. There is no
+Swarm progress status row; important failures and stops remain passive user notifications.
+Actionable messages addressed to main still use Pi's native message queue and wake it
+while Swarm is running. That delivery is hidden from the chat and provides the text the
+model needs to respond; it is separate from the visual card and still uses model context.
+Explicit Swarm tool results also supply requested information to the model. Legacy visible
+mail remains readable without adding duplicate cards. Pausing/stopping never requests a
+turn for routine progress. Mail is acknowledged only after a complete native message entry
+exists in the main session file; a visual card alone never proves delivery to the model.
+Interrupted deliveries remain available after reload; durable mail is not repeated. The
+next user input or worker event retries pending mail without using chat text as approval. `swarm_history { channel: "messages", workerId?, topic?,
 offset?, limit? }` reads bounded conversation pages without waking workers. Full
 message text remains available in the user view and run journal.
 

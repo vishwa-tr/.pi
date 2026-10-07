@@ -10,24 +10,30 @@ const delay = () => new Promise(resolve => setTimeout(resolve, 850));
 function fixture(t) {
 	const root = mkdtempSync(join(tmpdir(), "swarm-mail-")); t.after(() => rmSync(root, { recursive: true, force: true }));
 	const path = join(root, "main.jsonl"); writeFileSync(path, "");
-	const ctx = { sessionManager: { getSessionFile: () => path } };
+	const branch = [];
+	const ctx = { sessionManager: { getSessionFile: () => path, getBranch: () => branch } };
 	const state = { run: { runId: "run1", status: "running", cycle: 1, revision: 1, objective: "Goal", workers: [], tasks: [], messages: [], sessions: { turns: [] }, workspace: { operations: [] } } };
 	const listeners = new Set(), sent = [];
 	const host = { snapshot: () => state, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); } };
-	const pi = { sendMessage: (message, options) => { sent.push({ message, options }); } };
+	const pi = {
+		appendEntry: (customType, data) => { const entry = { type: "custom", customType, data }; branch.push(entry); appendFileSync(path, JSON.stringify(entry) + "\n"); },
+		sendMessage: (message, options) => { sent.push({ message, options }); }
+	};
 	const progress = createProgress(pi, () => ctx); progress.bind(host); progress.launched(); t.after(() => progress.dispose());
 	const publish = () => { for (const fn of listeners) fn("message.send"); };
 	const persist = message => appendFileSync(path, JSON.stringify({ type: "custom_message", ...message }) + "\n");
 	return { ctx, state, host, pi, progress, sent, publish, persist, path };
 }
 
-test("coalesced owner mail triggers one native turn and void sendMessage is not acknowledgement", async t => {
+test("coalesced owner mail still triggers a native turn; visual cards cannot acknowledge model delivery", async t => {
 	const f = fixture(t);
 	f.state.run.messages.push({ id: "one", from: "worker", to: "owner", text: "Question", topic: "Auth" }, { id: "peer", from: "a", to: "b", text: "Private peer coordination" });
 	for (let i = 0; i < 20; i++) f.publish(); await delay();
 	let mail = f.sent.filter(item => item.message.customType === "swarm-agent-mail");
 	assert.equal(mail.length, 1); assert.equal(mail[0].options.triggerTurn, true);
+	assert.equal(mail[0].message.display, false, "model delivery is separate from the visual card");
 	assert.match(mail[0].message.content, /Question/); assert.doesNotMatch(mail[0].message.content, /Private peer coordination/);
+	assert.deepEqual(f.ctx.sessionManager.getBranch().map(entry => entry.customType), ["swarm-mail-mirror"]);
 	assert.deepEqual([...persistedMessageIds(f.ctx, "run1")], []);
 	f.publish(); await delay(); assert.equal(f.sent.filter(item => item.message.customType === "swarm-agent-mail").length, 1);
 	f.persist(mail[0].message); f.progress.settled(); await delay();
@@ -50,7 +56,18 @@ test("unacknowledged owner mail survives reload and partial writes never prove d
 });
 
 
-test("actual Pi sessions persist addressed mail and wake the main agent exactly once", async t => {
+test("a failed visual projection cannot block actionable mail delivery", async t => {
+	const f = fixture(t);
+	f.pi.appendEntry = () => { throw Error("UI unavailable"); };
+	f.state.run.messages.push({ id: "finding", from: "worker", to: "owner", text: "Need main-agent response" });
+	f.publish(); await delay();
+	assert.equal(f.sent.length, 1);
+	assert.equal(f.sent[0].options.triggerTurn, true);
+	assert.match(f.sent[0].message.content, /Need main-agent response/);
+	assert.equal(f.sent[0].message.display, false);
+});
+
+test("actual Pi sessions retain automatic owner mail delivery without adding visual cards to provider context", async t => {
 	const { mkdirSync } = await import("node:fs");
 	const { createMockRuntime } = await import("./sdk-env.mjs");
 	const { createSdkSession } = await import("../extensions/swarm/sdk-session.mjs");
@@ -65,7 +82,10 @@ test("actual Pi sessions persist addressed mail and wake the main agent exactly 
 	const state = { run: { runId: "native-mail", status: "running", cycle: 1, revision: 1, objective: "Goal", workers: [], tasks: [], messages: [], sessions: { turns: [] }, workspace: { operations: [] } } };
 	const listeners = new Set(), failures = [];
 	const host = { snapshot: () => state, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); } };
-	const pi = { sendMessage: (message, options) => { void Promise.resolve(opened.session.sendCustomMessage(message, options)).catch(error => failures.push(error)); } };
+	const pi = {
+		appendEntry: (type, data) => opened.session.sessionManager.appendCustomEntry(type, data),
+		sendMessage: (message, options) => { void Promise.resolve(opened.session.sendCustomMessage(message, options)).catch(error => failures.push(error)); }
+	};
 	const progress = createProgress(pi, () => ctx); t.after(() => progress.dispose()); progress.bind(host); progress.launched();
 	const off = opened.session.subscribe(event => { if (event.type === "agent_settled") progress.settled(); }); t.after(off);
 	state.run.messages.push({ id: "finding", from: "worker", to: "owner", text: "Can you review this finding?" });
@@ -74,7 +94,8 @@ test("actual Pi sessions persist addressed mail and wake the main agent exactly 
 	await opened.session.waitForIdle();
 	assert.equal(mock.calls.length, 2);
 	assert.ok(persistedMessageIds(ctx, "native-mail").has("finding"));
-	assert.ok(mock.calls[1].context.messages.some(message => JSON.stringify(message).includes("Can you review this finding?")));
+	assert.equal(JSON.stringify(mock.calls[1].context).match(/Can you review this finding/g)?.length, 1);
+	assert.doesNotMatch(JSON.stringify(mock.calls[1].context), /swarm-mail-mirror/);
 	for (const fn of listeners) fn("message.send"); await delay();
 	assert.equal(mock.calls.length, 2); assert.deepEqual(failures, []);
 });
