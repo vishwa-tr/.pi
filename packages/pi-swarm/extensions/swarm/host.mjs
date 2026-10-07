@@ -8,6 +8,8 @@ import { join, resolve } from "node:path";
 import { validId } from "./store/files.mjs";
 import { SwarmController } from "./core.mjs";
 import { recipientId } from "./messaging.mjs";
+import { inspectRecovery } from "./recovery-inspection.mjs";
+import { releaseStaleLease } from "./store/lease.mjs";
 import { SwarmSessions } from "./sessions.mjs";
 import { prepareLayout } from "./store/layout.mjs";
 import { WorkspaceRuntime } from "./workspace.mjs";
@@ -67,6 +69,7 @@ export class SwarmHost {
 	#providerRuntimeBindings = new Map();
 	#capabilities = new Map();
 	#nativeModels;
+	#recovery;
 
 	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => { }, providerCapability, nativeModels = false }) {
 		check(typeof requestApproval === "function", "INPUT", "Human approval callback required");
@@ -102,7 +105,9 @@ export class SwarmHost {
 	}
 
 	snapshot() {
-		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, pendingApproval: Boolean(this.#pending) || this.#pendingSafety > 0, errors: [...this.#errors] };
+		let ownershipHeld = false;
+		try { if (this.#controller) { this.#controller.assertOwned(); ownershipHeld = true; } } catch { /* Observation cannot repair lost ownership. */ }
+		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, ownershipHeld, pendingApproval: Boolean(this.#pending) || this.#pendingSafety > 0, errors: [...this.#errors], recovery: this.#recovery ? { ...this.#recovery, completed: [...this.#recovery.completed] } : null };
 	}
 
 	/** Observation conveys no owner or worker capability. */
@@ -260,7 +265,8 @@ export class SwarmHost {
 			});
 			// Settlement attestation must remain available after a provider failure;
 			// it discloses the recorded pins but grants no model execution authority.
-			const providers = this.#providerPacket(specification, { validate: action !== "reconcile" });
+			const settlementOnly = action === "reconcile" || action === "recover" && recovery.outcome === "paused";
+			const providers = settlementOnly && action === "recover" ? recovery.providerPacket : this.#providerPacket(specification, { validate: !settlementOnly });
 			const safety = await requestSafety({ events: this.#events, request: { agent: "swarm", tool: "write", path: "capability probe" }, signal, probe: true });
 			check(safety.claimed || safety.unclaimed && !this.#safetySeen, "AUTHORITY", "Safety provider is malformed, duplicated, or disappeared");
 			if (safety.claimed) this.#safetySeen = true;
@@ -270,7 +276,7 @@ export class SwarmHost {
 					? "pi-safety policy remains enforced and may ask for operation confirmation"
 					: "Selected coding tools are authorized within this bounded run; no Swarm operation prompts"
 			});
-			const request = Object.freeze({ action, ...providers, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, workspaceFingerprint: inspection.fingerprint, runRevision: this.#controller?.snapshot().revision ?? null, existingChanges: "preserve", requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
+			const request = Object.freeze({ action, ...providers, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, workspaceFingerprint: inspection.fingerprint, runRevision: this.#controller?.snapshot().revision ?? recovery?.runRevision ?? null, existingChanges: "preserve", requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
 			const answer = structuredClone(await Promise.race([Promise.resolve().then(() => {
 				check(!signal.aborted, "CANCELLED", "Approval cancelled before presentation");
 				return this.#ask(request);
@@ -279,13 +285,14 @@ export class SwarmHost {
 			this.#mode.assert(grant.token);
 			check(answer?.approved === true, "AUTHORITY", "User did not approve this action");
 			// Preservation is the only disposition; approval never grants cleanup authority.
-			check(action === "launch" || action === "reconcile" || answer.reconciled === true, "UNSETTLED", "Explicit workspace reconciliation is required");
+			check(action === "launch" || action === "reconcile" || action === "recover" || answer.reconciled === true, "UNSETTLED", "Explicit workspace reconciliation is required");
 			check(answer.provider === undefined && answer.providers === undefined, "PROVIDER", "Approval cannot replace the host provider binding");
 			// Settlement attestation grants no model authority and must remain available after provider failure.
-			if (action !== "reconcile") for (const selection of this.#selections(specification)) this.#assertProvider(selection);
+			if (!settlementOnly) for (const selection of this.#selections(specification)) this.#assertProvider(selection);
 			const approved = answer.specification ?? specification;
 			if (action !== "launch") check(specificationFingerprint(approved) === specificationFingerprint(specification), "SCOPE", "Continuation cannot silently change the approved scope");
-			if (action === "reconcile") check(answer.attestation?.kind === "user-established-settlement" && typeof answer.attestation.evidence === "string" && answer.attestation.evidence.trim().length > 0 && answer.attestation.evidence.length <= 4096, "UNSETTLED", "Describe independently established process/session settlement; a boolean is not evidence");
+			if (action === "recover") check((answer.outcome === undefined || answer.outcome === recovery.outcome) && (answer.resume === undefined || answer.resume === (recovery.outcome === "resume")), "SCOPE", "Recovery outcome cannot change during approval");
+			if (action === "reconcile" || action === "recover") check(answer.attestation?.kind === "user-established-settlement" && typeof answer.attestation.evidence === "string" && answer.attestation.evidence.trim().length > 0 && answer.attestation.evidence.length <= 4096, "UNSETTLED", "Describe independently established process/session settlement; a boolean is not evidence");
 			return { grant, specification: approved, attestation: answer.attestation, approval: { id: randomUUID(), action, workspaceFingerprint: inspection.fingerprint, specificationFingerprint: specificationFingerprint(approved), existingChanges: inspection.changes.length ? "preserve" : "clean", ...providers } };
 		} finally {
 			clearTimeout(timer);
@@ -310,17 +317,17 @@ export class SwarmHost {
 		check(current.fingerprint === inspection.fingerprint, "STALE", "Workspace changed while approval was pending; inspect and approve again");
 	}
 
-	#wire() { return inPhase("attachment", () => this.#attachRuntimes()); }
+	#wire(options) { return inPhase("attachment", () => this.#attachRuntimes(options)); }
 
-	async #attachRuntimes() {
+	async #attachRuntimes({ settlementOnly = false } = {}) {
 		this.#unsubscribe?.();
 		this.#unsubscribe = this.#controller.subscribe(event => this.#publish(event.type));
 		const specification = this.#specification();
 		const recorded = providerAgreements(this.#controller.snapshot().hostApprovals.at(-1));
-		const configured = providerAgreements(this.#providerPacket(specification));
+		const configured = settlementOnly ? recorded : providerAgreements(this.#providerPacket(specification));
 		check(specificationFingerprint(recorded) === specificationFingerprint(configured), "PROVIDER", "Restore requires the recorded Swarm provider agreements");
 		const admission = { assert: () => this.#assertAdmission(), signal: () => this.#permit?.signal ?? this.#denied };
-		this.#workspace = await WorkspaceRuntime.attach(this.#controller, {
+		if (!this.#workspace) this.#workspace = await WorkspaceRuntime.attach(this.#controller, {
 			signal: AbortSignal.any([this.#lifetime.signal, ...(this.#operation ? [this.#operation.cancel.signal] : [])]),
 			admission, runner: this.#runner, authorize: async request => {
 				this.#assertAdmission();
@@ -349,12 +356,12 @@ export class SwarmHost {
 				return result.approved === true;
 			}
 		});
-		this.#driver = await SwarmSessions.attach(this.#controller, {
+		if (!this.#driver) this.#driver = await SwarmSessions.attach(this.#controller, {
 			workspace: this.#workspace, modelRuntime: this.#modelRuntime,
-			mainModel: this.#modelRuntime.getModel(specification.model.provider, specification.model.modelId), thinkingLevel: specification.model.thinkingLevel,
+			mainModel: settlementOnly ? undefined : this.#modelRuntime.getModel(specification.model.provider, specification.model.modelId), thinkingLevel: specification.model.thinkingLevel, settlementOnly,
 			codingTools: specification.codingTools, instructions: specification.instructions,
 			...(specification.workerModels !== undefined ? { workerModels: specification.workerModels } : {}),
-			tickIntervalMs: this.#tickInterval, admission, providerCapability: this.#capability(specification.model),
+			tickIntervalMs: this.#tickInterval, admission, providerCapability: settlementOnly ? undefined : this.#capability(specification.model),
 			resolveProviderCapability: selection => this.#capability(selection)
 		});
 	}
@@ -402,19 +409,142 @@ export class SwarmHost {
 	}
 
 	restore(input) { return this.#runOperation("restore", operation => this.#restore(input, operation)); }
-	async #restore({ workspace, runId }, operation) {
+	async #restore({ workspace, runId, settlementOnly = false, expectedState, recoveryAttestation }, operation) {
 		this.#assertOperation(operation);
 		check(!this.#controller && !this.#pending, "STATE", "Host already owns a run");
 		const grant = this.#mode.capture();
 		this.#location = { workspace, runId, ownerSessionId: this.#sessionId };
-		this.#controller = await SwarmController.open({ ...this.#location, adopt: true });
+		this.#controller = await SwarmController.open({ ...this.#location, adopt: true, expectedState, recoveryAttestation });
 		this.#assertOperation(operation);
 		check(this.#controller.snapshot().sessions, "STATE", "Only configured SDK runs can be restored");
-		await this.#wire();
+		const restored = this.#controller.snapshot();
+		if (recoveryAttestation && ["stopped", "failed"].includes(restored.status) && !restored.tasks.some(task => task.assignment) && !restored.workspace.operations.length && !restored.sessions.turns.length) {
+			this.#mode.assert(grant.token);
+			this.#publish("run.restored");
+			return this.snapshot(); // Terminal recovery already settled and released ownership.
+		}
+		await this.#wire({ settlementOnly });
 		this.#assertOperation(operation);
 		this.#mode.assert(grant.token);
 		this.#publish("run.restored");
 		return this.snapshot(); // Restoring does not grant execution authority.
+	}
+
+	/** One approved recovery transaction; interrupted operations are never replayed. */
+	recover(input) { return this.#runOperation("recovery", operation => this.#recover(input, operation)); }
+	async #recover({ workspace, runId, resume = false }, operation) {
+		check(validId(runId) && typeof resume === "boolean", "INPUT", "Invalid recovery arguments");
+		const outcome = resume ? "resume" : "paused";
+		this.#recovery = { runId, outcome, stage: "inspection", completed: [], settled: false, resumed: false };
+		const stage = value => {
+			this.#recovery.stage = value;
+			this.#publish("recovery.progress");
+		};
+		const completed = value => { this.#recovery.completed.push(value); this.#publish("recovery.progress"); };
+		stage("inspection");
+		this.#mode.capture();
+		const attached = Boolean(this.#controller);
+		const saved = attached ? null : inspectRecovery(workspace, runId);
+		const state = attached ? this.#controller.snapshot() : saved.state;
+		check(state.runId === runId && resolve(workspace) === state.workspaceRoot, "OWNERSHIP", "Recovery must target the attached workspace and run");
+		check(state.sessions && (attached ? ["paused", "pausing", "stopping", "failing"] : ["running", "verifying", "paused", "pausing", "stopping", "failing"]).includes(state.status), "STATE", "Pause a live run before recovery; closed runs require restart");
+		if (saved?.lease) check(saved.lease.ownerSessionId === this.#sessionId, "OWNERSHIP", "Only the original owning session may reclaim a stale lease");
+		if (resume) {
+			check(!["stopping", "failing"].includes(state.status), "STATE", "Recovery cannot resume terminal intent");
+			check(state.elapsedMs < state.limits.durationMs, "TIME_LIMIT", "Recovery cannot reset exhausted allowances");
+		}
+		const specification = { objective: state.objective, criteria: state.criteria, scope: state.scope, limits: state.limits, model: state.sessions.selection, codingTools: state.sessions.codingTools, instructions: state.sessions.instructions,
+			...(state.sessions.workerModels !== undefined ? { workerModels: state.sessions.workerModels } : {}) };
+		const live = attached ? this.#workspace?.snapshot().uncertain ?? [] : [];
+		if (attached) check((this.#driver?.snapshot().active ?? []).every(workerId => state.workspace.operations.some(item => item.workerId === workerId && live.includes(item.id))), "UNSETTLED", "Live SDK turns must settle normally before recovery");
+		const previousApproval = state.hostApprovals.at(-1);
+		const providerPacket = { ...(previousApproval?.provider ? { provider: previousApproval.provider } : {}), ...(previousApproval?.providers ? { providers: previousApproval.providers } : {}) };
+		const expectedFinalState = resume ? "running" : state.status === "stopping" ? "stopped" : state.status === "failing" ? "failed" : "paused";
+		const allowances = {
+			cycle: state.cycle, elapsedMs: state.elapsedMs, remainingDurationMs: Math.max(0, state.limits.durationMs - state.elapsedMs),
+			remainingWorkerIdentities: Math.max(0, state.limits.agents - state.workers.length),
+			remainingTaskCreations: Math.max(0, state.limits.tasks - state.tasksCreated),
+			taskAttempts: state.tasks.map(task => ({ taskId: task.id, remainingAttempts: Math.max(0, state.limits.attempts - task.failures) }))
+		};
+		const recoveryPlan = { runId, outcome, allowances, journalOwnerSessionId: state.ownerSessionId, previousLease: saved?.lease ?? null, operations: state.workspace.operations, turns: state.sessions.turns, liveUncertainIds: live, expectedFinalState,
+			steps: ["inspect", "approve settlement", ...(saved?.lease ? ["release stale lease"] : []), ...(!attached || !this.#workspace || !this.#driver ? ["restore fenced"] : []), "attest", "reconcile without replay", ...(resume ? ["resume within existing allowances"] : [])],
+			journalFingerprint: saved?.journalFingerprint ?? null, leaseFingerprint: saved?.leaseIdentity ? specificationFingerprint(saved.leaseIdentity) : null, reservationFingerprint: saved?.reservationFingerprint ?? null, runRevision: state.revision, providerPacket };
+		const inspection = await this.#inspect(state.workspaceRoot, operation);
+		stage("approval");
+		const accepted = await this.#approval("recover", inspection, specification, recoveryPlan);
+		await this.#unchanged(inspection, accepted.grant, operation);
+		this.#assertOperation(operation);
+		if (attached) {
+			this.#controller.assertOwned();
+			check(this.#controller.snapshot().revision === state.revision && specificationFingerprint(this.#workspace?.snapshot().uncertain ?? []) === specificationFingerprint(live), "STALE", "Execution changed during recovery approval");
+			if (!this.#workspace || !this.#driver) {
+				stage("restore");
+				await this.#wire({ settlementOnly: !resume });
+				completed("restore");
+			}
+		} else {
+			const current = inspectRecovery(workspace, runId);
+			check(specificationFingerprint(current) === specificationFingerprint(saved), "STALE", "Recovery journal or ownership changed during approval");
+			this.#mode.assert(accepted.grant.token);
+			this.#assertOperation(operation);
+			if (saved.lease) {
+				stage("lease");
+				releaseStaleLease(prepareLayout(state.workspaceRoot, runId), saved.lease, { settled: true, identity: saved.leaseIdentity });
+				completed("lease");
+			}
+			stage("restore");
+			await this.#restore({ workspace: state.workspaceRoot, runId, settlementOnly: !resume, expectedState: saved.state,
+				recoveryAttestation: { evidence: accepted.attestation.evidence, operationIds: [], turnIds: [], fingerprint: inspection.fingerprint } }, operation);
+			completed("restore");
+		}
+		check(specificationFingerprint(this.#specification()) === specificationFingerprint(specification), "STALE", "Restored specification changed");
+		const restored = this.#controller.snapshot();
+		check(specificationFingerprint(restored.workspace.operations) === specificationFingerprint(recoveryPlan.operations) && specificationFingerprint(restored.sessions.turns) === specificationFingerprint(recoveryPlan.turns), "STALE", "Restored unresolved execution changed");
+		if (!resume && ["stopped", "failed"].includes(restored.status) && !restored.tasks.some(task => task.assignment) && !restored.workspace.operations.length && !restored.sessions.turns.length) {
+			this.#recovery.settled = true;
+			completed("reconciliation");
+			stage("completed");
+			return this.snapshot();
+		}
+		await this.#unchanged(inspection, accepted.grant, operation);
+		stage("reconciliation");
+		await this.#controller.owner("host.attest", { evidence: accepted.attestation.evidence, operationIds: recoveryPlan.operations.map(item => item.id), turnIds: recoveryPlan.turns.map(item => item.id), fingerprint: inspection.fingerprint }, { expectedRevision: restored.revision });
+		this.#assertOperation(operation);
+		for (const id of live) this.#workspace.confirmSettled(id, { settled: true });
+		if (this.#driver.snapshot().active.length || live.length) {
+			const settlement = await this.#driver.pause({ timeoutMs: 5000 });
+			this.#assertOperation(operation);
+			if (!settlement.settled) {
+				stage("awaiting-settlement");
+				return this.snapshot();
+			}
+		}
+		const unresolved = this.#controller.snapshot();
+		if (unresolved.workspace.operations.length || unresolved.sessions.turns.length) await this.#driver.reconcile({ settled: true });
+		else await this.#driver.pause({ timeoutMs: 5000 }); // Drain assignments, without orphan reconciliation or host invalidation.
+		this.#assertOperation(operation);
+		const settled = this.#controller.snapshot();
+		check(["paused", "stopped", "failed"].includes(settled.status) && !settled.workspace.operations.length && !settled.sessions.turns.length && !this.#driver.snapshot().active.length, "UNSETTLED", "Recovery remains unsettled");
+		this.#recovery.settled = true;
+		completed("reconciliation");
+		if (resume) {
+			stage("continuation");
+			await inPhase("continuation", async () => {
+				await this.#unchanged(inspection, accepted.grant, operation);
+				this.#controller.assertOwned();
+				check(this.#controller.snapshot().revision === settled.revision && specificationFingerprint(this.#specification()) === specificationFingerprint(specification), "STALE", "Run changed before recovery continuation");
+				check(settled.status === "paused" && settled.elapsedMs < settled.limits.durationMs, "STATE", "Recovery cannot continue this run");
+				for (const selection of this.#selections(specification)) this.#assertProvider(selection);
+				this.#assertOperation(operation);
+				this.#mode.assert(accepted.grant.token);
+				await this.#controller.owner("host.continue", { restart: false, reconciled: true, approval: { ...accepted.approval, action: "resume" } }, { expectedRevision: settled.revision });
+				this.#setPermit(accepted.grant, operation);
+			});
+			this.#recovery.resumed = true;
+			completed("continuation");
+		}
+		stage("completed");
+		return this.snapshot();
 	}
 
 	resume(options = {}) { return this.#runOperation(options.restart ? "restart" : "resume", operation => this.#resume(options, operation)); }

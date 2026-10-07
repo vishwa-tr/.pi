@@ -47,7 +47,7 @@ or kills the main Pi process or unrelated processes.
 |---|---|
 | `swarm_start` | Prepares a chat proposal from `objective` and optional `criteria`, `scope`, `limits`, `codingTools`, `instructions`, `model` and `workerModels`. A later call with `proposalId` consumes actual owner chat confirmation and launches after revalidation. |
 | `swarm_status` | Returns the run ID, bounded progress, workers, tasks and unresolved-operation counts; never wakes workers. |
-| `swarm_control` | `pause` and `stop` act immediately. `resume`, `restart` and `reconcile` prepare fresh chat proposals, then consume confirmation with `proposalId`. `restore` requires `runId` and attaches paused; `reconcile` accepts `runId` for a crashed controller. `configure` proposes user-requested model/thinking changes and applies confirmed settings between worker turns; `view` inspects; `send` delivers mail within an approved running run. |
+| `swarm_control` | `pause` and `stop` act immediately. `resume`, `restart` and `reconcile` prepare fresh chat proposals, then consume confirmation with `proposalId`. `restore` requires `runId` and attaches paused; `reconcile` accepts `runId` for a crashed controller. `recover` prepares one guided agreement covering required recovery steps and optional continuation (`resume: false` by default); `configure` proposes user-requested model/thinking changes and applies confirmed settings between worker turns; `view` inspects; `send` delivers mail within an approved running run. |
 | `swarm_history` | Reads bounded pages of worker history without constructing or waking workers. |
 
 Existing work and Swarm changes are **kept by default**, without a disposition question.
@@ -338,12 +338,60 @@ or get stolen automatically. Worker tools are the only Swarm operations that wri
 project itself; run state and recovery metadata remain outside it.
 
 Ask the main agent to restore a known run ID in any later session in the same project.
-Restore takes exclusive ownership and attaches **paused**, without worker requests. Select
-the saved model first. Resume requires a fresh agreement and workspace reconciliation.
+Restore takes exclusive ownership and attaches **paused**, without worker requests. Saved
+worker model settings are independent of the main-chat selection. Resume requires a fresh
+agreement and workspace reconciliation.
 Reload discovers the active-branch run link but never resumes execution automatically.
 
-If a crashed controller's lease blocks restore, reopen its **original owning Pi session**
-and ask the main agent there to reconcile that run ID. Lease release is refused from other
+### One guided recovery agreement
+
+Ask the main agent to recover a known run. It uses `swarm_control` with
+`action: "recover"`, the saved `runId` (optional when already attached or linked), and
+optional `resume: true`. The default recovers without dispatch. Recovery is not restart:
+cycle, elapsed allowance, limits, objective, worker identities/history and pinned model
+settings are preserved.
+
+The first call reads the validated saved journal, reservation, previous lease and current
+workspace without acquiring/releasing a lease, repairing storage, appending events or
+starting workers. It presents one complete agreement containing the required stages,
+previous owner/PID, interrupted operations/turns, saved settings/provider disclosures,
+remaining allowances and chosen outcome. The main agent must explain that agreement.
+
+Independently establish that all listed prior execution has stopped, then confirm once:
+
+- **Recover without dispatch:** `I confirm recovery: <independent settlement evidence>`
+- **Recover and resume:** `I confirm recovery and resume: <independent settlement evidence>`
+
+Generic `yes`, the old settlement-only phrase, tool arguments, worker mail and quoted
+history cannot approve this combined plan. The main agent consumes the confirmed proposal
+with only `action: "recover"` and `proposalId`; it cannot alter the outcome during consumption.
+
+Execution revalidates workspace, journal, reservation, lease identity, ownership and policy
+before side effects. It performs only needed stages: stale lease release, paused restore,
+durable settlement attestation/reconciliation, and optionally continuation under the
+same approved settings. No second confirmation is requested for those disclosed stages.
+Unknown command effects remain unknown and commands are never replayed. Native live
+frames must actually settle before continuation; a timeout retains fencing and does not
+prove settlement. Resume cannot renew exhausted allowances or override a saved stop/fail
+intent. Recovery without dispatch preserves that intent even when its settled status is
+stopped or failed rather than paused.
+
+On partial failure, tool/status results identify completed recovery stages, the blocked
+stage, whether ownership is held and whether workers are running. Earlier successful
+stages are not rolled back or retried automatically. Inspect the resulting state and use a
+fresh agreement for any subsequent attempt. Stop, cancellation and policy/context changes
+revoke pending authorization; loading/reload never continues recovery automatically.
+
+Stale lease release still requires the **original owning Pi session**. Missing/foreign
+recorded owners, live controller PIDs, changed leases or corrupted journals refuse recovery;
+there is no automatic takeover. If the original session is unavailable, this feature does
+not authorize deleting its lease metadata. Read-only inspection does not repair incomplete
+journal writes or migrate legacy runs.
+
+### Individual recovery controls
+
+The existing controls remain available. If a crashed controller's lease blocks restore,
+reopen its **original owning Pi session** and ask the main agent there to reconcile that run ID. Lease release is refused from other
 sessions or when the recorded owner is missing/unknown, including legacy leases. There is
 no automatic takeover; recovery when that session is unavailable remains a user-only/manual
 design question, not permission to remove lease metadata or bypass fencing.
@@ -367,7 +415,7 @@ or deletion occurs.
 | Modules | Responsibility |
 |---|---|
 | `extension.mjs`, `main-tools.mjs` | Main-agent tools, stop-only slash command, context fencing and host lifecycle |
-| `host.mjs`, `host-gates.mjs`, `ui.mjs` | Agreement disclosures, optional integrations, bounded run policy and recovery |
+| `host.mjs`, `host-gates.mjs`, `ui.mjs`, `recovery-inspection.mjs` | Agreement disclosures, optional integrations, bounded run policy and guided read-only recovery inspection |
 | `core.mjs`, `state.mjs`, `*-state.mjs` | Journaled controller, pure reducers, task/session/workspace state |
 | `sessions.mjs`, `sdk-session.mjs`, `native-provider.mjs` | Native Pi sessions, host runtime selection, retries/compaction admission |
 | `session-tools.mjs`, `workspace.mjs`, `workspace-scheduler.mjs`, `workspace-files.mjs` | Native tool wrappers, claims, receipts and read-only fingerprints |

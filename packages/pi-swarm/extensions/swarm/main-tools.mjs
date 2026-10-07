@@ -21,10 +21,16 @@ const workerModels = () => Type.Array(object({
 /** Deliberate model-facing allowlist. No host paths, provider diagnostics or execution receipts. */
 export function swarmSummary(snapshot) {
 	const run = snapshot?.run;
-	if (!run) return { status: "unattached", pendingApproval: Boolean(snapshot?.pendingApproval) };
+	const recovery = snapshot?.recovery ? { recovery: {
+		runId: diagnosticId(snapshot.recovery.runId), outcome: bounded(snapshot.recovery.outcome, 32),
+		stage: bounded(snapshot.recovery.stage, 48), completed: (snapshot.recovery.completed ?? []).slice(0, 8).map(stage => bounded(stage, 48)),
+		settled: snapshot.recovery.settled === true, resumed: snapshot.recovery.resumed === true,
+		attached: Boolean(run), ownershipHeld: snapshot.ownershipHeld === true, running: run?.status === "running"
+	} } : {};
+	if (!run) return { status: "unattached", pendingApproval: Boolean(snapshot?.pendingApproval), ...recovery };
 	const tasks = run.tasks ?? [];
 	return {
-		runId: run.runId, status: run.status, cycle: run.cycle, revision: run.revision,
+		runId: run.runId, status: run.status, cycle: run.cycle, revision: run.revision, ...recovery,
 		objective: bounded(run.objective), objectiveTruncated: displayText(run.objective).length > 512,
 		pendingApproval: Boolean(snapshot.pendingApproval),
 		...(run.sessions ? { model: run.sessions.selection, workerModels: run.sessions.workerModels ?? [] } : {}),
@@ -77,11 +83,12 @@ export function registerMainTools(pi, { control, chatControl, inspect, history, 
 			parameters: object({}), invoke: async (_args, ctx, signal) => { await control("status", ctx, signal); return inspect(ctx); }
 		},
 		{
-			name: "swarm_control", label: "Control Swarm", description: "Pause or stop immediately without confirmation. Resume/restart returns a full inspected proposal without executing; explain all terms in normal chat and ask only its confirmation question (yes or confirm) while pending, then invoke ONLY action and proposalId after a new owner reply. Resume preserves allowances; restart resets them. Reconcile proposes exact unresolved execution (or this session's stale lease for runId) and requires owner chat: I confirm settlement: <independent evidence>. Generic yes, tool-supplied evidence, timeouts or missing PID are not settlement attestation. Consume via action and proposalId; unknown effects stay unknown, nothing is replayed. Unsettled execution retains ownership. Restore requires runId and attaches paused, never resumes automatically. View opens the read-only dashboard. Send delivers main-agent mail to a worker or @board (@board requires topic) within a running approved team. Configure changes only Swarm model/thinking settings after a user request or accepted recommendation: model partially updates the default, workerModels replaces the entire override list ([] clears it). First returns a fresh full agreement for owner chat confirmation; consumption waits for active turns to finish without aborting edits/commands, preserves worker history and budgets, and applies settings between turns. Main-chat model changes alone never pause or reconfigure Swarm. Changes are always kept. The only direct slash command is /swarm stop.",
-			parameters: object({ action: Type.Union(["pause", "stop", "resume", "restart", "restore", "reconcile", "configure", "view", "send"].map(action => Type.Literal(action))), model: Type.Optional(modelSettings()), workerModels: Type.Optional(workerModels()), proposalId: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })), runId: Type.Optional(Type.String({ minLength: 1, maxLength: 80, pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]*$" })), to: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })), text: Type.Optional(Type.String({ minLength: 1, maxLength: 32768 })), topic: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })) }),
+			name: "swarm_control", label: "Control Swarm", description: "Pause or stop immediately without confirmation. Resume/restart returns a full inspected proposal without executing; explain all terms in normal chat and ask only its confirmation question (yes or confirm) while pending, then invoke ONLY action and proposalId after a new owner reply. Resume preserves allowances; restart resets them. Recover combines lease release (original owning session only), restore, settlement reconciliation, and optional resume into ONE exact proposal. Supply runId when unattached; resume defaults false (recover without dispatch). Explain the whole agreement and require owner chat I confirm recovery: <independent evidence>, or I confirm recovery and resume: <independent evidence> when resume is true. Only consume action/proposalId after that reply. Generic yes or settlement-only evidence cannot authorize recovery and continuation. Inspect reported recovery stage/completed steps after failure; no automatic retry, replay or rollback. Reconcile proposes exact unresolved execution (or this session's stale lease for runId) and requires owner chat: I confirm settlement: <independent evidence>. Generic yes, tool-supplied evidence, timeouts or missing PID are not settlement attestation. Consume via action and proposalId; unknown effects stay unknown, nothing is replayed. Unsettled execution retains ownership. Restore requires runId and attaches paused, never resumes automatically. View opens the read-only dashboard. Send delivers main-agent mail to a worker or @board (@board requires topic) within a running approved team. Configure changes only Swarm model/thinking settings after a user request or accepted recommendation: model partially updates the default, workerModels replaces the entire override list ([] clears it). First returns a fresh full agreement for owner chat confirmation; consumption waits for active turns to finish without aborting edits/commands, preserves worker history and budgets, and applies settings between turns. Main-chat model changes alone never pause or reconfigure Swarm. Changes are always kept. The only direct slash command is /swarm stop.",
+			parameters: object({ action: Type.Union(["pause", "stop", "resume", "restart", "restore", "reconcile", "recover", "configure", "view", "send"].map(action => Type.Literal(action))), resume: Type.Optional(Type.Boolean()), model: Type.Optional(modelSettings()), workerModels: Type.Optional(workerModels()), proposalId: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })), runId: Type.Optional(Type.String({ minLength: 1, maxLength: 80, pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]*$" })), to: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })), text: Type.Optional(Type.String({ minLength: 1, maxLength: 32768 })), topic: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })) }),
 			invoke: async (args, ctx, signal, update) => {
-				if (!["pause", "stop", "resume", "restart", "restore", "reconcile", "configure", "view", "send"].includes(args.action)) throw new Error("Unsupported control");
+				if (!["pause", "stop", "resume", "restart", "restore", "reconcile", "recover", "configure", "view", "send"].includes(args.action)) throw new Error("Unsupported control");
 				if (args.action !== "configure" && (args.model !== undefined || args.workerModels !== undefined)) throw new Error("Model settings require configure");
+				if (args.action !== "recover" && args.resume !== undefined) throw new Error("Recovery outcome requires recover");
 				return chatControl(args.action, args, ctx, signal, update);
 			}
 		},
@@ -138,7 +145,11 @@ export function registerMainTools(pi, { control, chatControl, inspect, history, 
 			} catch (error) {
 				const fallback = definition.name === "swarm_start" ? "setup" : definition.name === "swarm_history" ? "history" : "control";
 				const diagnostic = failureDiagnostic(error, fallback);
-				return { ...result({ error: `Swarm ${diagnostic.phase} failed (${diagnostic.code}). ${diagnostic.message} No automatic retry, approval or rollback.`, diagnostic }), isError: true };
+				let observation = {};
+				if (["swarm_start", "swarm_control"].includes(definition.name)) {
+					try { observation = inspect?.(ctx) ?? {}; } catch { /* Lost ownership must not mask the safe failure. */ }
+				}
+				return { ...result({ ...observation, error: `Swarm ${diagnostic.phase} failed (${diagnostic.code}). ${diagnostic.message} No automatic retry, approval or rollback.`, diagnostic }), isError: true };
 			}
 		},
 	});

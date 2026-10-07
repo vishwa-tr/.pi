@@ -40,10 +40,11 @@ const FAILURE_MESSAGES = {
 	UNSETTLED: "Execution remains unsettled; inspect before recovery.",
 	BUSY: "Another Swarm operation is still active.",
 	STATE: "This action is unavailable in the current run state.",
+	TIME_LIMIT: "The saved run allowance is exhausted; recovery cannot reset it.",
 	DUPLICATE: "This run already exists; restore it instead.",
 	FAILED: "The Swarm operation failed; inspect status before continuing.",
 };
-const FAILURE_PHASES = new Set(["setup", "launch", "inspection", "approval", "storage", "attachment", "resume", "restart", "restore", "reconcile", "control", "history"]);
+const FAILURE_PHASES = new Set(["setup", "launch", "inspection", "approval", "storage", "attachment", "resume", "restart", "restore", "reconcile", "recovery", "continuation", "control", "history"]);
 
 /** Only constant messages, codes and phases are safe for model-facing results. */
 export function failureDiagnostic(error, fallback = "control") {

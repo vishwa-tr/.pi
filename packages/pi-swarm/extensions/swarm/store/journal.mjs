@@ -1,4 +1,4 @@
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { checkedFile, invariant, syncDirectory, writeAll } from "./files.mjs";
 import { closeSync, constants, fsyncSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
@@ -28,18 +28,7 @@ export function openJournal(path, assertOwned, io = { writeAll, sync: fsyncSync 
 		assertJournalPath(path, file);
 		expectedSize = file.size;
 		if (created) { fsyncSync(fd); syncDirectory(dirname(path)); }
-		const text = new TextDecoder("utf-8", { fatal: true }).decode(readFileSync(fd));
-		invariant(text.length === 0 || text.endsWith("\n"), "Incomplete journal record; reconciliation required");
-		let previous = null;
-		for (const line of text.split("\n").slice(0, -1)) {
-			const record = JSON.parse(line);
-			invariant(Object.keys(record).sort().join() === "hash,payload,previous,sequence,version", "Invalid journal envelope");
-			invariant(record.version === 1 && record.sequence === records.length + 1, "Invalid journal sequence/version");
-			invariant(record.previous === previous, "Broken journal chain");
-			invariant(record.hash === digest(record.sequence, previous, record.payload), "Journal checksum mismatch");
-			records.push(record);
-			previous = record.hash;
-		}
+		records = decodeJournal(readFileSync(fd));
 		expectedStamp = fstatSync(fd, { bigint: true });
 	} catch (error) {
 		closeSync(fd);
@@ -79,6 +68,70 @@ export function openJournal(path, assertOwned, io = { writeAll, sync: fsyncSync 
 			if (!closed) { closeSync(fd); closed = true; }
 		},
 	};
+}
+
+/** Strict, read-only snapshot. Never creates or repairs a journal. */
+export function inspectJournal(path) {
+	const ancestry = journalAncestry(path);
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	try {
+		assertJournalPath(path, checkedFile(fd));
+		const before = journalStamp(fd);
+		const bytes = readFileSync(fd);
+		const records = decodeJournal(bytes);
+		invariant(journalStamp(fd) === before, "Journal changed during inspection");
+		assertJournalPath(path, checkedFile(fd));
+		invariant(journalAncestry(path) === ancestry, "Journal ancestry changed during inspection");
+		// Detect a rewrite even when an external writer preserves ordinary timestamps.
+		const verifyFd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+		try {
+			assertJournalPath(path, checkedFile(verifyFd));
+			invariant(journalStamp(verifyFd) === before && readFileSync(verifyFd).equals(bytes) && journalStamp(verifyFd) === before && journalStamp(fd) === before, "Journal changed during inspection");
+		} finally { closeSync(verifyFd); }
+		assertJournalPath(path, checkedFile(fd));
+		invariant(journalAncestry(path) === ancestry, "Journal ancestry changed during inspection");
+		const fingerprint = createHash("sha256").update(before).update(ancestry).update(bytes).digest("hex");
+		return { events: records.map(record => record.payload), fingerprint };
+	} finally { closeSync(fd); }
+}
+
+function decodeJournal(bytes) {
+	const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+	invariant(text.length === 0 || text.endsWith("\n"), "Incomplete journal record; reconciliation required");
+	const records = [];
+	let previous = null;
+	for (const line of text.split("\n").slice(0, -1)) {
+		const record = JSON.parse(line);
+		invariant(record !== null && typeof record === "object" && !Array.isArray(record) && Object.keys(record).sort().join() === "hash,payload,previous,sequence,version", "Invalid journal envelope");
+		invariant(record.version === 1 && record.sequence === records.length + 1, "Invalid journal sequence/version");
+		invariant(record.previous === previous, "Broken journal chain");
+		invariant(record.hash === digest(record.sequence, previous, record.payload), "Journal checksum mismatch");
+		records.push(record);
+		previous = record.hash;
+	}
+	return records;
+}
+
+function journalStamp(fd) {
+	const stat = fstatSync(fd, { bigint: true });
+	return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.nlink].join(":");
+}
+
+function journalAncestry(path) {
+	const identities = [];
+	let directory = dirname(resolve(path));
+	let immediate = true;
+	for (;;) {
+		const stat = lstatSync(directory, { bigint: true });
+		invariant(stat.isDirectory() && !stat.isSymbolicLink(), "Unsafe journal ancestry");
+		if (immediate) invariant(process.platform === "win32" || (stat.uid === BigInt(process.getuid()) && (stat.mode & 0o077n) === 0n), "Journal directory must be private and owned by this user");
+		identities.push([directory, String(stat.dev), String(stat.ino), String(stat.mode), String(stat.uid)]);
+		const parent = dirname(directory);
+		if (parent === directory) break;
+		directory = parent;
+		immediate = false;
+	}
+	return JSON.stringify(identities);
 }
 
 /** O_NOFOLLOW is not enforced on every platform. Validate the opened path before IO. */

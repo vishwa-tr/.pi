@@ -276,6 +276,26 @@ for (const model of [{ modelId: "missing" }, { thinkingLevel: "unsupported" }, {
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
 });
 
+test("linked guided recovery inspects before attaching and works without a main model", async t => {
+	const first = await fixture(t, { policy: false }); first.select("first");
+	await first.command("start linked recovery"); await until(() => first.calls.length === 1);
+	await first.event("session_shutdown");
+	const runId = first.entries[0].data.runId, layout = prepareLayout(first.ctx.cwd, runId);
+	acquireLease(layout, { ownerSessionId: "owner1" });
+	atomicJson(join(layout.ownerPath, "owner.json"), { ...inspectLease(layout), pid: null });
+	const before = readFileSync(layout.journalPath);
+	const next = await fixture(t, { policy: false, entries: first.entries, root: first.ctx.cwd });
+	await next.event("session_start", { reason: "reload" });
+	const p = (await next.tool("swarm_control", { action: "recover" })).details;
+	assert.equal(p.awaitingConfirmation, true); assert.deepEqual(readFileSync(layout.journalPath), before);
+	assert.equal(next.auth(), 0); assert.equal(next.calls.length, 0);
+	await next.input("I confirm recovery: independently verified that all previous commands and processes stopped");
+	const recovered = await next.consume(p);
+	assert.equal(recovered.isError, undefined, recovered.details.error);
+	assert.equal(recovered.details.status, "paused"); assert.equal(recovered.details.recovery.ownershipHeld, true);
+	assert.equal(recovered.details.model.modelId, "first"); assert.equal(next.auth(), 0); assert.equal(next.calls.length, 0);
+});
+
 test("restore by run ID adopts paused in another session without dispatch", async t => {
 	const first = await fixture(t, { policy: false }); first.select("first"); await first.command("start goal"); await until(() => first.calls.length === 1); const runId = first.entries[0].data.runId; await first.event("session_shutdown");
 	const next = await fixture(t, { policy: false, root: first.ctx.cwd }); next.select("first"); next.ctx.sessionManager.getSessionId = () => "second-owner"; await next.command(`restore ${runId}`); assert.equal((await next.tool("swarm_status", {})).details.runId, runId); assert.equal(next.calls.length, 0); next.replies.push("no"); await assert.rejects(next.command("resume")); await next.command("resume"); await until(() => next.calls.length === 1);

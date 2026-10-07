@@ -26,7 +26,7 @@ function fingerprint(actor, type, payload, cycle, generation) {
  * A later adapter must never expose those capabilities to worker sessions.
  */
 export class SwarmController {
-	static async open({ workspace, runId, ownerSessionId, create, createOnly = false, clock = Date.now, journalIo, agentDir, adopt = false }) {
+	static async open({ workspace, runId, ownerSessionId, create, createOnly = false, clock = Date.now, journalIo, agentDir, adopt = false, expectedState, recoveryAttestation }) {
 		const layout = prepareLayout(realpathSync(workspace), runId, { agentDir });
 		if (!create) {
 			try { lstatSync(layout.journalPath); }
@@ -60,6 +60,10 @@ export class SwarmController {
 			journal = openJournal(layout.journalPath, lease.assertOwned, journalIo);
 			const controller = new SwarmController(journal, lease, clock, layout);
 			for (const event of journal.readAll()) controller.#replay(event);
+			// Guided recovery binds the pre-restore journal to the inspected agreement.
+			// Check before automatic recover/adopt events can change durable state.
+			if (expectedState !== undefined) requireCondition(JSON.stringify(canonical(controller.#state)) === JSON.stringify(canonical(expectedState)),
+				"STALE", "Saved run changed before ownership attachment");
 			if (controller.#state === null) {
 				requireCondition(create, "NOT_FOUND", "Run does not exist; an approved launch specification is required");
 				await controller.owner("run.create", {
@@ -72,7 +76,15 @@ export class SwarmController {
 				requireCondition(adopt || controller.#state.ownerSessionId === ownerSessionId, "AUTHORITY", "Run belongs to a different owner session");
 				if (["running", "verifying", "pausing", "stopping", "failing"].includes(controller.#state.status)) {
 					await controller.system("run.recover", {});
-					if (!controller.#state.tasks.some(task => task.assignment) && !controller.#state.workspace?.operations.length && !controller.#state.sessions?.turns.length) await controller.system("run.settle", {});
+					// Adopt only after fencing prior execution, but before a terminal settle
+					// can close the controller and make further journal writes impossible.
+					if (controller.#state.ownerSessionId !== ownerSessionId) await controller.owner("run.adopt", { ownerSessionId });
+					if (!controller.#state.tasks.some(task => task.assignment) && !controller.#state.workspace?.operations.length && !controller.#state.sessions?.turns.length) {
+						// A guided terminal recovery can settle and release ownership during open.
+						// Persist its actual owner attestation before that terminal publication.
+						if (recoveryAttestation && ["stopping", "failing"].includes(controller.#state.status)) await controller.owner("host.attest", recoveryAttestation);
+						await controller.system("run.settle", {});
+					}
 				}
 			}
 			if (controller.#state.ownerSessionId !== ownerSessionId) await controller.owner("run.adopt", { ownerSessionId });

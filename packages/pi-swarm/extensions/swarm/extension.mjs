@@ -200,7 +200,10 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				pending.assertCurrent(ctx);
 				const text = typeof event.text === "string" ? event.text.trim() : "";
 				if (pending.recovery) {
-					const match = /^I confirm settlement:\s*([\s\S]+)$/i.exec(text);
+					const pattern = pending.action === "recover"
+						? pending.args.resume === true ? /^I confirm recovery and resume:\s*([\s\S]+)$/i : /^I confirm recovery:\s*([\s\S]+)$/i
+						: /^I confirm settlement:\s*([\s\S]+)$/i;
+					const match = pattern.exec(text);
 					const evidence = match?.[1].trim();
 					check(evidence?.length > 0 && evidence.length <= 4096, "UNSETTLED", "Independent settlement evidence is required");
 					pending.evidence = evidence;
@@ -239,7 +242,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			}
 			// Startup handler order does not establish policy readiness. Native reload
 			// reattaches only on explicit control, after all startup providers are bound.
-			if (restoreLink) {
+			if (restoreLink && action !== "recover") {
 				const preparationCurrent = contextGuard(ctx);
 				await restorePending(ctx);
 				if (!preparationCurrent()) return;
@@ -306,6 +309,20 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					await activeHost.resume({ restart: selected === "restart" });
 					if (current()) progress.continued();
 					if (!pending.signal.aborted && !retired) for (const worker of activeHost.snapshot().run.workers) activeHost.wake(worker.id);
+				} else if (selected === "recover") {
+					const runId = rest[0] ?? restoreLink?.runId ?? host?.snapshot().run?.runId;
+					check(runId, "INPUT", "Guided recovery requires a known run identifier");
+					activeHost = await ensureHost(ctx, { retainPreparation });
+					if (!current()) return;
+					present?.("Inspecting the saved Swarm, ownership, interrupted execution and selected outcome without releasing leases, changing the journal or starting workers.");
+					try {
+						await activeHost.recover({ workspace: ctx.cwd, runId, resume: launchOptions?.resume === true });
+					} finally { if (activeHost.snapshot().run) restoreLink = undefined; }
+					const recovery = activeHost.snapshot().recovery;
+					if (recovery?.resumed && current()) {
+						progress.continued();
+						for (const worker of activeHost.snapshot().run.workers) activeHost.wake(worker.id);
+					} else if (!recovery?.settled) notify(ctx, "Recovery is not complete. Live frames still need to settle; ownership and execution fencing remain in place. Inspect status before another recovery attempt.", "warning");
 				} else if (selected === "configure") {
 					activeHost = await ensureHost(ctx);
 					if (!current()) return;
@@ -353,8 +370,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				proposal = undefined;
 				args = accepted.args;
 			} else clearProposal();
-			check(!["restore", "reconcile"].includes(action) || args.runId === undefined || /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(args.runId), "INPUT", "Invalid run identifier");
+			check(!["restore", "reconcile", "recover"].includes(action) || args.runId === undefined || /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(args.runId), "INPUT", "Invalid run identifier");
 			check(action !== "restore" || args.runId, "INPUT", "Restore requires a run identifier");
+			check(action !== "recover" || args.resume === undefined || typeof args.resume === "boolean", "INPUT", "Invalid recovery outcome");
 			const revoked = accepted?.revoked ?? new AbortController();
 			const current = contextGuard(ctx, signal);
 			const registry = ctx.modelRegistry;
@@ -392,17 +410,19 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					}
 					// Owner chat may resume much later; context and packet checks, not elapsed time, fence consent.
 					created = { id: randomUUID(), action, args: structuredClone(args), fingerprint, gate, revoked, confirmed: false,
-						recovery: ["reconcile", "release-lease"].includes(request.action), assertCurrent };
+						recovery: ["reconcile", "release-lease", "recover"].includes(request.action), assertCurrent };
 					created.agreement = approvalPacket({ ...request, workspace: cwd });
-					created.confirmationPrompt = created.recovery
-						? "Independently establish that ALL listed execution has stopped, then reply: I confirm settlement: <how you established this>. Missing PID, timeout or no output is not proof. Unknown effects stay unknown; nothing is replayed."
-						: "Shall I proceed with this exact Swarm configuration? Reply yes or confirm to approve, or ask for changes. Resume preserves allowances; restart resets them. Existing and generated changes are kept.";
+					created.confirmationPrompt = action === "recover"
+						? `This single agreement authorizes the listed recovery steps${args.resume === true ? " AND continuation under the displayed settings and remaining allowances" : " only; workers will NOT resume"}. Independently establish that ALL listed execution has stopped, then reply: ${args.resume === true ? "I confirm recovery and resume" : "I confirm recovery"}: <how you established this>. A generic yes or settlement-only reply does not approve this plan. Unknown effects stay unknown; commands are never replayed.`
+						: created.recovery
+							? "Independently establish that ALL listed execution has stopped, then reply: I confirm settlement: <how you established this>. Missing PID, timeout or no output is not proof. Unknown effects stay unknown; nothing is replayed."
+							: "Shall I proceed with this exact Swarm configuration? Reply yes or confirm to approve, or ask for changes. Resume preserves allowances; restart resets them. Existing and generated changes are kept.";
 					present(`${created.agreement}\nProposal ID: ${created.id} (bookkeeping only; not approval).\n${created.confirmationPrompt}\nNo execution authorized.`);
 					return { approved: false }; // Inspection only: no storage or workers.
 				};
 				const stop = AbortSignal.any([revoked.signal, ...(signal ? [signal] : [])]);
 				try {
-					const settings = action === "start" ? args : action === "configure" ? Object.fromEntries(["model", "workerModels"].filter(key => args[key] !== undefined).map(key => [key, args[key]])) : undefined;
+					const settings = action === "start" ? args : action === "configure" ? Object.fromEntries(["model", "workerModels"].filter(key => args[key] !== undefined).map(key => [key, args[key]])) : action === "recover" ? { resume: args.resume === true } : undefined;
 					await control(action === "start" ? "start" : `${action}${args.runId ? ` ${args.runId}` : ""}`, ctx, stop, ask, present, settings, Boolean(accepted));
 				} catch (error) {
 					if (!accepted && created && error.code === "AUTHORITY") {

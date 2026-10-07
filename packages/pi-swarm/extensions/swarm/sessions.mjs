@@ -18,7 +18,7 @@ const draining = new Set(["pausing", "stopping", "failing"]);
 
 /** Host-owned native SDK worker lifecycle and admission. */
 export class SwarmSessions {
-	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission, providerCapability, workerModels, resolveProviderCapability } = {}) {
+	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission, providerCapability, workerModels, resolveProviderCapability, settlementOnly = false } = {}) {
 		controller.assertOwned();
 		check(!attached.has(controller), "OWNERSHIP", "Controller already has an SDK driver");
 		const state = controller.snapshot();
@@ -28,7 +28,11 @@ export class SwarmSessions {
 		check(resolveProviderCapability === undefined || typeof resolveProviderCapability === "function", "INPUT", "Invalid provider capability resolver");
 		const configuredModels = state.sessions?.workerModels ?? workerModels;
 		resolveModelSettings(selection, configuredModels ?? [], selection);
-		for (const configured of [selection, ...(configuredModels ?? []).map(item => item.selection)]) {
+		check(typeof settlementOnly === "boolean" && (!settlementOnly || state.sessions), "STATE", "Settlement-only attachment requires recorded sessions");
+		// Recovery must remain possible when the provider is unavailable. Attachment
+		// starts no SDK session; later entries still require host admission and an exact
+		// provider capability before model execution or credential lookup.
+		for (const configured of settlementOnly ? [] : [selection, ...(configuredModels ?? []).map(item => item.selection)]) {
 			const capability = (await resolveProviderCapability?.(configured)) ?? providerCapability;
 			const model = capability ? assertProviderSelection(capability, configured, modelRuntime) : modelRuntime?.getModel(configured.provider, configured.modelId);
 			check(capability || (configured.provider === "swarm-mock" && model?.provider === "swarm-mock" && model.api === "swarm-mock" && model.id === configured.modelId), "MODEL", "A native provider agreement or explicit offline mock is required");

@@ -74,8 +74,17 @@ export function inspectLease(layout) {
 }
 
 /** Explicit host attestation, compare-before-unlink, and live-process refusal. */
-export function releaseStaleLease(layout, expected, { settled } = {}) {
+export function releaseStaleLease(layout, expected, { settled, identity } = {}) {
 	invariant(settled === true && expected?.token, "Explicit settlement attestation required");
+	if (identity) {
+		const directory = lstatSync(layout.ownerPath);
+		const stamp = lstatSync(layout.ownerPath, { bigint: true });
+		invariant(directory.isDirectory() && !directory.isSymbolicLink() &&
+			directory.dev === identity.dev && directory.ino === identity.ino &&
+			directory.mode === identity.mode && directory.uid === identity.uid &&
+			String(stamp.mtimeNs) === identity.mtimeNs && String(stamp.ctimeNs) === identity.ctimeNs,
+			"Controller lease directory changed during confirmation");
+	}
 	const current = inspectLease(layout);
 	invariant(JSON.stringify(current) === JSON.stringify(expected), "Controller lease changed during confirmation");
 	if (Number.isSafeInteger(current.pid) && current.pid > 0) {
