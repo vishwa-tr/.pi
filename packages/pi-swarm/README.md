@@ -97,6 +97,40 @@ cancellation; approval, attachment and storage errors can be identified without 
 filesystem paths, credentials, provider responses or raw exception text. Failures never
 approve work or start an automatic retry.
 
+## Compact observations and allowances
+
+Default status contains no rolling message bodies. `budgets` separates retained worker
+identities, cycle task creations (not task count), native turns, assigned tasks and known
+queued worker wakeups. Missing runtime queue/native information is `null`, not zero.
+Duration uses authoritative reducer `elapsedMs` at `sampledAtMs`: running, verifying
+and draining states charge active time at journal events. Unsampled time since that event
+is not included. Paused time is not charged; `deadline: null` deliberately avoids an
+unconditional wall-clock deadline or speculative exhaustion estimate.
+
+`swarm_status { warningThreshold: 0.2 }` warns when remaining/allowed is at most that
+fraction. The default is 0.2, validated range 0–0.5; this is presentation only and never
+changes persisted limits, permissions, admission or auto-extension. Exhausted fields name
+the admission they block. Task `failureAllowance` counts settled failed/rejected attempts,
+not successful assignments or SDK retry calls; `pendingSettlement` can mean the next
+failure charge has not yet occurred. Usage is not aggregated and cost remains unknown,
+not a measured zero or subscription/API-price estimate.
+
+Status caps workers at 8, tasks at 50 and assigned IDs per worker at 20, with explicit
+truncation flags. `swarm_history { channel: "tasks", offset: 50, limit: 10 }` retrieves
+additional task detail; `taskId` selects a task. Message and native-history pages remain
+available explicitly with `channel: "messages"` or `workerId`, `offset` and `limit`
+(1–20). Message/transcript text is capped at 2000 characters and marked when truncated;
+full messages remain in the journal and read-only view. Inspection never wakes workers.
+
+Ordinary send returns the durable operation/revision receipt and compact safety/budget
+state, not unrelated history. `persisted` means recorded mail. `dispatch: "enqueued"`
+and `enqueuedRecipients` report wakeups admitted to the queue at send time, not eventual
+execution; subsequent pause/stop can cancel them. `dispatch: "not-enqueued"` reports
+no admitted wakeups (for example, pause/stop interleaving after persistence). Neither
+state is **worker acknowledgment** (`acknowledged: false`). Unknown
+operation outcomes and unsettled execution remain visible; receipts do not prove success
+of worker work or grant continuation authority.
+
 ## A fresh objective in the same chat
 
 After the attached run is **stopped, completed or failed and fully settled**, ask the

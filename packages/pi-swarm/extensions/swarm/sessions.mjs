@@ -226,11 +226,13 @@ export class SwarmSessions {
 	}
 
 	#enqueue(workerId, reason) {
-		if (this.#closed || this.#controller.snapshot().status !== "running") return;
+		if (this.#closed || this.#controller.snapshot().status !== "running") return false;
 		this.#queue.set(workerId, reason);
-		if (this.#pumpQueued) return;
-		this.#pumpQueued = true;
-		queueMicrotask(() => { this.#pumpQueued = false; this.#pump(); });
+		if (!this.#pumpQueued) {
+			this.#pumpQueued = true;
+			queueMicrotask(() => { this.#pumpQueued = false; this.#pump(); });
+		}
+		return true;
 	}
 
 	#pump() {
@@ -355,9 +357,13 @@ export class SwarmSessions {
 
 	async send(workerId, text, topic) {
 		const to = recipientId(workerId, this.#controller.snapshot().workers);
-		await this.#controller.owner("message.send", { to, text, ...(topic !== undefined ? { topic } : {}) });
-		if (to === "@board") for (const worker of this.#controller.snapshot().workers) this.#enqueue(worker.id, "New main-agent board message");
-		else this.#enqueue(to, "New main-agent message");
+		const receipt = await this.#controller.owner("message.send", { to, text, ...(topic !== undefined ? { topic } : {}) });
+		const recipients = to === "@board" ? this.#controller.snapshot().workers.map(worker => worker.id) : [to];
+		let enqueued = 0;
+		for (const recipient of recipients) {
+			if (this.#enqueue(recipient, to === "@board" ? "New main-agent board message" : "New main-agent message")) enqueued++;
+		}
+		return { operationId: receipt.operationId, revision: receipt.revision, to, persisted: true, dispatch: enqueued === 0 ? "not-enqueued" : "enqueued", enqueuedRecipients: enqueued, acknowledged: false };
 	}
 
 	async redirect(text) {

@@ -49,6 +49,32 @@ function dashboardUI(f) { let view; f.ctx.ui.custom = factory => new Promise(res
 	view = factory({ terminal: { rows: 24 }, requestRender() {} }, { fg: (_, text) => text }, bindings, resolve);
 }); return () => view; }
 
+test("main send returns its own durable receipt without replaying mail or claiming acknowledgment", async t => {
+	const f = await fixture(t);
+	const proposal = await f.propose({ objective: "Inspect only", codingTools: ["read"] });
+	await f.input("start"); await f.consume(proposal);
+	await until(() => f.mock.calls.length === 1);
+	const send = text => f.tool("swarm_control", { action: "send", to: "planner", text });
+	const results = await Promise.all([send("first-message"), send("second-message")]);
+	for (const result of results) {
+		assert.equal(result.isError, undefined, result.details.error);
+		assert.equal(result.details.delivery.persisted, true);
+		assert.equal(result.details.delivery.acknowledged, false);
+		assert.equal(result.details.delivery.dispatch, "enqueued");
+		assert.ok(result.details.delivery.operationId);
+		assert.ok(result.details.budgets); assert.ok(result.details.unknownEffects);
+		assert.equal(Object.hasOwn(result.details, "messages"), false);
+		assert.doesNotMatch(JSON.stringify(result.details), /first-message|second-message/);
+	}
+	assert.notEqual(results[0].details.delivery.operationId, results[1].details.delivery.operationId);
+	assert.notEqual(results[0].details.delivery.revision, results[1].details.delivery.revision);
+	const history = await f.tool("swarm_history", { channel: "messages" });
+	assert.ok(history.details.messages.some(message => message.text === "first-message"));
+	assert.ok(history.details.messages.some(message => message.text === "second-message"));
+	await f.command("stop");
+	assert.equal((await send("forbidden")).isError, true);
+});
+
 test("factory rejects absent and nonmock injected runtimes", () => { assert.throws(() => createSwarmExtension()); assert.throws(() => createSwarmExtension({ mainModel: { provider: "live", api: "live" }, modelRuntime: {} })); });
 test("complete main-selected settings require real owner consent; work is preserved without disposition prompts", async t => {
 	const f = await fixture(t); writeFileSync(join(f.root, "user.txt"), "preserve\n");

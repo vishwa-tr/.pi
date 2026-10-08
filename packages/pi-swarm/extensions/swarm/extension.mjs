@@ -355,8 +355,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		// only a later owner input event can mint its one-shot execution capability.
 		const chatControl = async (action, args, ctx, signal, update) => {
 			if (action === "send") {
-				await sendMessage(args, ctx, signal);
-				return inspect(ctx);
+				const delivery = await sendMessage(args, ctx, signal);
+				const observation = inspect(ctx);
+				return { delivery, runId: observation.runId, status: observation.status, budgets: observation.budgets, unsettled: observation.unsettled, coordination: observation.coordination, ownershipHeld: observation.ownershipHeld, errorsPresent: observation.errorsPresent, unknownEffects: observation.unknownEffects, pendingApproval: observation.pendingApproval, recovery: observation.recovery, exhaustedTasks: observation.exhaustedTasks };
 			}
 			if (["pause", "stop", "status", "view"].includes(action)) { await control(action === "view" ? "dashboard" : action, ctx, signal); return inspect(ctx); }
 			check(!retired && !command && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "Swarm control context is unavailable");
@@ -456,13 +457,13 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				return stopImmediately(ctx);
 			},
 		});
-		const inspect = ctx => {
+		const inspect = (ctx, options) => {
 			check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot inspect the Swarm host");
-			return { ...swarmSummary(host?.snapshot()), restorePending: Boolean(restoreLink),
+			return { ...swarmSummary(host?.snapshot(), options), restorePending: Boolean(restoreLink),
 				...(proposal ? { pendingAuthorization: { proposalId: proposal.id, action: proposal.action, confirmed: proposal.confirmed } } : {}) };
 		};
 		registerMainTools(pi, {
-			control, chatControl, inspect, revoke: ctx => { inspect(ctx); cancel(); }, messages: ctx => { inspect(ctx); return host?.snapshot().run?.messages ?? []; }, history: (workerId, ctx) => {
+			control, chatControl, inspect, tasks: ctx => { inspect(ctx); return host?.snapshot().run?.tasks ?? []; }, revoke: ctx => { inspect(ctx); cancel(); }, messages: ctx => { inspect(ctx); return host?.snapshot().run?.messages ?? []; }, history: (workerId, ctx) => {
 				inspect(ctx);
 				check(host, "STATE", "No attached Swarm run");
 				return host.history(workerId);
