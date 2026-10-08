@@ -1,5 +1,6 @@
-import { nativeTranscript } from "./native-transcript.mjs";
 import { isBoardMessage } from "./messaging.mjs";
+import { nativeTranscript } from "./native-transcript.mjs";
+import { effectiveWorkerSelection } from "./model-settings.mjs";
 import { conversationText, messageText, topicsFor } from "./conversations.mjs";
 import { matchesKey, visibleWidth, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
@@ -256,11 +257,27 @@ export class SwarmDashboard {
 			case 2: {
 				const topics = topicsFor(run);
 				if (!topics.length) return "No topics yet. Ask the main agent to start a named discussion.";
+				const latest = new Map();
+				for (const message of run.messages ?? []) if (message.topic) latest.set(message.topic, message);
 				return topics.map((topic, index) => {
-					const heading = `${index === (this.topicIndex ?? 0) ? ">" : " "} ${topic.title || topic.name} (${topic.messages})`;
-					const participants = topic.participants.length ? topic.participants.join(", ") : "No participants yet";
-					const status = topic.status ? `\n  Status: ${topic.status}` : "";
-					return `${heading}\n  Participants: ${participants}${status}`;
+					const selected = index === (this.topicIndex ?? 0);
+					const width = this.width ?? 80;
+					const title = singleLine(topic.title || topic.name);
+					const status = singleLine(topic.status || "discussion");
+					const label = `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
+					const fullHeading = `${selected ? ">" : " "} [${label}] ${title}`;
+					const heading = clipTopicLine(fullHeading, width);
+					const names = topic.participants.slice(0, 3).map(singleLine).join(", ");
+					const participants = names ? names + (topic.participants.length > 3 ? ` +${topic.participants.length - 3} more` : "") : "No participants yet";
+					const count = `${topic.messages} ${topic.messages === 1 ? "message" : "messages"}`;
+					const rows = [heading, clipTopicLine(`  ${count} · ${participants}`, width)];
+					if (selected && heading !== fullHeading) rows.push(`  ${title}`);
+					const message = latest.get(topic.name);
+					if (selected && message) {
+						const from = message.from === "owner" ? "Main agent" : singleLine(message.from);
+						rows.push(clipTopicLine(`  Latest · ${from}: ${singleLine(message.text)}`, width));
+					}
+					return rows.join("\n");
 				}).join("\n\n");
 			}
 
@@ -274,6 +291,7 @@ export class SwarmDashboard {
 			const selected = index === this.workerIndex;
 			const activity = !driver ? "activity unavailable" : driver.active.includes(worker.id) ? "working" : driver.queued.includes(worker.id) ? "queued" : "idle";
 			rows.push(`${selected ? ">" : " "} ${worker.id} · ${activity} · ${worker.specialization}`);
+			rows.push(`  ${workerModelLines(run, worker.id).join(" · ")}`);
 			// Keep the roster scannable; only the selected agent reveals its detail.
 			if (selected) {
 				const tasks = run.tasks.filter(task => task.assignment?.workerId === worker.id);
@@ -305,6 +323,9 @@ export class SwarmDashboard {
 			: this.isConversation
 			? this.styledLine("Agent conversation · Tab opens Agents", width, "muted")
 			: this.tabLine(width));
+		if (rows >= 10 && (this.isConversation || this.isSteer) && this.workerId !== "owner") {
+			for (const line of workerModelLines(this.snapshot?.run, this.workerId)) header.push(this.styledLine(line, width, "muted"));
+		}
 		const help = "NAVIGATION\nj/k or arrows: workers / scroll\nh/l: previous / next pane; Tab: next pane\ngg/G or Home/End: top / bottom\nCtrl-u/d: half page; PgUp/PgDn: page\nEnter on Agents: mail; Steer: native transcript\n4: Steer; Tab from transcript: select worker\nq/Esc: conversation back; otherwise close\nCONVERSATION\n/: local literal search; Enter applies; Esc cancels\nEmpty search clears; n/N: next / previous match\nf: toggle follow tail; scrolling stops following\nCONTROL\nAsk the main agent to change Swarm state.\nClose this view and use /swarm stop for an emergency stop.\nCtrl-c: unchanged Pi global control\nInspection never starts a worker. ? closes help.";
 		const native = this.isSteer && !this.help && !this.error;
 		if (native && !this.nativeComponents) this.nativeComponents = nativeTranscript(this.history, this.tui, this.snapshot?.run?.workspaceRoot ?? process.cwd());
@@ -354,8 +375,8 @@ export class SwarmDashboard {
 		let withinItem = false;
 		for (const line of displayText(text).split("\n")) {
 			// Style logical lines before wrapping so selected headings remain prominent.
-			// Only Agents mute detail rows; Topics keep their original body foreground.
-			const color = !list ? "text" : withinItem ? (this.section === 1 ? "muted" : "text") : line.startsWith("> ") ? "accent" : "text";
+			// Metadata stays quieter than headings in every list pane.
+			const color = !list ? "text" : withinItem ? "muted" : line.startsWith("> ") ? "accent" : "text";
 			for (const wrapped of wrapTextWithAnsi(line, width)) rows.push({ text: wrapped, color });
 			withinItem = line.length > 0;
 		}
@@ -400,4 +421,23 @@ export async function showDashboard(ctx, source, signal, onMount = () => { }) {
 			return component;
 		}, { overlay: true, overlayOptions: { row: 0, col: 0, width: "100%", maxHeight: "100%" } });
 	} finally { component?.dispose(); }
+}
+
+/** Use the run's effective worker selection, never the main chat's ambient model. */
+function workerModelLines(run, workerId) {
+	const selection = effectiveWorkerSelection(run?.sessions, workerId);
+	const model = selection?.modelId ? singleLine(selection.modelId) : "unavailable";
+	const provider = selection?.provider ? ` (${singleLine(selection.provider)})` : "";
+	const thinking = selection?.thinkingLevel ? singleLine(selection.thinkingLevel) : "unavailable";
+	return [`Model: ${model}${provider}`, `Thinking: ${thinking}`];
+}
+
+function singleLine(value) {
+	return displayText(value).replace(/\s+/g, " ").trim();
+}
+
+function clipTopicLine(text, width) {
+	// Callers sanitize fields first. Remove only the SDK truncator's generated SGR
+	// resets so the plain-text body does not escape them into visible control text.
+	return truncateToWidth(text, width, "…").replace(/\x1b\[[0-9;]*m/g, "");
 }

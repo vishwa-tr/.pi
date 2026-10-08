@@ -258,7 +258,7 @@ test("topics open their messages and the default view shows main and peer conver
 	]; f.tick();
 	assert.match(f.view.body(), /Main agent → one/);
 	assert.match(f.view.body(), /one → two/);
-	f.view.handleInput("3"); assert.match(f.view.body(), /Auth \(2\)/);
+	f.view.handleInput("3"); assert.match(f.view.body(), /\[Discussion\] Auth\n  2 messages/);
 	f.view.handleInput("\r"); assert.equal(f.view.section, 0);
 	assert.match(f.view.body(), /Investigate/); assert.doesNotMatch(f.view.body(), /Finding/);
 	f.view.handleInput("a"); assert.match(f.view.body(), /Finding/);
@@ -287,7 +287,7 @@ test("spaced roster reveals only selected detail and assignment state", () => {
 	assert.match(f.view.body(), /Tasks: Build feature \[assigned\]\n\n  two · idle · Review/);
 	assert.doesNotMatch(f.view.body(), /Check/);
 	f.view.handleInput("j");
-	assert.match(f.view.body(), /> two · idle · Review\n  Check/);
+	assert.match(f.view.body(), /> two · idle · Review\n  Model: unavailable · Thinking: unavailable\n  Check/);
 	assert.doesNotMatch(f.view.body(), /Tasks:|Investigate|Build feature/);
 	f.view.dispose();
 });
@@ -326,7 +326,7 @@ test("Agents hierarchy keeps wrapped headings prominent and metadata muted", () 
 	f.view.dispose();
 });
 
-test("Topics show name(count), participants then status with original body/accent colors", () => {
+test("Topics show status badges and message counts with muted metadata", () => {
 	const f = fixture();
 	f.snapshot.run.tasks = [
 		{ id: "waiting", status: "ready" },
@@ -335,20 +335,19 @@ test("Topics show name(count), participants then status with original body/accen
 	];
 	f.tick(); f.view.handleInput("3");
 	const rows = f.view.contentRows(f.view.body(), 80);
-	for (const status of ["ready", "blocked", "done"]) {
-		const index = rows.findIndex(row => row.text === `  Status: ${status}`);
-		assert.ok(index > 0);
-		assert.equal(rows[index].color, "text");
-		assert.equal(rows[index - 1].text, "  Participants: No participants yet");
-		assert.equal(rows[index - 1].color, "text");
-		assert.match(rows[index - 2].text, / \(0\)$/);
-		assert.equal(rows[index - 2].color, rows[index - 2].text.startsWith("> ") ? "accent" : "text");
+	for (const status of ["Ready", "Blocked", "Done"]) {
+		const index = rows.findIndex(row => row.text.includes(`[${status}]`));
+		assert.ok(index >= 0);
+		assert.equal(rows[index].color, rows[index].text.startsWith("> ") ? "accent" : "text");
+		assert.equal(rows[index + 1].text, "  0 messages · No participants yet");
+		assert.equal(rows[index + 1].color, "muted");
 	}
-	const wrapped = f.view.contentRows("> Long selected topic name (2)\n  Participants: one, two, three\n  Status: blocked\n\n  Other long topic name (0)\n  Participants: No participants yet\n  Status: done", 16);
-	const details = wrapped.findIndex(row => row.text.includes("Participants:"));
+	const wrapped = f.view.contentRows("> [Blocked] Long selected topic name\n  2 messages · one, two, three\n\n  [Done] Other topic\n  0 messages · No participants yet", 16);
+	const details = wrapped.findIndex(row => row.text.includes("2 messages"));
 	assert.ok(details > 1);
 	assert.ok(wrapped.slice(0, details).every(row => row.color === "accent"));
-	assert.ok(wrapped.slice(details).every(row => row.color === "text"));
+	const gap = wrapped.findIndex(row => row.text === "");
+	assert.ok(wrapped.slice(details, gap).every(row => row.color === "muted"));
 	f.view.dispose();
 });
 
@@ -370,7 +369,7 @@ test("topics show one displayed name with count and retain underlying discussion
 	f.snapshot.run.tasks = [{ id: "build", title: "Build feature", status: "ready" }];
 	f.snapshot.run.messages = [{ from: "one", to: "@board", text: "Finding", topic: "Review" }];
 	f.tick(); f.view.handleInput("3");
-	assert.match(f.view.body(), /> Build feature \(0\)\n  Participants: No participants yet\n  Status: ready\n\n  Review \(1\)\n  Participants: one/);
+	assert.match(f.view.body(), /> \[Ready\] Build feature\n  0 messages · No participants yet\n\n  \[Discussion\] Review\n  1 message · one/);
 	assert.doesNotMatch(f.view.body(), /\(build\)/);
 	f.view.handleInput("\r"); assert.equal(f.view.topic, "build");
 	f.view.handleInput("q"); assert.equal(f.view.selectedTopic, "build");
@@ -417,7 +416,7 @@ test("wrapped topic selection remains visible in small list viewports", () => {
 		const lines = f.view.render(24);
 		assert.equal(lines.length, 10);
 		assert.ok(lines.every(line => visibleWidth(line) <= 24));
-		assert.ok(lines.some(line => line.includes("> Discuss")), "selected heading stays visible even when details exceed the viewport");
+		assert.ok(lines.some(line => line.includes("> [Ready]")), "selected heading stays visible even when details exceed the viewport");
 	}
 	f.view.handleInput("\r"); assert.equal(f.view.topic, "topic-7");
 	f.view.dispose();
@@ -433,4 +432,67 @@ test("topic selection survives live insertion and scoped messages return to Topi
 	f.view.handleInput("\r"); assert.match(f.view.body(), /Storage discussion/); assert.doesNotMatch(f.view.body(), /Auth discussion/);
 	f.view.handleInput("q"); assert.equal(f.view.section, 2);
 	f.view.handleInput("1"); assert.equal(f.view.topic, undefined); f.view.dispose();
+});
+
+test("worker model labels resolve recorded defaults and overrides in roster and transcript", () => {
+	const f = fixture();
+	f.snapshot.run.sessions = {
+		selection: { provider: "default-provider", modelId: "default-model", thinkingLevel: "low" },
+		workerModels: [{ workerId: "two", selection: { provider: "override-provider", modelId: "review-model", thinkingLevel: "high" } }],
+	};
+	f.view.handleInput("2");
+	assert.match(f.view.body(), /Model: default-model \(default-provider\) · Thinking: low/);
+	assert.match(f.view.body(), /Model: review-model \(override-provider\) · Thinking: high/);
+	f.view.openConversation("two");
+	let screen = f.view.render(90).join("\n");
+	assert.match(screen, /Model: review-model \(override-provider\)/);
+	assert.match(screen, /Thinking: high/);
+	f.snapshot.run.sessions.selection.thinkingLevel = "medium";
+	f.tick();
+	assert.match(f.view.render(90).join("\n"), /Thinking: high/);
+	f.options.source.history = () => [];
+	f.view.openSteer("one");
+	screen = f.view.render(90).join("\n");
+	assert.match(screen, /Model: default-model/);
+	assert.match(screen, /Thinking: medium/);
+	assert.deepEqual(f.results, [], "model inspection cannot dispatch actions");
+	f.view.dispose();
+});
+
+test("worker model metadata is honest when absent and cannot inject terminal controls", () => {
+	const f = fixture();
+	f.view.handleInput("2");
+	assert.match(f.view.body(), /Model: unavailable · Thinking: unavailable/);
+	f.snapshot.run.sessions = { selection: { provider: "provider\nname", modelId: "model\x1b[2J", thinkingLevel: "off" } };
+	f.tick();
+	for (const width of [80, 40, 24, 12]) {
+		const lines = f.view.render(width);
+		assert.ok(lines.every(line => visibleWidth(line) <= width));
+		assert.ok(lines.every(line => !line.includes("\x1b[2J") && !line.includes("\n")));
+	}
+	assert.match(f.view.body(), /Thinking: off/);
+	assert.match(f.view.body(), /provider name/);
+	f.view.dispose();
+});
+
+test("compact topics preserve full selected titles, preview the latest message and retain routing", () => {
+	const f = fixture();
+	const title = "A detailed topic title that needs more room than a compact row allows";
+	f.snapshot.run.tasks = [{ id: "stable-id", title, status: "blocked" }, { id: "other", title: "Other", status: "ready" }];
+	f.snapshot.run.messages = [
+		{ from: "one", to: "owner", text: "Old preview", topic: "stable-id" },
+		{ from: "owner", to: "one", text: "Latest\nreply\x1b[2J", topic: "stable-id" },
+	];
+	f.tick(); f.view.handleInput("3");
+	const lines = f.view.render(48, 16);
+	assert.ok(lines.every(line => visibleWidth(line) <= 48));
+	const body = f.view.body();
+	assert.ok(body.split("\n")[0].endsWith("…"));
+	assert.ok(body.includes(title), "selected title remains available after compact-heading truncation");
+	assert.match(body, /2 messages · one, Main agent/);
+	assert.match(body, /Latest · Main agent: Latest reply/);
+	assert.doesNotMatch(body, /Old preview|\x1b/);
+	f.view.handleInput("\r");
+	assert.equal(f.view.topic, "stable-id", "selection uses the original topic identity");
+	f.view.dispose();
 });

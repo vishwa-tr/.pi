@@ -292,10 +292,17 @@ Topics remain read-only; **Steer** is the only page with messaging.
 - **Messages:** inter-agent mail and main-agent exchanges, not the native worker
   chat transcript. Tool calls/results and internal context stay out of this view.
 - **Agents:** the main agent and worker roster, live activity, focus and assigned
-  tasks. Enter opens read-only agent mail, without an editor.
-- **Topics:** task discussions with their status, plus named conversation
-  topics. Enter filters Messages to that discussion; `q` returns to Topics and
-  `a` shows all messages again. Selection stays on the same topic during live updates.
+  tasks. Each worker shows its effective approved model/provider and thinking
+  level, including worker overrides. These are the run's recorded settings, not
+  the main chat's current selection; unavailable metadata is labeled explicitly.
+  Enter opens read-only agent mail, without an editor. Agent mail and Steer also
+  show the selected worker's model/thinking above its history when space allows.
+- **Topics:** task discussions and named conversation topics in compact rows,
+  with status badges, explicit message counts and participant summaries. The
+  selected topic reveals its latest message and any title shortened to fit the
+  row. Enter filters Messages using the original topic identity; `q` returns to
+  Topics and `a` shows all messages again. Selection stays on the same topic
+  during live updates.
 - **Steer:** select a worker and press Enter to see its native Pi user/assistant
   transcript, tool calls/results and activity, with a visibly bordered multiline
   message editor. This is distinct from agent mail. Selecting main returns to

@@ -26,6 +26,32 @@ After the coding run settles, use `/reload` or restart Pi to load source changes
 do not reload the active controller during implementation or verification.
 Reload does not resume a Swarm, and in-memory drafts do not survive it.
 
+## Agent settings and topic rows (2026-10-08)
+
+Agents and Steer rosters display every worker's effective model/provider and
+thinking level from the run's recorded default or worker override. Read-only
+agent mail and Steer transcripts also display the selected worker's settings
+above the history when the viewport has room. Missing metadata is labeled
+unavailable rather than inferred from main-chat settings. Main chat retains its
+own model/thinking indicator: a stopped worker can correctly show medium after
+the main chat is changed to low.
+
+Topics use status badges, explicit message counts, and compact participant
+summaries. The selected topic shows its latest-message preview and expands a
+title that was shortened in the row. Routing uses the original topic identity,
+not the shortened label. Metadata stays muted beneath prominent headings;
+control characters are escaped and generated truncation styling is removed
+before the plain-text body is themed.
+
+Verified live on GNOME Wayland/XWayland: recorded worker settings appeared in the
+roster and Steer header; the topic status/count/preview rendered correctly; Enter
+opened the same discussion and q returned to Topics. Focused regressions also
+cover worker overrides, missing metadata, live selection updates, Unicode/narrow
+widths, control escaping, and routing with truncated titles. The package suite
+passed 731 tests; seven terminal checks, global configuration validation and its
+10 fixture tests, 19 shared Shotcut checks, and diff checks passed. This was a UI
+change; no workers were dispatched during live inspection.
+
 ## Steer verification (2026-10-07)
 
 A bounded three-worker coding Swarm implemented the feature and an independent
