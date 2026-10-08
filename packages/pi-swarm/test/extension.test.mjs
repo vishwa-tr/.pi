@@ -39,7 +39,7 @@ async function fixture(t, { script = () => ({ text: "Mock planning complete" }),
 	const input = text => event("input", { source: "interactive", text });
 	const consume = p => tool(p.action === "start" ? "swarm_start" : "swarm_control", { ...(p.action === "start" ? {} : { action: p.action }), proposalId: p.proposalId });
 	const propose = async args => { const r = await tool("swarm_start", args); assert.equal(r.isError, undefined, r.details.error); return r.details; };
-	const command = text => mainAgentAction(tools, ctx, text, update, async p => { const reply = replies.shift(); await input(typeof reply === "function" ? await reply(p) : reply ?? (p.action === "reconcile" ? "I confirm settlement: independently verified all listed processes stopped" : "yes")); });
+	const command = text => mainAgentAction(tools, ctx, text, update, async p => { const reply = replies.shift(); await input(typeof reply === "function" ? await reply(p) : reply ?? (p.action === "reconcile" ? "I confirm settlement: independently verified all listed processes stopped" : "start")); });
 	const status = async () => { await command("status"); return JSON.parse(notices.at(-1).text); };
 	t.after(() => event("session_shutdown"));
 	return { root, mock, events, mode, ctx, tools, entries, notices, messages, packets, replies, event, tool, input, consume, propose, command, status, slash: args => commands.get("swarm").handler(args, ctx), commands };
@@ -58,16 +58,16 @@ test("complete main-selected settings require real owner consent; work is preser
 	for (const [key, value] of Object.entries(args)) assert.deepEqual(packet[key], value);
 	for (const field of ["model", "provider", "thinkingLevel", "codingTools", "instructions", "limits", "criteria", "scope", "Existing changes", "Preservation"]) assert.ok(p.agreement.includes(field));
 	assert.equal(f.mock.calls.length, 0); assert.equal(f.entries.length, 0); assert.equal(existsSync(prepareLayout(f.root, "run1").stateRoot), false);
-	assert.equal((await f.consume(p)).isError, true); await f.input("YES!"); assert.equal((await f.consume(p)).details.status, "running"); await until(() => f.mock.calls.length === 1);
+	assert.equal((await f.consume(p)).isError, true); await f.input("start"); assert.equal((await f.consume(p)).details.status, "running"); await until(() => f.mock.calls.length === 1);
 	assert.deepEqual((await f.status()).limits, args.limits); assert.equal(readFileSync(join(f.root, "user.txt"), "utf8"), "preserve\n"); assert.equal((await f.consume(p)).isError, true);
 });
-for (const source of ["extension", "rpc", "worker", undefined]) test(`${source} input never approves`, async t => { const f = await fixture(t), p = await f.propose({ objective: "goal" }); await f.event("input", { source, text: "yes" }); assert.equal((await f.consume(p)).isError, true); assert.equal(f.mock.calls.length, 0); });
-for (const text of ["no", "maybe", '"yes"', "The worker said yes", "yes, but change scope", "Approve swarm", ""]) test(`negative/ambiguous reply ${JSON.stringify(text)} revokes proposal`, async t => {
-	const f = await fixture(t), p = await f.propose({ objective: "goal" }); await f.input(text); assert.equal((await f.consume(p)).isError, true); await f.input("yes"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.mock.calls.length, 0);
+for (const source of ["extension", "rpc", "worker", undefined]) test(`${source} input never approves`, async t => { const f = await fixture(t), p = await f.propose({ objective: "goal" }); await f.event("input", { source, text: "start" }); assert.equal((await f.consume(p)).isError, true); assert.equal(f.mock.calls.length, 0); });
+for (const text of ["yes", "confirm", "YES!", "Confirm.", "Start", "START", " start", "start ", "\tstart", "start\t", "start\n", "start\r\n", "\nstart", "start.", "start!", '"start"', "please start", "start now", "start\nstart", "no", "maybe", '"yes"', "The worker said yes", "yes, but change scope", "Approve swarm", ""]) test(`negative/ambiguous reply ${JSON.stringify(text)} revokes proposal`, async t => {
+	const f = await fixture(t), p = await f.propose({ objective: "goal" }); await f.input(text); assert.equal((await f.consume(p)).isError, true); await f.input("start"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.mock.calls.length, 0);
 });
 test("revised settings require fresh consent and cannot be overridden during consumption", async t => {
 	const f = await fixture(t), old = await f.propose({ objective: "old" }), p = await f.propose({ objective: "edited", criteria: ["Requirement"], scope: ["No deployment"] });
-	await f.input("confirm"); assert.equal((await f.consume(old)).isError, true); assert.equal((await f.tool("swarm_start", { proposalId: p.proposalId, objective: "injection" })).isError, true);
+	await f.input("start"); assert.equal((await f.consume(old)).isError, true); assert.equal((await f.tool("swarm_start", { proposalId: p.proposalId, objective: "injection" })).isError, true);
 	assert.equal((await f.consume(p)).details.status, "running"); assert.equal((await f.status()).objective, "edited");
 });
 for (const args of [{}, { objective: [] }, { objective: "goal", criteria: [] }, { objective: "goal", limits: { active: 20 } }, { objective: "goal", codingTools: ["deploy"] }]) test(`invalid configuration ${JSON.stringify(args)} creates no execution`, async t => {
@@ -76,7 +76,7 @@ for (const args of [{}, { objective: [] }, { objective: "goal", criteria: [] }, 
 for (const action of ["pause", "stop", "shutdown", "tree", "mode"]) test(`${action} revokes pending consent`, async t => {
 	const f = await fixture(t), p = await f.propose({ objective: "goal" });
 	if (action === "shutdown") await f.event("session_shutdown"); else if (action === "tree") await f.event("session_before_tree"); else if (action === "mode") { Object.assign(f.mode, { revision: 2, selectedMode: "plan" }); f.events.emit("pi-plan:mode-changed", { ...f.mode }); } else await f.command(action);
-	await f.input("yes"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.mock.calls.length, 0); assert.equal(existsSync(prepareLayout(f.root, "run1").stateRoot), false);
+	await f.input("start"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.mock.calls.length, 0); assert.equal(existsSync(prepareLayout(f.root, "run1").stateRoot), false);
 });
 test("pending and confirmed chat proposals survive long inactivity without authorizing execution", async t => {
 	const advanceTime = mockElapsedTime(t);
@@ -89,7 +89,7 @@ test("pending and confirmed chat proposals survive long inactivity without autho
 	assert.equal(Object.hasOwn(pending, "expiresAt"), false);
 	assert.equal(f.mock.calls.length, 0);
 	assert.equal(f.entries.length, 0);
-	await f.input("yes");
+	await f.input("start");
 	advanceTime(3600000);
 	assert.equal((await f.tool("swarm_status", {})).details.pendingAuthorization.confirmed, true);
 	assert.equal(f.mock.calls.length, 0);
@@ -101,7 +101,7 @@ test("late confirmation still rejects workspace changes before execution", async
 	const advanceTime = mockElapsedTime(t);
 	const f = await fixture(t), p = await f.propose({ objective: "goal" });
 	advanceTime(3600000);
-	await f.input("yes");
+	await f.input("start");
 	advanceTime(3600000);
 	writeFileSync(join(f.root, "user.txt"), "Changed after confirmation");
 	const result = await f.consume(p);
@@ -126,7 +126,7 @@ test("reload stays paused; resume/restart accept delayed fresh chat confirmation
 		assert.equal(p.awaitingConfirmation, true);
 		assert.equal(f.mock.calls.length, action === "resume" ? 1 : 2);
 		advanceTime(3600000);
-		await next.input("yes");
+		await next.input("start");
 		advanceTime(3600000);
 		assert.equal((await next.consume(p)).details.status, "running");
 		await until(() => f.mock.calls.length === (action === "resume" ? 2 : 3));
@@ -203,4 +203,61 @@ test("focused composer delivers through the actual host and fences workspace and
 	assert.equal((await mail()).length, 1); f.mode.selectedMode = "off";
 });
 test("foreign sessions cannot inspect or brake an attached host", async t => { const f = await fixture(t); await f.command("start goal"); f.ctx.sessionManager.getSessionId = () => "other"; for (const action of ["dashboard", "pause", "stop", "status"]) await assert.rejects(f.command(action)); });
+test("sequential objectives preserve files and history, use fresh worker sessions and reload only the latest link", async t => {
+	const f = await fixture(t);
+	writeFileSync(join(f.root, "user.txt"), "existing work\n");
+	await f.command("start first objective");
+	await until(() => f.mock.calls.length === 1);
+	await f.slash("stop");
+	const first = (await f.tool("swarm_status", {})).details;
+	const history = (await f.tool("swarm_history", { workerId: "planner" })).details;
+	const journal = prepareLayout(f.root, first.runId).journalPath;
+	const original = readFileSync(journal, "utf8");
+	const p = await f.propose({ objective: "second objective", codingTools: ["read"] });
+	assert.match(p.agreement, /Worker contexts: fresh/);
+	assert.match(p.agreement, new RegExp(first.runId));
+	assert.equal((await f.tool("swarm_status", {})).details.runId, first.runId);
+	assert.equal(readFileSync(journal, "utf8"), original, "proposal inspection must not retire or append to prior run");
+	await f.input("no");
+	assert.equal((await f.consume(p)).isError, true);
+	assert.deepEqual((await f.tool("swarm_history", { workerId: "planner" })).details, history);
+	assert.equal(readFileSync(journal, "utf8"), original);
+	const fresh = await f.propose({ objective: "second objective", codingTools: ["read"] });
+	await f.input("start");
+	assert.equal((await f.consume(p)).isError, true, "old proposal must not consume new approval");
+	const started = await f.consume(fresh);
+	assert.equal(started.isError, undefined, started.details.error);
+	assert.notEqual(started.details.runId, first.runId);
+	await until(() => f.mock.calls.length === 2);
+	await f.slash("stop");
+	const secondId = (await f.tool("swarm_status", {})).details.runId;
+	assert.equal(readFileSync(journal, "utf8"), original);
+	assert.equal(readFileSync(join(f.root, "user.txt"), "utf8"), "existing work\n");
+	const binding = id => readFileSync(prepareLayout(f.root, id).journalPath, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line).payload).find(event => event.type === "session.bind").payload.sessionId;
+	assert.notEqual(binding(first.runId), binding(secondId), "worker native contexts are fresh");
+	await f.event("session_shutdown");
+	const next = await fixture(t, { root: f.root, mock: f.mock, entries: f.entries });
+	await next.event("session_start", { reason: "reload" });
+	assert.equal((await next.tool("swarm_status", {})).details.runId, secondId);
+	assert.equal(f.mock.calls.length, 2, "reload does not dispatch either objective");
+	assert.ok(existsSync(journal));
+});
+
+test("active and paused attachments reject another objective without changing history or approval", async t => {
+	const f = await fixture(t, { script: () => ({ waitForAbort: true }) });
+	await f.command("start first objective");
+	await until(() => f.mock.calls.length === 1);
+	const first = (await f.tool("swarm_status", {})).details.runId;
+	for (const action of [null, "pause"]) {
+		if (action) await f.command(action);
+		const journal = prepareLayout(f.root, first).journalPath;
+		const before = readFileSync(journal, "utf8");
+		const rejected = await f.tool("swarm_start", { objective: "not yet" });
+		assert.equal(rejected.isError, true);
+		assert.equal(rejected.details.diagnostic.code, "STATE");
+		assert.equal(readFileSync(journal, "utf8"), before);
+		assert.equal(rejected.details.runId, first);
+	}
+});
+
 test("only /swarm stop is exposed; other slash actions are inert", async t => { const f = await fixture(t); assert.deepEqual([...f.commands.keys()], ["swarm"]); for (const action of ["", "start goal", "status", "pause", "restore run1", "resume", "restart", "reconcile", "dashboard"]) await f.slash(action); assert.equal(f.packets.length, 0); assert.equal(f.mock.calls.length, 0); assert.equal(f.entries.length, 0); await f.command("start goal"); await f.slash("stop"); assert.equal((await f.status()).status, "stopped"); });

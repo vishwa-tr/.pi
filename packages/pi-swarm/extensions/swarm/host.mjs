@@ -70,6 +70,7 @@ export class SwarmHost {
 	#capabilities = new Map();
 	#nativeModels;
 	#recovery;
+	#transition;
 
 	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => { }, providerCapability, nativeModels = false }) {
 		check(typeof requestApproval === "function", "INPUT", "Human approval callback required");
@@ -107,7 +108,7 @@ export class SwarmHost {
 	snapshot() {
 		let ownershipHeld = false;
 		try { if (this.#controller) { this.#controller.assertOwned(); ownershipHeld = true; } } catch { /* Observation cannot repair lost ownership. */ }
-		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, ownershipHeld, pendingApproval: Boolean(this.#pending) || this.#pendingSafety > 0, errors: [...this.#errors], recovery: this.#recovery ? { ...this.#recovery, completed: [...this.#recovery.completed] } : null };
+		return { run: this.#controller?.snapshot() ?? null, driver: this.#driver?.snapshot() ?? null, workspace: this.#workspace?.snapshot() ?? null, ownershipHeld, transition: this.#transition ? { ...this.#transition } : null, pendingApproval: Boolean(this.#pending) || this.#pendingSafety > 0, errors: [...this.#errors], recovery: this.#recovery ? { ...this.#recovery, completed: [...this.#recovery.completed] } : null };
 	}
 
 	/** Observation conveys no owner or worker capability. */
@@ -234,6 +235,8 @@ export class SwarmHost {
 
 	#runOperation(phase, fn) {
 		check(!this.#closing && !this.#operation && !this.#lifetime.signal.aborted, "BUSY", "Host operation already pending or closed");
+		check(typeof SwarmController.assertStorageRuntime === "function", "RUNTIME_STALE", "Controller modules are stale; cold-restart Pi and resume the same session");
+		SwarmController.assertStorageRuntime();
 		const operation = { cancel: new AbortController(), epoch: this.#epoch };
 		this.#operation = operation;
 		operation.promise = inPhase(phase, () => Promise.resolve().then(() => fn(operation))).finally(() => {
@@ -276,7 +279,7 @@ export class SwarmHost {
 					? "pi-safety policy remains enforced and may ask for operation confirmation"
 					: "Selected coding tools are authorized within this bounded run; no Swarm operation prompts"
 			});
-			const request = Object.freeze({ action, ...providers, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, workspaceFingerprint: inspection.fingerprint, runRevision: this.#controller?.snapshot().revision ?? recovery?.runRevision ?? null, existingChanges: "preserve", requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
+			const request = Object.freeze({ action, ...providers, integrations, repository: inspection.repository, specification: freeze(structuredClone(specification)), changes: freeze(structuredClone(inspection.changes)), fingerprintScope: inspection.fingerprintScope, workspaceFingerprint: inspection.fingerprint, runRevision: this.#controller?.snapshot().revision ?? recovery?.runRevision ?? null, ...(action === "launch" ? { workerContexts: "fresh", previousRunId: this.#controller?.snapshot().runId ?? null } : {}), existingChanges: "preserve", requiresReconciliation: action !== "launch", recovery: recovery && freeze(structuredClone(recovery)), signal });
 			const answer = structuredClone(await Promise.race([Promise.resolve().then(() => {
 				check(!signal.aborted, "CANCELLED", "Approval cancelled before presentation");
 				return this.#ask(request);
@@ -373,10 +376,22 @@ export class SwarmHost {
 			...(state.sessions.workerModels !== undefined ? { workerModels: state.sessions.workerModels } : {}) } : this.#launchSpecification;
 	}
 
+	#assertFreshObjective(workspace) {
+		if (!this.#controller) return;
+		this.#controller.assertReplaceable(this.#sessionId);
+		check(this.#controller.snapshot().workspaceRoot === workspace, "OWNERSHIP", "New objective must use the attached workspace");
+		this.#driver?.assertReplaceable();
+		const workspaceState = this.#workspace?.snapshot();
+		const coordination = workspaceState?.coordination;
+		check(!workspaceState?.uncertain.length && !coordination?.claims.length && !coordination?.pending.length && !coordination?.active.length && !this.#pendingSafety,
+			"UNSETTLED", "Workspace operations and held coordination claims must settle before a new objective");
+	}
+
 	launch(input) { return this.#runOperation("launch", operation => this.#launch(input, operation)); }
 	async #launch({ workspace, runId, specification }, operation) {
 		this.#assertOperation(operation);
-		check(!this.#controller && !this.#pending, "STATE", "Host already owns a run or approval");
+		check(!this.#pending, "STATE", "Host already owns an approval");
+		this.#assertFreshObjective(resolve(workspace));
 		check(validId(runId), "INPUT", "Invalid run identifier");
 		this.#mode.capture();
 		const inspection = await this.#inspect(workspace, operation);
@@ -388,10 +403,33 @@ export class SwarmHost {
 		const accepted = await this.#approval("launch", inspection, draft);
 		this.#validate(accepted.specification, inspection.root, runId);
 		await this.#unchanged(inspection, accepted.grant, operation);
-		this.#location = { workspace: inspection.root, runId, ownerSessionId: this.#sessionId };
-		this.#launchSpecification = accepted.specification;
+		this.#assertFreshObjective(inspection.root);
+		const previous = this.#controller;
+		const revision = previous?.snapshot().revision;
+		const location = { workspace: inspection.root, runId, ownerSessionId: this.#sessionId };
 		try {
-			this.#controller = await inPhase("storage", () => SwarmController.open({ ...this.#location, create: accepted.specification, createOnly: true }));
+			if (previous) {
+				this.#permit?.cancel.abort();
+				this.#permit = undefined;
+				// Keep the previous attachment until new storage opens successfully. No
+				// retirement occurs during proposal inspection or rejected approval.
+				this.#transition = { previousRunId: previous.snapshot().runId, runId, stage: "retiring", workerContexts: "fresh" };
+				await this.#driver?.close();
+				this.#assertOperation(operation);
+				this.#assertFreshObjective(inspection.root);
+				check(previous.snapshot().revision === revision, "STALE", "Prior run changed before transition");
+				await previous.close();
+				this.#transition.stage = "opening";
+			}
+			const controller = await inPhase("storage", () => SwarmController.open({ ...location, create: accepted.specification, createOnly: true }));
+			this.#unsubscribe?.();
+			this.#driver = undefined;
+			this.#workspace = undefined;
+			this.#controller = controller;
+			this.#location = location;
+			this.#launchSpecification = accepted.specification;
+			this.#recovery = undefined;
+			if (this.#transition) this.#transition.stage = "attached";
 			this.#assertOperation(operation);
 			await this.#unchanged(inspection, accepted.grant, operation);
 			await this.#controller.owner("host.approve", { approval: accepted.approval });
@@ -400,10 +438,12 @@ export class SwarmHost {
 			await this.#unchanged(inspection, accepted.grant, operation);
 			this.#setPermit(accepted.grant, operation);
 			await this.#driver.resume({ reconciled: true });
+			if (this.#transition) this.#transition.stage = "completed";
 			return this.snapshot();
 		} catch (error) {
 			this.#invalidate();
 			if (this.#driver) await this.#driver.pause().catch(() => { });
+			else if (this.#controller !== previous) await this.#pauseUnwired().catch(() => { });
 			throw error;
 		}
 	}
@@ -610,6 +650,23 @@ export class SwarmHost {
 		});
 	}
 
+	/** A partial attachment has no SDK driver to publish its lifecycle brakes. */
+	async #pauseUnwired({ stop = false } = {}) {
+		if (!this.#controller) return { settled: true };
+		let state = this.#controller.snapshot();
+		if (["stopped", "completed", "failed"].includes(state.status)) return { settled: true };
+		this.#controller.assertOwned();
+		if (stop && ["running", "verifying", "paused", "pausing"].includes(state.status)) await this.#controller.owner("run.stop");
+		else if (["running", "verifying"].includes(state.status)) await this.#controller.owner("run.pause");
+		state = this.#controller.snapshot();
+		const coordination = this.#workspace?.snapshot().coordination;
+		const unsettled = state.tasks.some(task => task.assignment) || state.workspace?.operations.length || state.sessions?.turns.length
+			|| coordination?.claims.length || coordination?.pending.length || coordination?.active.length || this.#workspace?.snapshot().uncertain.length;
+		if (unsettled) return { settled: false };
+		if (["pausing", "stopping", "failing"].includes(state.status)) await this.#controller.system("run.settle");
+		return { settled: ["paused", "stopped", "completed", "failed"].includes(this.#controller.snapshot().status) };
+	}
+
 	async pause(options = {}) {
 		this.#invalidate();
 		const pending = this.#operation?.promise;
@@ -625,7 +682,7 @@ export class SwarmHost {
 			if (pending) await pending.catch(() => { });
 			// Preparation may have attached a driver before observing cancellation.
 			if (this.#driver && this.#driver !== driver) return this.#driver.pause(options);
-			return result ?? { settled: true };
+			return result ?? await this.#pauseUnwired(options);
 		})();
 		try {
 			return await Promise.race([settle, new Promise(resolve => { timer = setTimeout(() => resolve({ settled: false }), timeoutMs); })]);

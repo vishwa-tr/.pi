@@ -115,7 +115,7 @@ for (const resume of [false, true]) test(`one owner reply recovers ${resume ? "a
 	assert.equal((await f.consume(p)).isError, true);
 });
 
-for (const text of ["yes", "I confirm settlement: independently verified stopped", "I confirm recovery:   ", "I confirm recovery: independently verified stopped"]) test(`resume cannot be approved by ${JSON.stringify(text)}`, async t => {
+for (const text of ["start", "yes", "I confirm settlement: independently verified stopped", "I confirm recovery:   ", "I confirm recovery: independently verified stopped"]) test(`resume cannot be approved by ${JSON.stringify(text)}`, async t => {
 	const f = await fixture(t), before = readJournal(f.layout), p = await f.propose({ resume: true });
 	await f.input(text);
 	assert.equal((await f.consume(p)).isError, true);
@@ -125,7 +125,7 @@ for (const text of ["yes", "I confirm settlement: independently verified stopped
 	assert.equal(f.mock.calls.length, 0);
 });
 
-for (const text of ["yes", `I confirm settlement: ${evidence}`]) test(`paused recovery rejects ${JSON.stringify(text)}`, async t => {
+for (const text of ["start", "yes", `I confirm settlement: ${evidence}`]) test(`paused recovery rejects ${JSON.stringify(text)}`, async t => {
 	const f = await fixture(t), before = readJournal(f.layout), p = await f.propose();
 	await f.input(text);
 	assert.equal((await f.consume(p)).isError, true);

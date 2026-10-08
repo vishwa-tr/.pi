@@ -4,6 +4,8 @@ import { requireCondition } from "../errors.mjs";
 import { lstatSync, mkdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { atomicJson, invariant, privateDirectory, readPrivate, syncDirectory, validId } from "./files.mjs";
 
+export const LEASE_RUNTIME_VERSION = 1;
+
 function readReservation(path) {
 	try {
 		const value = JSON.parse(readPrivate(path));
@@ -17,15 +19,33 @@ function readReservation(path) {
 
 // A live lock never expires automatically. A crash requires explicit recovery,
 // since a PID disappearing does not prove its spawned commands have stopped.
-export function acquireLease(layout, { ownerSessionId } = {}) {
+export function acquireLease(layout, { ownerSessionId, requireUnreserved = false } = {}) {
 	privateDirectory(layout.stateRoot);
 	const token = randomUUID();
 	mkdirSync(layout.ownerPath, { mode: 0o700 });
-	syncDirectory(layout.stateRoot);
 	const identity = lstatSync(layout.ownerPath);
 	const tokenPath = join(layout.ownerPath, "owner.json");
 	let closed = false;
-	atomicJson(tokenPath, { version: 1, token, runId: layout.runId, pid: process.pid, ownerSessionId: ownerSessionId ?? null });
+	try {
+		syncDirectory(layout.stateRoot);
+		atomicJson(tokenPath, { version: 1, token, runId: layout.runId, pid: process.pid, ownerSessionId: ownerSessionId ?? null });
+	} catch (error) {
+		// No reservation or controller was published yet. Remove only our own
+		// unchanged directory/token; an unexpected entry makes rmdir fail closed.
+		try {
+			const current = lstatSync(layout.ownerPath);
+			invariant(current.isDirectory() && !current.isSymbolicLink() && current.dev === identity.dev && current.ino === identity.ino,
+				"Controller lease initialization directory changed");
+			try {
+				const owner = JSON.parse(readPrivate(tokenPath));
+				invariant(owner.token === token && owner.runId === layout.runId, "Controller lease initialization token changed");
+				unlinkSync(tokenPath);
+			} catch (missing) { if (missing.code !== "ENOENT") throw missing; }
+			rmdirSync(layout.ownerPath);
+			syncDirectory(layout.stateRoot);
+		} catch { /* Ambiguous initialization must stay fenced, not be stolen. */ }
+		throw error;
+	}
 
 	function assertLiveOwner() {
 		invariant(!closed, "Controller lease is closed");
@@ -55,17 +75,29 @@ export function acquireLease(layout, { ownerSessionId } = {}) {
 		closed = true;
 	}
 
+	let reservationAttempted = false;
 	try {
 		const reservation = readReservation(layout.reservationPath);
-		requireCondition(!reservation || reservation.runId === layout.runId, "RESERVED", "Checkout belongs to another running or paused swarm");
-		if (!reservation) atomicJson(layout.reservationPath, { version: 1, runId: layout.runId });
+		requireCondition(requireUnreserved ? !reservation : !reservation || reservation.runId === layout.runId,
+			"RESERVED", "Checkout belongs to another running or paused swarm");
+		if (!reservation) {
+			reservationAttempted = true;
+			atomicJson(layout.reservationPath, { version: 1, runId: layout.runId });
+		}
 	} catch (error) {
-		// Never remove another run's reservation, even if acquisition failed.
-		release();
+		// No capability was published. Only a reservation this attempt created
+		// may be released; pre-existing or malformed metadata stays untouched.
+		try {
+			const reservation = reservationAttempted ? readReservation(layout.reservationPath) : null;
+			release({ retainReservation: !reservationAttempted || !reservation });
+		} catch { /* Lost ownership or ambiguous metadata remains fenced. */ }
 		throw error;
 	}
 	return { assertOwned, release };
 }
+
+/** Read-only ownership observation; never removes or repairs reservations. */
+export function inspectReservation(layout) { return readReservation(layout.reservationPath); }
 
 /** Read-only disclosure. A dead PID alone never authorizes reclaiming a lease. */
 export function inspectLease(layout) {

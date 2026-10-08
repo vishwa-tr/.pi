@@ -68,6 +68,91 @@ output. Images use text placeholders. Other desktop platforms remain unverified.
 Large native transcripts can take a redraw to appear: recapture after the view
 settles before interpreting an immediately captured old frame as failed input.
 
+## Same-session objectives and start approval (2026-10-08)
+
+Current ordinary approval uses exactly `start`. Older yes/confirm examples below
+are historical observations, not the current protocol. Special recovery-evidence
+confirmations retain their separate forms.
+
+After a run is stopped/completed/failed and fully settled, ask the main agent for
+a new bounded objective in the same chat. It proposes a new agreement; type
+`start` to authorize it. The transition keeps previous journals and workspace
+work, but uses fresh native worker contexts rather than replaying the old task.
+Active/paused or unsettled runs cannot be silently replaced. Do not clear the
+chat, delete ownership metadata, or use restart to change an old objective.
+
+### Lower thinking without launching a model turn
+
+Use Pi's built-in `/thinking low` command and verify both the status message and
+model/thinking footer. In Pi 1.0.4 this sets the current session selection; it does
+not persist a global default. A new Swarm objective copies that selection unless
+its proposal explicitly overrides it. Existing runs retain their approved pinned
+model/thinking settings and require the supported configuration flow to change.
+When an autocomplete acceptance leaves the command visible in the editor, inspect
+that state and press Return again to submit it. This procedure was visually
+verified on 2026-10-08 without a model request.
+
+### Live acceptance and preservation evidence
+
+Two read-only objectives were run sequentially in the same Pi process and owning
+chat, each with one worker, one task, one attempt, and a 90-second bound. A read
+the root README title and returned `FIRST-RUN-OK`; B read the manifest title and
+returned `SECOND-RUN-OK`. Both were approved with `start` and ended stopped with
+zero active turns, operations, assignments, or coordination claims. There was no
+clear, process restart, or session switch between the successful A and B runs.
+Both journals were independently checked against the resumed chat identity, and
+A's complete SHA-256 fingerprint was unchanged after B.
+
+Use the read-only [journal evidence helper](../scripts/swarm-journal-evidence.py)
+to repeat that check without printing message contents or session identifiers:
+
+```bash
+python3 docs/agents/scripts/swarm-journal-evidence.py \
+  --expect-owner SESSION_ID /path/to/run-a/events.jsonl
+# Save the first fingerprint locally, then repeat after the second run:
+python3 docs/agents/scripts/swarm-journal-evidence.py \
+  --expect-owner SESSION_ID /path/to/run-a/events.jsonl /path/to/run-b/events.jsonl
+```
+
+The helper needs Python 3 and read access. It writes nothing, streams each file,
+and reports fingerprints, sizes, record counts, and owner-match booleans. It does
+not validate the journal hash chain or prove settlement; verify stopped/settled
+status separately through Swarm. Verification covered the actual A/B journals,
+matching and mismatched owners, and rejection of malformed input. Keep local
+fingerprints and runtime paths out of public artifacts.
+
+### Upgrade reload limitation and same-chat restart
+
+The first live attempt after hot reload failed before worker dispatch. A managed
+Pi 1.0.4 warm/cold probe established that `/reload` refreshed the caller while
+retaining older native storage-module exports. A cold process loaded correctly.
+The compatibility guard now reports `RUNTIME_STALE` before approval or storage
+mutation, including when the old error formatter remains cached. No SDK files
+or module-resolution tricks were used, and ownership guards remain enforced.
+
+When that diagnostic appears, finish/stop active work and verify settlement,
+record the current session path locally, exit Pi normally, then reopen the exact
+saved chat:
+
+```bash
+pi --session /path/to/the-existing-session.jsonl
+```
+
+Inside Pi's Bash environment, `PI_SESSION_FILE` identifies that file. Use an exact
+file path rather than guessing the newest session. This procedure was live-tested:
+the saved chat identity and history survived compaction and a cold process restart
+before A; no further restart or clear occurred between A and B. Reload is not a
+substitute for that process restart when native dependencies are already cached.
+The managed offline regression also verifies the visible stale diagnostic and
+cold storage initialization without any worker/model dispatch.
+
+Latest implementation validation: 728 package tests, 123/123 integration files,
+seven terminal checks (including managed storage reload), configuration checks,
+and diff checks passed. Independent safety review approved the transition and
+compatibility guard. Typechecking remained unavailable because `tsc` was absent;
+no dependency installation was performed. The live tests verified the normal
+consecutive-run path; injected storage/ownership failures are covered offline.
+
 ## Offline SDK verification
 
 Use managed Pi **1.0.4**, native Node on the target platform, disposable fixtures and the existing scripted provider. No credentials, live provider calls, saved defaults, existing run state or submodule changes are required.
@@ -142,7 +227,7 @@ approval. Inspect the current installed implementation and policy state before
 choosing a fix. Offline suite results above do not establish that this live
 approval path works.
 
-### Diagnosis: standalone confirmation required
+### Historical diagnosis: standalone yes/confirm required
 
 The confirmation sent to the interactive editor began with an affirmative phrase
 but also restated the scope and limits. `extension.mjs` accepts only a complete
@@ -207,3 +292,27 @@ present but labeled `Paused/unavailable` while the run was stopped; no message
 was entered or sent. Its hints state `Tab` opens Agents / switches panes and
 `Esc` returns to main. Do not treat the presence of that composer as proof that
 messaging is available for a stopped run.
+
+## Historical same-session reuse failure (2026-10-08, before the fix)
+
+After the coding run was stopped and reattached for read-only inspection, the
+same Pi chat requested a separate two-worker, two-task, 120-second read-only smoke
+test. No session reset or prior-objective restart was allowed. A new `swarm_start`
+attempt returned `STATE`: “This action is unavailable in the current run state.”
+No proposal was created and no workers started; the old run remained stopped
+with no active turns, operations, assignments, or claims.
+
+The launch guard in `extensions/swarm/host.mjs` requires the host to have neither
+an attached controller nor pending approval, including when the controller is
+stopped. The current control API offers resume/restart for the existing objective
+and configure for model/thinking selection; it exposes no new-objective or
+retire/detach operation. Therefore a fresh agreement alone cannot replace the
+objective in the same attached session. This differs from the earlier extended
+confirmation-text usage error: the new request fails before approval is possible.
+
+A potential product improvement is an explicit, approval-bound new-objective
+transition after settlement, preserving prior history and making worker-context
+reuse a deliberate choice. This is a design opportunity, not an implemented or
+verified capability. Do not restart the old coding objective, delete metadata,
+or silently clear the chat to claim same-session reuse succeeded. No lifecycle
+code was changed during this reproduction.

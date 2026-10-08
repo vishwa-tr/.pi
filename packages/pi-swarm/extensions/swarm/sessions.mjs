@@ -86,7 +86,9 @@ export class SwarmSessions {
 	}
 
 	snapshot() {
-		return { queued: [...this.#queue.keys()], active: [...this.#active.keys()], errors: [...this.#errors], sessions: this.#controller.snapshot().sessions };
+		return { queued: [...this.#queue.keys()], active: [...this.#active.keys()],
+			sdkIdle: [...this.#entries.values()].every(entry => entry.session?.isIdle === true),
+			errors: [...this.#errors], sessions: this.#controller.snapshot().sessions };
 	}
 
 	#recordError(error) {
@@ -480,6 +482,14 @@ export class SwarmSessions {
 		await this.#workspace.reconcile({ settled: true });
 		await this.#controller.owner("sessions.reconcile", { settled: true });
 		await this.#settleDrain();
+	}
+
+	/** Read-only settlement check; must not construct, cancel or dispose sessions. */
+	assertReplaceable() {
+		const state = this.snapshot();
+		check(!state.active.length && !state.queued.length && !this.#drain && !this.#pumpQueued,
+			"UNSETTLED", "Queued or live SDK work remains unsettled");
+		check(state.sdkIdle, "UNSETTLED", "SDK session preparation or work remains unsettled");
 	}
 
 	async close() {

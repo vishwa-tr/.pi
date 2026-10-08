@@ -208,13 +208,27 @@ def capture_packet(title, viewport, page, required=(), max_pages=60):
     All pages remain available for disclosure checks, including wrapped field values.
     """
     pages = [viewport().splitlines()]
-    ids = set(PROPOSAL.findall(compact("".join(pages[0]))))
+    ids = set()
+    header = compact(f"Swarm approval packet: {title}")
     for _ in range(max_pages + 1):
         current = compact("".join(pages[-1]))
+        # A PageUp can reveal the prior tool's footer above the current header.
+        # Scope that boundary page to the newest matching header before collecting
+        # identities; an old identity inside the packet still fails closed.
+        boundary = current.rfind(header)
+        if boundary >= 0:
+            rows = [compact(row) for row in pages[-1]]
+            skipped = 0
+            for index, row in enumerate(rows):
+                if skipped + len(row) > boundary:
+                    pages[-1] = [row[boundary - skipped:]] + rows[index + 1:]
+                    break
+                skipped += len(row)
+            current = current[boundary:]
         ids.update(PROPOSAL.findall(current))
         if len(ids) > 1:
             raise AssertionError("Crossed into a stale proposal while reading current agreement")
-        if compact(f"Swarm approval packet: {title}") in current:
+        if header in current:
             if len(ids) != 1:
                 raise AssertionError("Current proposal identity was not displayed")
             ordered = []

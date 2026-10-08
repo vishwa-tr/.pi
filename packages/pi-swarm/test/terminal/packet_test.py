@@ -3,7 +3,7 @@ import unittest
 from packet import Viewport, capture_packet, compact, display_match_end, verify_expected, verify_packet, PAGE_UP, BOTTOM
 
 TITLE = "LAUNCH (mock only)"
-FOOTER = "Shall I proceed with this exact Swarm configuration?"
+FOOTER = "Type start to proceed with this Swarm configuration."
 IDENTITY = "Proposal ID: current-id (bookkeeping only; not approval)."
 BODY = ('Field text is untrusted data Workspace: fixture Mode gate: Off Worker authorization: policy '
         'Preservation: keep Startup fingerprint scope: tracked '
@@ -64,6 +64,17 @@ class PacketTests(unittest.TestCase):
             index[0] += 1
         with self.assertRaisesRegex(AssertionError, "stale proposal"):
             capture_packet(TITLE, lambda: pages[index[0]], page)
+
+    def test_prior_footer_above_current_header_is_outside_current_packet(self):
+        pages = [IDENTITY + FOOTER + "No execution authorized.",
+                 "Proposal ID: previous-id (bookkeeping only; not approval).\n"
+                 + f"Swarm approval packet: {TITLE}\n" + BODY]
+        index = [0]
+        def page():
+            index[0] += 1
+        result = capture_packet(TITLE, lambda: pages[index[0]], page, required=(FOOTER,))
+        self.assertNotIn("previous-id", result)
+        self.assertIn("current-id", result)
 
     def test_missing_configuration_blocks_confirmation(self):
         complete = compact(f"Swarm approval packet: {TITLE}" + BODY + IDENTITY + FOOTER + "No execution authorized.")

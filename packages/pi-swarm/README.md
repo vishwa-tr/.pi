@@ -17,9 +17,11 @@ confirmation before starting. Swarm opens no confirmation dialogs.
 2. Review the objective, criteria, scope/exclusions, selected coding tools and instructions,
    model/thinking level, provider/outbound context, integrations, existing files and limits.
    Ask for changes if needed; the agent must prepare a fresh proposal for revised settings.
-3. Reply **`yes`** or **`confirm`** in the owning main chat to confirm the single current
-   proposal. Replies are case-insensitive, optionally ending with `.` or `!`. Other input
-   cancels the pending proposal rather than guessing your intent.
+3. Reply with exactly **`start`** as the entire message in the owning main chat to confirm
+   the single current ordinary proposal (launch, resume, restart or configure). Only standalone
+   lowercase `start` is accepted: no whitespace, punctuation or additional text. Other input,
+   including `yes` or `confirm`, cancels the pending proposal rather than guessing your intent.
+   Recovery and settlement retain their separate evidence-bearing replies described below.
 4. The agent calls `swarm_start` again with **only** the returned `proposalId` (for lifecycle
    controls, only `action` and `proposalId`). This consumes one-shot
    authorization only after rechecking the exact configuration, workspace and host context.
@@ -29,9 +31,9 @@ Proposal IDs are tool bookkeeping, not a command you must type. Only a real inte
 owner input can confirm; tool arguments, model output, transcript quotations, worker mail,
 and extension/RPC input cannot approve work. The agent must wait for your reply, not infer
 consent from the original request. While a proposal is pending, it must ask only its explicit
-Swarm confirmation question, not unrelated yes/no questions. Native UI prompts cancel pending
-confirmation. A plain `yes` cannot semantically distinguish an unrelated normal-chat question;
-this question discipline is required.
+Swarm confirmation question, not unrelated questions. Native UI prompts cancel pending
+confirmation. The reserved standalone `start` reply approves only the current Swarm proposal;
+this question discipline is still required.
 
 **`/swarm stop` is the only direct user command.** It immediately fences new work,
 cancels pending approvals and worker requests, and aborts native Bash process trees
@@ -94,6 +96,33 @@ and an error code. Inspection timeouts and output limits are distinguished from 
 cancellation; approval, attachment and storage errors can be identified without disclosing
 filesystem paths, credentials, provider responses or raw exception text. Failures never
 approve work or start an automatic retry.
+
+## A fresh objective in the same chat
+
+After the attached run is **stopped, completed or failed and fully settled**, ask the
+main agent for another bounded objective using `swarm_start`. No `/clear`, metadata
+removal or restart of old work is needed. Running, paused, draining or unsettled runs
+cannot be replaced. The owning session must still match, persistence and ownership
+must be certain, and SDK queues/turns, operations and coordination claims must be idle.
+Recover uncertain execution using the evidence-bearing controls below first.
+
+The proposal names the previous run and discloses **fresh worker contexts**: the new
+objective uses a new run ID and new native worker sessions, not old worker conversation
+contexts. Prior journals, native history, main-chat cards and workspace changes remain
+intact. New defaults copy the current main selection and stay pinned in that proposal.
+Inspection or rejected approval never closes the prior driver or changes its journal.
+Only a fresh standalone `start` reply and exact-context revalidation authorize transition.
+
+Failures remain fenced, without replay or automatic rollback. If opening new storage
+fails, the prior attachment/history remains available; status identifies the attempted
+new run and transition stage. A proven fresh creation that never published a controller
+or dispatched workers releases only its own reservation on failure, retaining its journal.
+Changed ownership or an ambiguous pre-existing reservation (even with the same run ID) must be
+recovered, not removed or bypassed. Retry requires a new proposal and approval. If new
+storage opens but SDK attachment fails, the new run stays attached without authority;
+stop it through the main agent or `/swarm stop`, then propose again, or use a fresh
+recovery agreement. The latest durable main-session run link is used on reload;
+reload never dispatches either objective.
 
 ## Requirements and optional integrations
 
@@ -350,6 +379,21 @@ worker model settings are independent of the main-chat selection. Resume require
 agreement and workspace reconciliation.
 Reload discovers the active-branch run link but never resumes execution automatically.
 
+### Managed SDK storage hot-reload limitation
+
+On managed Pi 1.0.4, pure `.mjs` native dependency exports can survive `/reload`
+even when the extension and controller are freshly loaded. After a storage-module
+upgrade, Swarm's stale-runtime guard returns `RUNTIME_STALE` before launch approval
+or storage creation, rather than continuing with incompatible exports.
+
+Cold-exit Pi, then run `pi --session <same-session-file>` from the same project directory to retain the same main chat
+and history with a fresh module cache. Never clear the chat or delete run, lease,
+reservation or session metadata to work around this error. Workers never resume
+automatically; continuation still needs its own fresh approval. The first new
+objective also needs fresh approval. Subsequent objectives A and B can use the same
+process once the preceding run is fully settled; no per-objective restart is needed.
+This is a narrow SDK hot-reload limitation, not a normal run-transition requirement.
+
 ### One guided recovery agreement
 
 Ask the main agent to recover a known run. It uses `swarm_control` with
@@ -369,7 +413,7 @@ Independently establish that all listed prior execution has stopped, then confir
 - **Recover without dispatch:** `I confirm recovery: <independent settlement evidence>`
 - **Recover and resume:** `I confirm recovery and resume: <independent settlement evidence>`
 
-Generic `yes`, the old settlement-only phrase, tool arguments, worker mail and quoted
+Generic `start`, `yes`, the old settlement-only phrase, tool arguments, worker mail and quoted
 history cannot approve this combined plan. The main agent consumes the confirmed proposal
 with only `action: "recover"` and `proposalId`; it cannot alter the outcome during consumption.
 
@@ -405,8 +449,8 @@ design question, not permission to remove lease metadata or bypass fencing.
 
 The chat proposal identifies the previous session and PID. Independently establish that the
 old process **and its commands** have stopped, then reply in the owning main chat:
-**`I confirm settlement: <how you independently established settlement>`**. A plain `yes`
-is insufficient for recovery. Missing PID, timeout or silence alone is not evidence of
+**`I confirm settlement: <how you independently established settlement>`**. Plain `start` or
+`yes` is insufficient for recovery. Missing PID, timeout or silence alone is not evidence of
 settlement. A live PID or changed lease refuses release. The reservation and journal are
 retained. Restore again, then reconcile any journaled interrupted operations with the same
 explicit evidence-bearing chat attestation. Reconciliation does not resume execution;
@@ -454,8 +498,20 @@ python3 packages/pi-swarm/test/terminal/production.py
 python3 packages/pi-swarm/test/terminal/native.py
 python3 packages/pi-swarm/test/terminal/entry.py
 python3 packages/pi-swarm/test/terminal/entry.py --package-root
+python3 packages/pi-swarm/test/terminal/entry.py --storage-reload
 python3 packages/pi-swarm/test/terminal/focus.py --composer
 ```
+
+`entry.py --storage-reload` runs only an isolated offline storage regression: it
+warms old native storage exports inside real Pi, restores current disposable sources,
+uses `/reload`, and checks fail-closed storage admission plus a successful paused
+cold-process open and stop/settlement without workers. It prefers the repository's
+managed `agent/bin/pi` wrapper; when unavailable it uses the verified `pi_cli()`
+JavaScript entry via Node and reports the launcher used. Diagnostic sources and
+privacy-safe tool diagnostics (never raw exceptions or stacks) stay in the disposable fixture.
+It also warms the pre-change `errors.mjs` allowlist, verifies that its direct mapping
+would return generic `FAILED`, and requires the actual rendered main-tool output to
+retain the static `RUNTIME_STALE` restart instruction.
 
 Unit/integration checks cover native coding, fresh-read/claim/permission guards,
 retries, automatic compaction, fencing, exactly-once task failure, bounded run policy,

@@ -207,7 +207,7 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					const evidence = match?.[1].trim();
 					check(evidence?.length > 0 && evidence.length <= 4096, "UNSETTLED", "Independent settlement evidence is required");
 					pending.evidence = evidence;
-				} else check(/^(?:yes|confirm)[.!]?$/i.test(text), "AUTHORITY", "Confirm the exact pending proposal");
+				} else check(event.text === "start", "AUTHORITY", "Confirm the exact pending proposal");
 				pending.confirmed = true;
 			} catch { clearProposal(); }
 		});
@@ -394,6 +394,14 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 				};
 				accepted?.assertCurrent(ctx);
 				assertCurrent();
+				if (action === "start" && !accepted && resolveSelection) {
+					const selection = await resolveSelection(ctx, pi);
+					assertCurrent();
+					// Each objective copies today's main selection, not the prior run's
+					// defaults. Store it in the proposal so delayed approval stays pinned.
+					args = { ...args, model: { provider: selection.mainModel?.provider, modelId: selection.mainModel?.id,
+						thinkingLevel: selection.thinkingLevel, ...args.model } };
+				}
 				const present = text => update?.({ content: [{ type: "text", text }], details: {} });
 				const ask = async request => {
 					assertCurrent();
@@ -413,10 +421,10 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 						recovery: ["reconcile", "release-lease", "recover"].includes(request.action), assertCurrent };
 					created.agreement = approvalPacket({ ...request, workspace: cwd });
 					created.confirmationPrompt = action === "recover"
-						? `This single agreement authorizes the listed recovery steps${args.resume === true ? " AND continuation under the displayed settings and remaining allowances" : " only; workers will NOT resume"}. Independently establish that ALL listed execution has stopped, then reply: ${args.resume === true ? "I confirm recovery and resume" : "I confirm recovery"}: <how you established this>. A generic yes or settlement-only reply does not approve this plan. Unknown effects stay unknown; commands are never replayed.`
+						? `This single agreement authorizes the listed recovery steps${args.resume === true ? " AND continuation under the displayed settings and remaining allowances" : " only; workers will NOT resume"}. Independently establish that ALL listed execution has stopped, then reply: ${args.resume === true ? "I confirm recovery and resume" : "I confirm recovery"}: <how you established this>. A generic start, yes or settlement-only reply does not approve this plan. Unknown effects stay unknown; commands are never replayed.`
 						: created.recovery
 							? "Independently establish that ALL listed execution has stopped, then reply: I confirm settlement: <how you established this>. Missing PID, timeout or no output is not proof. Unknown effects stay unknown; nothing is replayed."
-							: "Shall I proceed with this exact Swarm configuration? Reply yes or confirm to approve, or ask for changes. Resume preserves allowances; restart resets them. Existing and generated changes are kept.";
+							: "Type start to proceed with this Swarm configuration.";
 					present(`${created.agreement}\nProposal ID: ${created.id} (bookkeeping only; not approval).\n${created.confirmationPrompt}\nNo execution authorized.`);
 					return { approved: false }; // Inspection only: no storage or workers.
 				};

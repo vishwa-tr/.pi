@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { acquireLease } from "./store/lease.mjs";
+import { acquireLease, inspectLease, inspectReservation, LEASE_RUNTIME_VERSION } from "./store/lease.mjs";
 import { openJournal } from "./store/journal.mjs";
 import { prepareLayout } from "./store/layout.mjs";
-import { privateDirectory } from "./store/files.mjs";
+import { privateDirectory, FILES_RUNTIME_VERSION } from "./store/files.mjs";
 import { existsSync, realpathSync, lstatSync } from "node:fs";
 import { DEFAULT_LIMITS, reduceEvent, requireCondition } from "./state.mjs";
 
@@ -26,7 +26,14 @@ function fingerprint(actor, type, payload, cycle, generation) {
  * A later adapter must never expose those capabilities to worker sessions.
  */
 export class SwarmController {
+	/** Pi reload may retain older native ESM leaves beneath freshly transformed modules. */
+	static assertStorageRuntime() {
+		requireCondition(LEASE_RUNTIME_VERSION === 1 && FILES_RUNTIME_VERSION === 1 && typeof inspectReservation === "function",
+			"RUNTIME_STALE", "Storage modules are stale; cold-restart Pi and resume the same session");
+	}
+
 	static async open({ workspace, runId, ownerSessionId, create, createOnly = false, clock = Date.now, journalIo, agentDir, adopt = false, expectedState, recoveryAttestation }) {
+		SwarmController.assertStorageRuntime();
 		const layout = prepareLayout(realpathSync(workspace), runId, { agentDir });
 		if (!create) {
 			try { lstatSync(layout.journalPath); }
@@ -44,8 +51,17 @@ export class SwarmController {
 				payload: { runId, ownerSessionId, workspaceRoot: layout.workspaceRoot, objective: create.objective, criteria: create.criteria, scope: create.scope, limits: { ...DEFAULT_LIMITS, ...create.limits } },
 			});
 		}
-		const lease = acquireLease(layout, { ownerSessionId });
+		if (createOnly) {
+			requireCondition(create, "INPUT", "Create-only open requires a launch specification");
+			try { lstatSync(layout.runRoot); requireCondition(false, "DUPLICATE", "Run already exists; launch cannot adopt existing state"); }
+			catch (error) { if (error.code !== "ENOENT") throw error; }
+			// A fresh launch cannot consume an ambiguous earlier reservation, even
+			// when its run identifier happens to match.
+			requireCondition(!inspectReservation(layout), "RESERVED", "New launch requires an unreserved project");
+		}
+		const lease = acquireLease(layout, { ownerSessionId, requireUnreserved: createOnly });
 		let journal;
+		let freshCreation = false;
 		try {
 			if (createOnly) {
 				requireCondition(create, "INPUT", "Create-only open requires a launch specification");
@@ -56,10 +72,18 @@ export class SwarmController {
 					if (error.code !== "ENOENT") throw error;
 				}
 			}
+			// Until open returns, create-only storage has no published controller
+			// capability and cannot have dispatched SDK or workspace execution.
+			freshCreation = createOnly;
 			privateDirectory(layout.runRoot);
 			journal = openJournal(layout.journalPath, lease.assertOwned, journalIo);
 			const controller = new SwarmController(journal, lease, clock, layout);
-			for (const event of journal.readAll()) controller.#replay(event);
+			const events = journal.readAll();
+			if (createOnly && events.length) {
+				freshCreation = false;
+				requireCondition(false, "DUPLICATE", "New launch cannot replay an existing journal");
+			}
+			for (const event of events) controller.#replay(event);
 			// Guided recovery binds the pre-restore journal to the inspected agreement.
 			// Check before automatic recover/adopt events can change durable state.
 			if (expectedState !== undefined) requireCondition(JSON.stringify(canonical(controller.#state)) === JSON.stringify(canonical(expectedState)),
@@ -91,9 +115,10 @@ export class SwarmController {
 			return controller;
 		} catch (error) {
 			journal?.close();
-			// Keep the reservation on any ambiguity, but release our live handle.
-			// The same owner may inspect/repair it; no other run can take over.
-			try { lease.release(); } catch { /* Lost leases must never be stolen or removed. */ }
+			// Release only a proven fresh, never-published creation's reservation.
+			// Its journal/history is retained. Reopen/adoption ambiguity still keeps
+			// fencing; changed leases/reservations must never be removed.
+			try { lease.release({ retainReservation: !freshCreation }); } catch { /* Lost leases must never be stolen or removed. */ }
 			throw error;
 		}
 	}
@@ -130,6 +155,17 @@ export class SwarmController {
 	assertOwned() {
 		requireCondition(!this.#fault && !this.#closed, "FENCED", "Controller is closed or uncertain");
 		this.#lease.assertOwned();
+	}
+
+	/** A released terminal controller is still evidence of settlement, not live ownership. */
+	assertReplaceable(ownerSessionId) {
+		requireCondition(!this.#fault, "FAULT", "Persistence/ownership uncertain; recovery required");
+		requireCondition(this.#state?.ownerSessionId === ownerSessionId, "OWNERSHIP", "Only the attached owner may start a new objective");
+		requireCondition(TERMINAL.has(this.#state.status), "STATE", "Stop and settle the attached run before a new objective");
+		requireCondition(!this.#state.tasks.some(task => task.assignment) && !this.#state.workspace?.operations.length && !this.#state.sessions?.turns.length,
+			"UNSETTLED", "Prior execution remains unsettled");
+		if (!this.#closed) this.assertOwned();
+		else requireCondition(!inspectLease(this.#layout) && !inspectReservation(this.#layout), "OWNERSHIP", "Project ownership changed after terminal settlement");
 	}
 
 	executionSignal() { return this.#executionAbort.signal; }

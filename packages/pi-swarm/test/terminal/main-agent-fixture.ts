@@ -30,7 +30,7 @@ export function driveMainAgentTools(pi) {
   if (event !== 'input' || data.source !== 'interactive' || !pending) return result;
   const proposal = pending; pending = undefined;
   const text = typeof data.text === 'string' ? data.text.trim() : '';
-  if (!/^(?:yes|confirm)[.!]?$/i.test(text) && !/^I confirm settlement:\s*\S/i.test(text)) return { action: 'handled' };
+  if (data.text !== 'start' && !/^I confirm settlement:\s*\S/i.test(text)) return { action: 'handled' };
   const input = proposal.name === 'swarm_start' ? { proposalId: proposal.proposalId } : { action: proposal.args.action, proposalId: proposal.proposalId };
   const output = await tools.get(proposal.name).execute('main-agent-fixture-confirm', input, undefined, present, ctx);
   if (output.isError) ctx.ui.notify(output.details.error, 'warning');

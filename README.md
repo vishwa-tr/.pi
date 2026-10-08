@@ -122,7 +122,8 @@ root `.agents/skills/` is the canonical global skill library.
   while leaving source branches intact.
 - **Swarm:** `pi-swarm` is managed through the main agent's start/status/control/history
   tools. The agent proposes sensible settings and explains the full objective and
-  configuration in chat; execution waits for your explicit confirmation there. Swarm
+  configuration in chat; ordinary approval requires exactly `start` as your entire reply
+  (lowercase, no whitespace or punctuation). Recovery requires separate settlement evidence. Swarm
   opens no confirmation dialogs and preserves existing work by default. The only direct
   user command is `/swarm stop`. Its Messages/Agents/Topics inspection and **Steer**
   page join Pi agent navigation. Only Steer offers a bordered message editor beside

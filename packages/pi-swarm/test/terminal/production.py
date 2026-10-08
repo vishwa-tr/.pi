@@ -94,7 +94,7 @@ def main(native=False):
 
         def approve(action):
             terminal.expect(f"{action} ({label})")
-            terminal.line("yes")
+            terminal.line("start")
             terminal.expect("Fixture chat confirmation applied")
 
         def resume(script=None):
@@ -139,7 +139,7 @@ def main(native=False):
             start()
             terminal.send("\x1b[Z")  # production Shift+Tab: Off -> Discuss
             mode("discuss")
-            terminal.line("yes")
+            terminal.line("start")
             # Revocation removes the proposal before consumption; this is absent
             # owner authority, not a fresh proposal's restricted-mode inspection.
             terminal.expect("AUTHORITY")
@@ -149,7 +149,7 @@ def main(native=False):
             mode("off")
             start()
             assert count("worker-start") == 0, "No execution before genuine owner input"
-            terminal.line("yes")
+            terminal.line("start")
             terminal.expect("Fixture chat confirmation applied")
             wait_count("worker-start", 1)
             status("running")

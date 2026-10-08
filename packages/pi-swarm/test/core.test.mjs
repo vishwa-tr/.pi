@@ -13,6 +13,18 @@ import { repository, machine } from "./helpers.mjs";
 const code = expected => error => error.code === expected;
 const specification = { objective: "Build invitations", criteria: ["Invitations work"], scope: ["src"] };
 
+for (const reservedRunId of ["new-run", "foreign-run"]) test(`fresh creation preserves ambiguous pre-existing reservation ${reservedRunId}`, async t => {
+	const root = repository(t);
+	const layout = prepareLayout(root, reservedRunId);
+	const lease = acquireLease(layout, { ownerSessionId: "prior-owner" });
+	lease.release(); // Retains a reservation without a live lease or run directory.
+	const bytes = readFileSync(layout.reservationPath, "utf8");
+	await assert.rejects(SwarmController.open({ workspace: root, runId: "new-run", ownerSessionId: "session1", create: specification, createOnly: true }), code("RESERVED"));
+	assert.equal(readFileSync(layout.reservationPath, "utf8"), bytes);
+	assert.equal(existsSync(layout.ownerPath), false, "inspection never acquires ownership");
+	assert.equal(existsSync(prepareLayout(root, "new-run").runRoot), false);
+});
+
 async function fixture(t, limits) {
 	const root = repository(t);
 	let now = 0;

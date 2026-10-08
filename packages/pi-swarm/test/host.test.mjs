@@ -5,8 +5,12 @@ import { EventEmitter } from "node:events";
 import { repository } from "./helpers.mjs";
 import { createMockRuntime } from "./sdk-env.mjs";
 import { SwarmHost } from "../extensions/swarm/host.mjs";
+import { SwarmError } from "../extensions/swarm/errors.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
+import { SwarmSessions } from "../extensions/swarm/sessions.mjs";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { acquireLease, inspectReservation } from "../extensions/swarm/store/lease.mjs";
+import { WorkspaceRuntime } from "../extensions/swarm/workspace.mjs";
 import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 
 const code = expected => error => error.code === expected;
@@ -433,4 +437,162 @@ test("mode revocation during a durable execution-start gap prevents the side eff
 	assert.equal(f.host.snapshot().run.status, "paused");
 	assert.equal(f.host.snapshot().run.workspace.operations.length, 0);
 	await f.host.close();
+});
+
+const sequentialSpecification = objective => ({ objective, criteria: ["Inspection complete"], scope: ["Read only"], codingTools: ["read"] });
+const sequentialDelay = () => new Promise(resolve => setTimeout(resolve, 2));
+async function sequentialUntil(predicate) {
+	for (let i = 0; i < 1000; i++) { if (predicate()) return; await sequentialDelay(); }
+	assert.fail("Worker did not settle");
+}
+async function sequentialFixture(t) {
+	const root = repository(t);
+	const mock = await createMockRuntime(() => ({ text: "Prior objective history" }));
+	const requests = [];
+	let approve = true;
+	const host = new SwarmHost({ events: new EventEmitter(), sessionId: "owner1", tickIntervalMs: 0,
+		modelRuntime: mock.modelRuntime, mainModel: mock.model,
+		requestApproval: request => { requests.push(request); return { approved: approve }; } });
+	t.after(() => host.close());
+	const launch = runId => host.launch({ workspace: root, runId, specification: sequentialSpecification(runId) });
+	await launch("prior");
+	await host.recruit({ id: "worker", specialization: "Inspect", brief: "Read", reason: "History proof" });
+	host.wake("worker");
+	await sequentialUntil(() => mock.calls.length === 1 && !host.snapshot().driver.active.length);
+	await host.pause({ stop: true });
+	return { root, mock, host, requests, launch, rejectApproval: () => { approve = false; }, approve: () => { approve = true; } };
+}
+
+for (const kind of ["storage", "lease"]) test(`${kind} failure after retiring driver preserves old history and requires a new approval`, async t => {
+	const f = await sequentialFixture(t);
+	const history = f.host.history("worker");
+	assert.ok(history.length);
+	const journal = prepareLayout(f.root, "prior").journalPath;
+	const priorBytes = readFileSync(journal, "utf8");
+	const open = SwarmController.open;
+	const close = SwarmSessions.prototype.close;
+	let retired = false, competingLease;
+	t.mock.method(SwarmSessions.prototype, "close", async function () { await close.call(this); retired = true; });
+	const injection = t.mock.method(SwarmController, "open", async options => {
+		assert.equal(retired, true, "failure occurs after old driver retirement");
+		if (kind === "lease") {
+			competingLease = acquireLease(prepareLayout(f.root, "competing"), { ownerSessionId: "foreign" });
+			return open.call(SwarmController, options);
+		}
+		throw Object.assign(new Error("injected storage failure"), { code: "EIO" });
+	});
+	await assert.rejects(f.launch("next"));
+	assert.equal(f.host.snapshot().run.runId, "prior");
+	assert.equal(f.host.snapshot().transition.stage, "opening");
+	assert.deepEqual(f.host.history("worker"), history);
+	assert.equal(readFileSync(journal, "utf8"), priorBytes);
+	assert.throws(() => f.host.wake("worker"), { code: "HOST_DENIED" });
+	assert.equal(f.mock.calls.length, 1);
+	injection.mock.restore();
+	if (competingLease) {
+		await assert.rejects(f.launch("retry"), { code: "OWNERSHIP" });
+		competingLease.release({ retainReservation: false });
+	}
+	f.rejectApproval();
+	const before = f.requests.length;
+	await assert.rejects(f.launch("retry"), { code: "AUTHORITY" });
+	assert.equal(f.requests.length, before + 1, "retry needs a freshly inspected approval");
+	assert.deepEqual(f.host.history("worker"), history);
+	assert.equal(readFileSync(journal, "utf8"), priorBytes);
+	assert.equal(f.mock.calls.length, 1);
+	f.approve();
+	await f.launch("retry");
+	assert.equal(f.requests.length, before + 2);
+	assert.equal(f.host.snapshot().run.runId, "retry");
+	assert.equal(f.host.snapshot().run.workers.length, 0);
+	assert.equal(f.host.snapshot().transition.workerContexts, "fresh");
+	assert.equal(readFileSync(journal, "utf8"), priorBytes);
+	assert.equal(f.mock.calls.length, 1, "launch itself never replays prior workers");
+});
+
+test("real post-acquisition journal failure retains history, releases never-dispatched reservation and retries with fresh approval", async t => {
+	const f = await sequentialFixture(t);
+	const history = f.host.history("worker");
+	const priorJournal = prepareLayout(f.root, "prior").journalPath;
+	const priorBytes = readFileSync(priorJournal, "utf8");
+	const original = SwarmController.open;
+	const injection = t.mock.method(SwarmController, "open", options => original.call(SwarmController, { ...options,
+		journalIo: { writeAll() { throw new Error("Injected journal write failure"); }, sync() {} } }));
+	await assert.rejects(f.launch("storage-fault"));
+	assert.equal(f.host.snapshot().run.runId, "prior");
+	assert.equal(f.host.snapshot().transition.stage, "opening");
+	assert.equal(inspectReservation(prepareLayout(f.root, "storage-fault")), null);
+	assert.ok(existsSync(prepareLayout(f.root, "storage-fault").journalPath), "failed creation journal is retained, not deleted");
+	assert.deepEqual(f.host.history("worker"), history);
+	assert.equal(readFileSync(priorJournal, "utf8"), priorBytes);
+	assert.throws(() => f.host.wake("worker"), { code: "HOST_DENIED" });
+	assert.equal(f.mock.calls.length, 1);
+	injection.mock.restore();
+	f.rejectApproval();
+	await assert.rejects(f.launch("retry"), { code: "AUTHORITY" });
+	assert.deepEqual(f.host.history("worker"), history);
+	f.approve();
+	await f.launch("retry");
+	assert.equal(f.host.snapshot().run.runId, "retry");
+	assert.equal(f.mock.calls.length, 1);
+	assert.equal(readFileSync(priorJournal, "utf8"), priorBytes);
+});
+
+test("new controller created before SDK attachment fails can stop and retry in the same host", async t => {
+	const f = await sequentialFixture(t);
+	const priorJournal = prepareLayout(f.root, "prior").journalPath;
+	const priorBytes = readFileSync(priorJournal, "utf8");
+	const attach = t.mock.method(SwarmSessions, "attach", async () => { throw new SwarmError("PROVIDER", "Injected attachment failure"); });
+	await assert.rejects(f.launch("partial"), { code: "PROVIDER" });
+	const partial = f.host.snapshot();
+	assert.equal(partial.run.runId, "partial");
+	assert.equal(partial.run.status, "paused");
+	assert.equal(partial.driver, null);
+	assert.equal(partial.ownershipHeld, true);
+	assert.equal(partial.transition.stage, "attached");
+	assert.equal(readFileSync(priorJournal, "utf8"), priorBytes);
+	assert.throws(() => f.host.wake("worker"), { code: "HOST_DENIED" });
+	assert.equal(f.mock.calls.length, 1);
+	await assert.rejects(f.launch("blocked"), { code: "STATE" });
+	assert.deepEqual(await f.host.pause({ stop: true }), { settled: true });
+	assert.equal(f.host.snapshot().run.status, "stopped");
+	assert.equal(f.host.snapshot().ownershipHeld, false);
+	attach.mock.restore();
+	f.rejectApproval();
+	await assert.rejects(f.launch("retry"), { code: "AUTHORITY" });
+	assert.equal(f.host.snapshot().run.runId, "partial");
+	f.approve();
+	await f.launch("retry");
+	assert.equal(f.host.snapshot().run.runId, "retry");
+	assert.equal(readFileSync(priorJournal, "utf8"), priorBytes);
+	assert.equal(f.mock.calls.length, 1);
+});
+
+for (const obstruction of ["queued", "claims", "pending", "active", "sdk-busy"]) test(`${obstruction} prevents replacement before approval without cancellation or disposal`, async t => {
+	const f = await sequentialFixture(t);
+	const before = f.host.snapshot();
+	const history = f.host.history("worker");
+	const approvals = f.requests.length;
+	const driverSnapshot = SwarmSessions.prototype.snapshot;
+	const workspaceSnapshot = WorkspaceRuntime.prototype.snapshot;
+	let closes = 0;
+	const close = SwarmSessions.prototype.close;
+	t.mock.method(SwarmSessions.prototype, "close", async function () { closes++; return close.call(this); });
+	if (obstruction === "queued") {
+		// The driver guard must check the actual queue, not just host snapshot active turns.
+		t.mock.method(SwarmSessions.prototype, "snapshot", function () { return { ...driverSnapshot.call(this), queued: ["worker"] }; });
+	} else if (obstruction === "sdk-busy") {
+		t.mock.method(SwarmSessions.prototype, "snapshot", function () { return { ...driverSnapshot.call(this), sdkIdle: false }; });
+	} else {
+		t.mock.method(WorkspaceRuntime.prototype, "snapshot", function () {
+			const state = workspaceSnapshot.call(this);
+			return { ...state, coordination: { ...state.coordination, [obstruction]: [{ owner: "held-owner" }] } };
+		});
+	}
+	await assert.rejects(f.launch("next"), { code: "UNSETTLED" });
+	assert.equal(f.requests.length, approvals);
+	assert.equal(closes, 0);
+	assert.deepEqual(f.host.snapshot().run, before.run);
+	assert.deepEqual(f.host.history("worker"), history);
+	assert.equal(f.mock.calls.length, 1);
 });

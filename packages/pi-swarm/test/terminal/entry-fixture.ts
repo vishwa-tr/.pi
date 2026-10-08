@@ -18,7 +18,7 @@ export default function (pi) {
 		if (getCurrentTools(_context.messages).some(tool => tool.name === "swarm_start")) {
 			const last = _context.messages.at(-1);
 			const text = typeof last?.content === "string" ? last.content : last?.content?.filter(block => block.type === "text").map(block => block.text).join("\n") ?? "";
-			const explicit = last?.role === "user" && /^(?:yes|confirm)[.!]?$/i.test(text.trim()) && pending;
+			const explicit = last?.role === "user" && text === "start" && pending;
 			const action = explicit ? "confirm" : last?.role === "user" && text.startsWith("fixture chat ") ? text.slice("fixture chat ".length) : undefined;
    const launch = Boolean(action);
    const name = explicit ? pending.name : action === "launch" ? "swarm_start" : action === "status" ? "swarm_status" : "swarm_control";
@@ -27,7 +27,7 @@ export default function (pi) {
 			const output = createAssistantMessageEventStream();
 			const message = { role: "assistant", content: launch
 				? [{ type: "toolCall", id: `chat-${Date.now()}`, name, arguments: args }]
-				: [{ type: "text", text: pending ? "Fixture main agent returned. Shall I start or continue Swarm with the objective and full configuration above? Reply yes or confirm to approve, or ask for changes." : "Fixture main agent returned." }],
+				: [{ type: "text", text: pending ? "Fixture main agent returned. Type start to proceed with this Swarm configuration." : "Fixture main agent returned." }],
 				api: selected.api, provider: selected.provider, model: selected.id, timestamp: Date.now(), stopReason: launch ? "toolUse" : "stop",
 				usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
 			output.push({ type: "done", reason: message.stopReason, message }); output.end();

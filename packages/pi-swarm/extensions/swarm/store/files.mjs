@@ -16,6 +16,9 @@ import {
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 
+// Bump when storage admission/cleanup contracts change; native imports can survive /reload.
+export const FILES_RUNTIME_VERSION = 1;
+
 export function invariant(condition, message) {
 	if (!condition) throw new Error(message);
 }
@@ -81,7 +84,19 @@ export function atomicJson(path, value) {
 		try { unlinkSync(temporary); } catch { /* Preserve the original write error. */ }
 		throw error;
 	}
+	const identity = fstatSync(fd, { bigint: true });
 	closeSync(fd);
-	renameSync(temporary, path);
-	syncDirectory(dirname(path));
+	try {
+		renameSync(temporary, path);
+		syncDirectory(dirname(path));
+	} catch (error) {
+		// A failed rename must not strand this write's unpublished temporary.
+		// Never unlink a replaced/changed file, or the destination after rename.
+		try {
+			const current = lstatSync(temporary, { bigint: true });
+			if (current.isFile() && current.dev === identity.dev && current.ino === identity.ino
+				&& current.size === identity.size && current.mtimeNs === identity.mtimeNs && current.ctimeNs === identity.ctimeNs) unlinkSync(temporary);
+		} catch { /* Preserve the original IO error and ambiguous files. */ }
+		throw error;
+	}
 }

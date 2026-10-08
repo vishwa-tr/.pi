@@ -5,6 +5,8 @@ import {
 	renameSync, rmSync, symlinkSync, writeFileSync, writeSync, fsyncSync,
 } from "node:fs";
 import { join } from "node:path";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { execFileSync } from "node:child_process";
 import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import { acquireLease } from "../extensions/swarm/store/lease.mjs";
@@ -12,6 +14,84 @@ import { openJournal } from "../extensions/swarm/store/journal.mjs";
 import { privateDirectory, writeAll } from "../extensions/swarm/store/files.mjs";
 import { repository } from "./helpers.mjs";
 import { failureDiagnostic, inPhase } from "../extensions/swarm/errors.mjs";
+
+for (const reserved of [false, true]) test(`lease metadata initialization failure is retryable and preserves existing reservation=${reserved}`, t => {
+	const root = repository(t);
+	const layout = prepareLayout(root, "run1");
+	let prior;
+	if (reserved) {
+		const previous = acquireLease(layout, { ownerSessionId: "prior-owner" });
+		previous.release();
+		prior = readFileSync(layout.reservationPath, "utf8");
+	}
+	const original = fs.renameSync;
+	const injection = t.mock.method(fs, "renameSync", (from, to) => {
+		if (to === join(layout.ownerPath, "owner.json")) throw Object.assign(new Error("Injected owner metadata failure"), { code: "EIO" });
+		return original(from, to);
+	});
+	syncBuiltinESMExports();
+	try { assert.throws(() => acquireLease(layout, { ownerSessionId: "owner1" }), { code: "EIO" }); }
+	finally { injection.mock.restore(); syncBuiltinESMExports(); }
+	assert.equal(existsSync(layout.ownerPath), false, "only this unpublished directory is removed");
+	if (reserved) assert.equal(readFileSync(layout.reservationPath, "utf8"), prior);
+	else assert.equal(existsSync(layout.reservationPath), false);
+	const retry = acquireLease(layout, { ownerSessionId: "owner1" });
+	retry.release({ retainReservation: reserved });
+	if (reserved) assert.equal(readFileSync(layout.reservationPath, "utf8"), prior);
+});
+
+for (const renamed of [false, true]) test(`unpublished reservation write failure is retryable after rename=${renamed}`, t => {
+	const root = repository(t);
+	const layout = prepareLayout(root, "run1");
+	const original = fs.renameSync;
+	const injection = t.mock.method(fs, "renameSync", (from, to) => {
+		if (to === layout.reservationPath) {
+			if (renamed) original(from, to);
+			throw Object.assign(new Error("Injected reservation failure"), { code: "EIO" });
+		}
+		return original(from, to);
+	});
+	syncBuiltinESMExports();
+	try { assert.throws(() => acquireLease(layout, { requireUnreserved: true }), { code: "EIO" }); }
+	finally { injection.mock.restore(); syncBuiltinESMExports(); }
+	assert.equal(existsSync(layout.ownerPath), false);
+	assert.equal(existsSync(layout.reservationPath), false);
+	const retry = acquireLease(layout, { requireUnreserved: true });
+	retry.release({ retainReservation: false });
+});
+
+test("fresh acquisition rechecks same-ID ambiguous reservation under the lease without removing it", t => {
+	const root = repository(t);
+	const layout = prepareLayout(root, "run1");
+	const previous = acquireLease(layout);
+	previous.release();
+	const bytes = readFileSync(layout.reservationPath, "utf8");
+	assert.throws(() => acquireLease(layout, { requireUnreserved: true }), { code: "RESERVED" });
+	assert.equal(readFileSync(layout.reservationPath, "utf8"), bytes);
+	assert.equal(existsSync(layout.ownerPath), false);
+});
+
+test("lease initialization does not remove a replaced directory or foreign token", t => {
+	const root = repository(t);
+	const layout = prepareLayout(root, "run1");
+	const saved = layout.ownerPath + ".original";
+	const original = fs.renameSync;
+	const injection = t.mock.method(fs, "renameSync", (from, to) => {
+		if (to === join(layout.ownerPath, "owner.json")) {
+			original(layout.ownerPath, saved);
+			mkdirSync(layout.ownerPath, { mode: 0o700 });
+			writeFileSync(join(layout.ownerPath, "owner.json"), JSON.stringify({ token: "foreign", runId: "foreign" }), { mode: 0o600 });
+			throw Object.assign(new Error("Injected replacement"), { code: "EIO" });
+		}
+		return original(from, to);
+	});
+	syncBuiltinESMExports();
+	try { assert.throws(() => acquireLease(layout), { code: "EIO" }); }
+	finally { injection.mock.restore(); syncBuiltinESMExports(); }
+	assert.equal(JSON.parse(readFileSync(join(layout.ownerPath, "owner.json"), "utf8")).token, "foreign");
+	assert.ok(existsSync(saved));
+	assert.throws(() => acquireLease(layout), { code: "EEXIST" });
+});
 
 function storage(t, runId = "run1") {
 	const root = repository(t);

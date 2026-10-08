@@ -11,6 +11,8 @@ import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import { acquireLease, inspectLease } from "../extensions/swarm/store/lease.mjs";
 import { atomicJson } from "../extensions/swarm/store/files.mjs";
+import { SwarmError } from "../extensions/swarm/errors.mjs";
+import { SwarmController } from "../extensions/swarm/core.mjs";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createCurrentSwarmExtension } from "../extensions/swarm/extension.mjs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -51,7 +53,7 @@ async function fixture(t, { policy = true, entries = [], root, hold = false, set
 	const event = (name, data = {}) => handlers.get(name)?.(data, ctx), input = text => event("input", { source: "interactive", text });
 	const update = value => updates.push(value.content[0].text), tool = (name, args, signal) => tools.get(name).execute("call", args, signal, update, ctx);
 	const consume = p => tool(p.action === "start" ? "swarm_start" : "swarm_control", { ...(p.action === "start" ? {} : { action: p.action }), proposalId: p.proposalId });
-	const command = text => mainAgentAction(tools, ctx, text, update, async p => { const reply = replies.shift(); await input(typeof reply === "function" ? await reply(p) : reply ?? (p.action === "reconcile" ? "I confirm settlement: Independently verified all listed execution stopped" : "yes")); });
+	const command = text => mainAgentAction(tools, ctx, text, update, async p => { const reply = replies.shift(); await input(typeof reply === "function" ? await reply(p) : reply ?? (p.action === "reconcile" ? "I confirm settlement: Independently verified all listed execution stopped" : "start")); });
 	t.after(() => event("session_shutdown"));
 	return { tools, tool, consume, input, command, updates, messages, renderers, ctx, source, calls, signals, providers, replies, entries, event, events, notices, terminalListeners, statuses, auth: () => auth,
 		terminal: data => { for (const listener of terminalListeners) { const result = listener(data); if (result) return result; } }, select(id) { ctx.model = source.getModel(model.provider, id); }, thinking(value) { thinking = value; },
@@ -64,17 +66,70 @@ test("normal entry registers synchronously without model/auth; status and histor
 	for (const name of ["swarm_status", "swarm_history", "swarm_status"]) assert.equal((await f.tool(name, {})).details.status, "unattached");
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0); await assert.rejects(f.command("start goal")); f.select("first"); f.ctx.sessionManager.getSessionFile = () => undefined; await assert.rejects(f.command("start goal")); assert.equal(f.auth(), 0);
 });
+for (const missing of [false, true]) test(`stale storage runtime refuses launch before approval or mutation (missing check=${missing})`, async t => {
+	const f = await fixture(t); f.select("first");
+	const original = SwarmController.assertStorageRuntime;
+	if (missing) {
+		SwarmController.assertStorageRuntime = undefined;
+		t.after(() => { SwarmController.assertStorageRuntime = original; });
+	} else t.mock.method(SwarmController, "assertStorageRuntime", () => { throw new SwarmError("RUNTIME_STALE", "Private underlying diagnostic must not escape"); });
+	const result = await f.tool("swarm_start", { objective: "No live retry" });
+	assert.equal(result.isError, true);
+	assert.equal(result.details.diagnostic.code, "RUNTIME_STALE");
+	assert.match(result.details.error, /cold-start it and resume this same session/);
+	assert.doesNotMatch(result.details.error, /Private underlying diagnostic/);
+	assert.equal(result.details.awaitingConfirmation, undefined);
+	assert.equal(result.details.pendingAuthorization, undefined);
+	assert.equal(result.details.status, "unattached");
+	assert.equal(existsSync(prepareLayout(f.ctx.cwd, "probe").stateRoot), false);
+	assert.equal(f.entries.length, 0);
+	assert.equal(f.auth(), 0);
+	assert.equal(f.calls.length, 0);
+});
+
+test("stale-runtime fencing preserves emergency stop and refuses continuation before approval", async t => {
+	const f = await fixture(t, { hold: true }); f.select("first");
+	await f.command("start bounded offline objective");
+	await until(() => f.calls.length === 1);
+	const runId = (await f.tool("swarm_status", {})).details.runId;
+	t.mock.method(SwarmController, "assertStorageRuntime", () => { throw new SwarmError("RUNTIME_STALE", "Stale test runtime"); });
+	const stopped = await f.tool("swarm_control", { action: "stop" });
+	assert.equal(stopped.isError, undefined);
+	assert.equal(stopped.details.status, "stopped");
+	assert.deepEqual(stopped.details.unsettled, { turns: 0, operations: 0, assignments: 0 });
+	const journal = prepareLayout(f.ctx.cwd, runId).journalPath;
+	const bytes = readFileSync(journal, "utf8");
+	for (const action of ["resume", "restart", "recover"]) {
+		const result = await f.tool("swarm_control", { action });
+		assert.equal(result.isError, true);
+		assert.equal(result.details.diagnostic.code, "RUNTIME_STALE");
+		assert.equal(result.details.awaitingConfirmation, undefined);
+		assert.equal(result.details.runId, runId);
+		assert.equal(readFileSync(journal, "utf8"), bytes);
+	}
+	assert.equal(f.calls.length, 1);
+});
+
 test("native launch waits for owner chat but never blocks a tool or asks a modal", async t => {
 	const f = await fixture(t, { hold: true }); f.select("first");
 	const result = await f.tool("swarm_start", { objective: "Approved fixture goal" }), p = result.details;
 	assert.equal(result.isError, undefined); assert.equal(p.awaitingConfirmation, true); assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
 	assert.match(f.updates[0], /^Inspecting Swarm workspace before approval/); assert.match(p.agreement, /^Swarm approval packet: LAUNCH \(Pi native provider\)/);
-	assert.match(p.agreement, /Selected coding tools are authorized/); assert.match(result.content[0].text, /Reply yes or confirm/);
-	await f.input("yes"); assert.equal((await f.consume(p)).details.status, "running"); await until(() => f.calls.length === 1);
+	assert.match(p.agreement, /Selected coding tools are authorized/); assert.match(result.content[0].text, /Type start to proceed with this Swarm configuration\./);
+	await f.input("start"); assert.equal((await f.consume(p)).details.status, "running"); await until(() => f.calls.length === 1);
 	assert.equal((await f.tool("swarm_status", {})).details.status, "running"); const auth = f.auth();
 	assert.equal((await f.tool("swarm_history", { workerId: "planner", limit: 1 })).details.persistedOnly, true); assert.equal(f.auth(), auth);
 	assert.deepEqual(f.messages, [], "Routine launch progress stays passive"); assert.ok(f.messages.every(item => item.options.triggerTurn === false));
 	const stop = await f.tool("swarm_control", { action: "stop" }); assert.equal(stop.details.status, "stopped"); assert.equal(stop.details.unsettled.turns, 0);
+});
+for (const text of ["yes", "confirm", "YES!", "Start", "START", " start", "start ", "start\n", "start\r\n", "start.", "start!", "start now", '"start"']) test(`native launch rejects nonexact approval ${JSON.stringify(text)}`, async t => {
+	const f = await fixture(t); f.select("first");
+	const p = (await f.tool("swarm_start", { objective: "Never approved" })).details;
+	await f.input(text);
+	assert.equal((await f.consume(p)).isError, true);
+	await f.input("start"); assert.equal((await f.consume(p)).isError, true);
+	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
+	assert.equal(existsSync(prepareLayout(f.ctx.cwd, "run1").stateRoot), false);
 });
 test("literal complete agreement renders at narrow widths without expansion", async t => {
 	const f = await fixture(t); f.select("first");
@@ -98,15 +153,15 @@ for (const refusal of ["owner", "session-file", "registry", "cwd", "rpc", "stop"
 	if (refusal === "session-file") f.ctx.sessionManager.getSessionFile = () => "other.jsonl"; if (refusal === "registry") f.ctx.modelRegistry = new ModelRegistry(f.source); if (refusal === "cwd") f.ctx.cwd = join(root, "other"); if (refusal === "rpc") f.ctx.mode = "rpc";
 	if (refusal === "stop") await f.command("stop"); if (refusal === "mode") f.events.emit("pi-plan:mode-changed", { version: 1, instanceId: "entry-policy", revision: 2, contextRevision: 1, ready: true, sessionId: "owner1", selectedMode: "plan", enforcedMode: "plan", runMode: null, pendingChange: false });
 	if (refusal === "reload") await f.event("session_shutdown"); if (refusal === "changed-file") writeFileSync(join(root, "user.txt"), "Changed"); if (refusal === "prompt" || refusal === "custom-prompt") await f.event("ui_prompt_start", { kind: refusal === "prompt" ? "select" : "custom" });
-	await f.input("yes"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0); assert.equal(existsSync(prepareLayout(root, "run1").stateRoot), false);
+	await f.input("start"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0); assert.equal(existsSync(prepareLayout(root, "run1").stateRoot), false);
 });
 test("proposal preserves exact provider implementation binding across chat turns", async t => {
 	const f = await fixture(t); f.select("first"); const p = (await f.tool("swarm_start", { objective: "goal" })).details;
-	const previous = f.source.stream; f.source.stream = (...args) => previous.apply(f.source, args); await f.input("yes");
+	const previous = f.source.stream; f.source.stream = (...args) => previous.apply(f.source, args); await f.input("start");
 	assert.equal((await f.consume(p)).isError, true); assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
 });
 test("tool cancellation consumes approval permanently and makes no auth calls", async t => {
-	const f = await fixture(t); f.select("first"); const p = (await f.tool("swarm_start", { objective: "goal" })).details; await f.input("yes");
+	const f = await fixture(t); f.select("first"); const p = (await f.tool("swarm_start", { objective: "goal" })).details; await f.input("start");
 	const signal = new AbortController(); signal.abort(); assert.equal((await f.tool("swarm_start", { proposalId: p.proposalId }, signal.signal)).isError, true);
 	await f.command("pause"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.auth(), 0);
 });
@@ -129,7 +184,7 @@ for (const event of ["model_select", "thinking_level_select"]) test(`${event} le
 	const f = await fixture(t, { hold: true }); f.select("first");
 	const p = (await f.tool("swarm_start", { objective: "goal" })).details;
 	f.select("second"); f.thinking("low"); await f.event(event);
-	await f.input("yes"); f.select("first"); f.thinking("off"); await f.event(event);
+	await f.input("start"); f.select("first"); f.thinking("off"); await f.event(event);
 	assert.equal((await f.consume(p)).isError, undefined); await until(() => f.calls.length === 1);
 	assert.deepEqual(f.calls[0], { model: "first", reasoning: "high" });
 	f.select("second"); f.thinking("low"); await f.event(event);
@@ -149,9 +204,9 @@ test("same-session vetoed navigation regains observation on explicit continuatio
 test("cancelled no-run preparation does not strand a different session", async t => {
 	const f = await fixture(t, { policy: false }); f.select("first"); await f.tool("swarm_start", { objective: "old" }); await f.event("session_before_switch"); f.ctx.sessionManager.getSessionId = () => "other-owner"; await f.event("session_start"); assert.equal((await f.tool("swarm_start", { objective: "new" })).details.awaitingConfirmation, true); assert.equal(f.auth(), 0);
 });
-test("raw emergency stop cancels pending chat proposal and late yes cannot dispatch", async t => {
+test("raw emergency stop cancels pending chat proposal and late start cannot dispatch", async t => {
 	const f = await fixture(t); f.select("first"); await f.event("session_start"); const p = (await f.tool("swarm_start", { objective: "goal" })).details;
-	for (const key of "/swarm stop") assert.equal(f.terminal(key), undefined); assert.deepEqual(f.terminal("\r"), { consume: true }); await until(() => f.notices.some(text => text.startsWith("Swarm stopped."))); await f.input("yes"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.ctx.ui.getEditorText(), ""); assert.equal(f.calls.length, 0);
+	for (const key of "/swarm stop") assert.equal(f.terminal(key), undefined); assert.deepEqual(f.terminal("\r"), { consume: true }); await until(() => f.notices.some(text => text.startsWith("Swarm stopped."))); await f.input("start"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.ctx.ui.getEditorText(), ""); assert.equal(f.calls.length, 0);
 });
 test("raw and slash emergency stop settle native work despite external dialog focus", async t => {
 	const f = await fixture(t, { hold: true }); f.select("first"); await f.event("session_start"); await f.command("start goal"); await until(() => f.calls.length === 1); await f.event("ui_prompt_start", { kind: "select" }); assert.deepEqual(f.terminal("/swarm stop\r"), { consume: true }); await until(() => f.notices.some(text => text.startsWith("Swarm stopped.")));
@@ -166,7 +221,7 @@ test("independent launch default and per-worker override are disclosed before an
 	assert.equal(p.awaitingConfirmation, true); assert.equal(f.auth(), 0);
 	assert.match(p.agreement, /All approved worker providers\/models/);
 	assert.match(p.agreement, /"workerId": "planner"/);
-	await f.input("yes"); assert.equal((await f.consume(p)).isError, undefined);
+	await f.input("start"); assert.equal((await f.consume(p)).isError, undefined);
 	await until(() => f.calls.length === 1);
 	assert.deepEqual(f.calls[0], { model: "second", reasoning: "low" });
 	const status = (await f.tool("swarm_status", {})).details;
@@ -179,11 +234,11 @@ test("a different worker provider is disclosed and remains independently pinned"
 	const p = (await f.tool("swarm_start", { objective: "Independent provider", workerModels: [{ workerId: "planner", selection: { provider: "entry-other", modelId: "review-model", thinkingLevel: "medium" } }] })).details;
 	assert.equal(f.auth(), 0); assert.match(p.agreement, /https:\/\/entry-other.invalid\/v1/);
 	assert.match(p.agreement, /"provider": "entry-fixture"/); assert.match(p.agreement, /"provider": "entry-other"/);
-	await f.input("yes"); assert.equal((await f.consume(p)).isError, undefined);
+	await f.input("start"); assert.equal((await f.consume(p)).isError, undefined);
 	await until(() => f.calls.length === 1); assert.equal(f.providers[0], "entry-other");
 	assert.deepEqual(f.calls[0], { model: "review-model", reasoning: "medium" });
 	const settings = (await f.tool("swarm_control", { action: "configure", workerModels: [] })).details;
-	await f.input("yes"); assert.equal((await f.consume(settings)).isError, undefined);
+	await f.input("start"); assert.equal((await f.consume(settings)).isError, undefined);
 	assert.equal((await f.tool("swarm_control", { action: "send", to: "planner", text: "Continue with the default" })).isError, undefined);
 	await until(() => f.calls.length === 2); assert.equal(f.providers[1], "entry-fixture");
 	assert.deepEqual(f.calls[1], { model: "first", reasoning: "high" });
@@ -196,7 +251,7 @@ test("cancelled or stale settings proposals leave the existing model unchanged",
 	await f.input("no"); assert.equal((await f.consume(p)).isError, true);
 	assert.equal((await f.tool("swarm_status", {})).details.model.modelId, "first");
 	p = (await f.tool("swarm_control", { action: "configure", model: { modelId: "second" } })).details;
-	await f.input("yes"); writeFileSync(join(f.ctx.cwd, "changed.txt"), "External modification");
+	await f.input("start"); writeFileSync(join(f.ctx.cwd, "changed.txt"), "External modification");
 	const stale = await f.consume(p); assert.equal(stale.isError, true); assert.equal(stale.details.diagnostic.code, "STALE");
 	assert.equal((await f.tool("swarm_status", {})).details.model.modelId, "first");
 });
@@ -217,7 +272,7 @@ test("paused configuration does not resume execution", async t => {
 	const f = await fixture(t); f.select("first"); await f.command("start goal");
 	await until(() => f.calls.length === 1); await f.command("pause");
 	const p = (await f.tool("swarm_control", { action: "configure", model: { modelId: "second", thinkingLevel: "medium" } })).details;
-	await f.input("yes"); assert.equal((await f.consume(p)).isError, undefined);
+	await f.input("start"); assert.equal((await f.consume(p)).isError, undefined);
 	assert.equal((await f.tool("swarm_status", {})).details.status, "paused"); assert.equal(f.calls.length, 1);
 	await f.command("resume"); await until(() => f.calls.length === 2);
 	assert.deepEqual(f.calls[1], { model: "second", reasoning: "medium" });
@@ -232,7 +287,7 @@ test("user-requested configure requires fresh consent and preserves worker histo
 	assert.equal(p.awaitingConfirmation, true); assert.equal(f.calls.length, 1);
 	assert.equal((await f.tool("swarm_status", {})).details.model.modelId, "first");
 	assert.equal((await f.consume(p)).isError, true, "a tool call alone cannot approve settings");
-	await f.input("confirm"); assert.equal((await f.consume(p)).isError, undefined);
+	await f.input("start"); assert.equal((await f.consume(p)).isError, undefined);
 	const changed = (await f.tool("swarm_status", {})).details;
 	assert.equal(changed.status, "running"); assert.equal(changed.cycle, before.cycle);
 	assert.deepEqual(changed.model, { provider: "entry-fixture", modelId: "second", thinkingLevel: "low" });
@@ -251,7 +306,7 @@ test("configuration waits for an active turn without aborting its provider", asy
 	assert.equal(finished, false); assert.equal(f.signals[0].aborted, false);
 	settle(); const p = (await preparing).details; assert.equal(p.awaitingConfirmation, true);
 	assert.equal(f.signals[0].aborted, false);
-	await f.input("yes"); const configured = await f.consume(p); assert.equal(configured.isError, undefined, configured.details.error);
+	await f.input("start"); const configured = await f.consume(p); assert.equal(configured.isError, undefined, configured.details.error);
 	assert.equal((await f.tool("swarm_control", { action: "send", to: "planner", text: "Use the approved override" })).isError, undefined);
 	await until(() => f.calls.length === 2); assert.deepEqual(f.calls[1], { model: "second", reasoning: undefined });
 });
@@ -259,7 +314,7 @@ test("configuration waits for an active turn without aborting its provider", asy
 test("restore after changed or absent main selection retains configured default and overrides", async t => {
 	const first = await fixture(t, { policy: false }); first.select("first");
 	const launch = (await first.tool("swarm_start", { objective: "goal", workerModels: [{ workerId: "planner", selection: { modelId: "second", thinkingLevel: "low" } }] })).details;
-	await first.input("yes"); assert.equal((await first.consume(launch)).isError, undefined);
+	await first.input("start"); assert.equal((await first.consume(launch)).isError, undefined);
 	await until(() => first.calls.length === 1); await first.event("session_shutdown");
 	const next = await fixture(t, { policy: false, entries: first.entries, root: first.ctx.cwd });
 	await next.event("session_start", { reason: "reload" });
@@ -302,7 +357,7 @@ test("restore by run ID adopts paused in another session without dispatch", asyn
 });
 test("stale lease recovery requires owner evidence and revalidates exact lease", async t => {
 	const f = await fixture(t, { policy: false }), layout = prepareLayout(f.ctx.cwd, "crashed"); acquireLease(layout, { ownerSessionId: "owner1" }); const lease = inspectLease(layout); atomicJson(join(layout.ownerPath, "owner.json"), { ...lease, pid: null });
-	let p = (await f.tool("swarm_control", { action: "reconcile", runId: "crashed" })).details; assert.match(p.agreement, /owner1/); await f.input("yes"); assert.equal((await f.consume(p)).isError, true); assert.ok(inspectLease(layout));
+	let p = (await f.tool("swarm_control", { action: "reconcile", runId: "crashed" })).details; assert.match(p.agreement, /owner1/); await f.input("start"); assert.equal((await f.consume(p)).isError, true); assert.ok(inspectLease(layout));
 	p = (await f.tool("swarm_control", { action: "reconcile", runId: "crashed" })).details; await f.input("I confirm settlement: independently checked all previous controller commands and processes stopped"); assert.equal((await f.consume(p)).isError, undefined); assert.equal(inspectLease(layout), null); assert.equal(f.auth(), 0);
 });
 for (const leaseOwner of ["foreign-owner", null]) test(`stale controller lease with owner ${leaseOwner} cannot be released from this session`, async t => {
@@ -319,7 +374,7 @@ test("main sends worker/board mail only within its approved team; mail is never 
 	const f = await fixture(t, { policy: false }); f.select("first"); assert.equal((await f.tool("swarm_control", { action: "send", to: "planner", text: "Before approval" })).isError, true); await f.command("start team"); await until(() => f.calls.length === 1);
 	assert.equal((await f.tool("swarm_control", { action: "send", to: "planner", text: "Focused follow-up", topic: "Review" })).isError, undefined); assert.equal((await f.tool("swarm_control", { action: "send", to: "board", text: "Shared finding", topic: "Review" })).isError, undefined);
 	const page = await f.tool("swarm_history", { channel: "messages", topic: "Review", limit: 1 }); assert.equal(page.details.total, 2); assert.equal(page.details.nextOffset, 1); await f.command("pause"); assert.equal((await f.tool("swarm_control", { action: "send", to: "planner", text: "Paused" })).isError, true);
-	const p = (await f.tool("swarm_control", { action: "resume" })).details; await f.event("input", { source: "extension", text: "yes" }); assert.equal((await f.consume(p)).isError, true);
+	const p = (await f.tool("swarm_control", { action: "resume" })).details; await f.event("input", { source: "extension", text: "start" }); assert.equal((await f.consume(p)).isError, true);
 });
 test("mail renderer shows semantic conversation without private protocol fields", async t => {
 	const f = await fixture(t), view = f.renderers.get("swarm-agent-mail")({ content: "INTERNAL_CONTEXT", details: { runId: "PRIVATE_RUN", messageIds: ["PRIVATE_ID"], messages: [{ from: "builder", to: "main", text: "Please review \x1b[2J", topic: "Auth", cycle: 1 }] } }, { expanded: false }, { fg: (_role, value) => value, bg: (_role, value) => value });

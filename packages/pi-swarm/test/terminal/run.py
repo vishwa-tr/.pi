@@ -194,7 +194,7 @@ class Terminal:
         if self.packet_cache == key:
             return
         footer = ("Independently establish that ALL listed execution has stopped" if title.startswith("RECONCILE ")
-                  else "Shall I proceed with this exact Swarm configuration?")
+                  else "Type start to proceed with this Swarm configuration.")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             fresh = compact(ANSI.sub("", self.output[self.last_input_start:]))
@@ -331,7 +331,7 @@ def main():
                           '"agents": 3', '"active": 2', '"tasks": 10', '"attempts": 2', '"durationMs": 300000'):
                 assert compact(value) in terminal.last_packet, f"Configuration not shown: {value}"
             assert not any(event["type"] == "worker-start" for event in events()), "No execution before owner chat confirmation"
-            terminal.line("yes")
+            terminal.line("start")
             terminal.expect("Fixture chat confirmation applied")
             terminal.expect_status("running")
             wait_event("worker-start")
@@ -353,7 +353,7 @@ def main():
             terminal.expect_status("paused")
             terminal.line("/fixture-swarm resume")
             terminal.expect("RESUME (mock only)")
-            terminal.line("yes")
+            terminal.line("start")
             terminal.expect("Fixture chat confirmation applied")
             terminal.expect_status("running")
             wait_event("worker-start", 2)
@@ -372,7 +372,7 @@ def main():
             time.sleep(0.2)
             terminal.line("/fixture-swarm resume")
             terminal.expect("RESUME (mock only)")
-            terminal.line("yes")
+            terminal.line("start")
             terminal.expect("Fixture chat confirmation applied")
             wait_event("worker-start", 3)
             terminal.line("/fixture-swarm dashboard")
@@ -390,7 +390,7 @@ def main():
             terminal.expect("Uncertain fixture armed")
             terminal.line("/fixture-swarm restart")
             terminal.expect("RESTART (mock only)")
-            terminal.line("yes")
+            terminal.line("start")
             terminal.expect("Fixture chat confirmation applied")
             wait_event("uncertain-runner")
             time.sleep(0.2)
