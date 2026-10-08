@@ -265,13 +265,14 @@ export class SwarmDashboard {
 					const title = singleLine(topic.title || topic.name);
 					const status = singleLine(topic.status || "discussion");
 					const label = `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
-					const fullHeading = `${selected ? ">" : " "} [${label}] ${title}`;
-					const heading = clipTopicLine(fullHeading, width);
+					const name = singleLine(topic.name);
+					const heading = topicHeading(name, label, selected, width);
 					const names = topic.participants.slice(0, 3).map(singleLine).join(", ");
 					const participants = names ? names + (topic.participants.length > 3 ? ` +${topic.participants.length - 3} more` : "") : "No participants yet";
 					const count = `${topic.messages} ${topic.messages === 1 ? "message" : "messages"}`;
-					const rows = [heading, clipTopicLine(`  ${count} · ${participants}`, width)];
-					if (selected && heading !== fullHeading) rows.push(`  ${title}`);
+					const rows = [heading];
+					if (title !== name) rows.push(selected ? `  ${title}` : clipTopicLine(`  ${title}`, width));
+					rows.push(clipTopicLine(`  ${count} · ${participants}`, width));
 					const message = latest.get(topic.name);
 					if (selected && message) {
 						const from = message.from === "owner" ? "Main agent" : singleLine(message.from);
@@ -427,9 +428,8 @@ export async function showDashboard(ctx, source, signal, onMount = () => { }) {
 function workerModelLines(run, workerId) {
 	const selection = effectiveWorkerSelection(run?.sessions, workerId);
 	const model = selection?.modelId ? singleLine(selection.modelId) : "unavailable";
-	const provider = selection?.provider ? ` (${singleLine(selection.provider)})` : "";
 	const thinking = selection?.thinkingLevel ? singleLine(selection.thinkingLevel) : "unavailable";
-	return [`Model: ${model}${provider}`, `Thinking: ${thinking}`];
+	return [`Model: ${model}`, `Thinking: ${thinking}`];
 }
 
 function singleLine(value) {
@@ -440,4 +440,13 @@ function clipTopicLine(text, width) {
 	// Callers sanitize fields first. Remove only the SDK truncator's generated SGR
 	// resets so the plain-text body does not escape them into visible control text.
 	return truncateToWidth(text, width, "…").replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/** Keep topic identity first and reserve the right edge for status when space permits. */
+function topicHeading(name, status, selected, width) {
+	const prefix = `${selected ? ">" : " "} `;
+	if (width < 16) return clipTopicLine(`${prefix}${name} [${status}]`, width);
+	const badge = clipTopicLine(`[${status}]`, Math.floor(width / 2));
+	const heading = clipTopicLine(`${prefix}${name}`, width - visibleWidth(badge) - 1);
+	return heading + " ".repeat(width - visibleWidth(heading) - visibleWidth(badge)) + badge;
 }

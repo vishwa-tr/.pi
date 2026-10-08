@@ -28,7 +28,7 @@ Reload does not resume a Swarm, and in-memory drafts do not survive it.
 
 ## Agent settings and topic rows (2026-10-08)
 
-Agents and Steer rosters display every worker's effective model/provider and
+Agents and Steer rosters display every worker's effective model and
 thinking level from the run's recorded default or worker override. Read-only
 agent mail and Steer transcripts also display the selected worker's settings
 above the history when the viewport has room. Missing metadata is labeled
@@ -36,14 +36,33 @@ unavailable rather than inferred from main-chat settings. Main chat retains its
 own model/thinking indicator: a stopped worker can correctly show medium after
 the main chat is changed to low.
 
-Topics use status badges, explicit message counts, and compact participant
-summaries. The selected topic shows its latest-message preview and expands a
-title that was shortened in the row. Routing uses the original topic identity,
+Provider names are omitted from these labels; the approval agreement retains provider
+disclosures. Topics show the topic name first and a status badge at the right edge.
+The task title appears as a description underneath when it differs from the name,
+followed by message counts and compact participant summaries. The selected topic
+keeps its full description and latest-message preview. Very narrow views prioritize
+the name, and descriptions for unselected entries are shortened. Routing uses the original topic identity,
 not the shortened label. Metadata stays muted beneath prominent headings;
 control characters are escaped and generated truncation styling is removed
 before the plain-text body is themed.
 
-Verified live on GNOME Wayland/XWayland: recorded worker settings appeared in the
+The name-first/provider-free revision was also checked live after `/reload`:
+Topics placed the name left, status right and description underneath; Agents and
+Steer showed model/thinking without the provider. The package suite passed 731
+tests, the terminal composer/focus check passed across six viewport sizes, and
+configuration validation, its 10 fixture tests, 19 shared checks and diff checks
+passed. The stopped run remained stopped.
+
+For mixed-model teams, see the package README's independent model settings
+section. `pi --list-models` is a reusable availability check without a generation
+request. Both Luna and Sol were listed on the verification date. Main-tool guidance
+now recommends a Luna/low default for routine work and Sol/low overrides for
+complex work and review when cost-conscious planning is requested; proposals
+must still disclose exact choices before `start`. No new workers were launched
+for this display revision, so this verifies catalog availability and existing
+per-worker configuration regressions, not a live mixed-model run.
+
+Previous layout verification on GNOME Wayland/XWayland: recorded worker settings appeared in the
 roster and Steer header; the topic status/count/preview rendered correctly; Enter
 opened the same discussion and q returned to Topics. Focused regressions also
 cover worker overrides, missing metadata, live selection updates, Unicode/narrow

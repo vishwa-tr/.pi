@@ -258,7 +258,7 @@ test("topics open their messages and the default view shows main and peer conver
 	]; f.tick();
 	assert.match(f.view.body(), /Main agent → one/);
 	assert.match(f.view.body(), /one → two/);
-	f.view.handleInput("3"); assert.match(f.view.body(), /\[Discussion\] Auth\n  2 messages/);
+	f.view.handleInput("3"); assert.match(f.view.body(), /Auth +\[Discussion\]\n  2 messages/);
 	f.view.handleInput("\r"); assert.equal(f.view.section, 0);
 	assert.match(f.view.body(), /Investigate/); assert.doesNotMatch(f.view.body(), /Finding/);
 	f.view.handleInput("a"); assert.match(f.view.body(), /Finding/);
@@ -369,7 +369,7 @@ test("topics show one displayed name with count and retain underlying discussion
 	f.snapshot.run.tasks = [{ id: "build", title: "Build feature", status: "ready" }];
 	f.snapshot.run.messages = [{ from: "one", to: "@board", text: "Finding", topic: "Review" }];
 	f.tick(); f.view.handleInput("3");
-	assert.match(f.view.body(), /> \[Ready\] Build feature\n  0 messages · No participants yet\n\n  \[Discussion\] Review\n  1 message · one/);
+	assert.match(f.view.body(), /> build +\[Ready\]\n  Build feature\n  0 messages · No participants yet\n\n  Review +\[Discussion\]\n  1 message · one/);
 	assert.doesNotMatch(f.view.body(), /\(build\)/);
 	f.view.handleInput("\r"); assert.equal(f.view.topic, "build");
 	f.view.handleInput("q"); assert.equal(f.view.selectedTopic, "build");
@@ -416,7 +416,7 @@ test("wrapped topic selection remains visible in small list viewports", () => {
 		const lines = f.view.render(24);
 		assert.equal(lines.length, 10);
 		assert.ok(lines.every(line => visibleWidth(line) <= 24));
-		assert.ok(lines.some(line => line.includes("> [Ready]")), "selected heading stays visible even when details exceed the viewport");
+		assert.ok(lines.some(line => line.includes(`> topic-${i + 1}`)), "selected heading stays visible even when details exceed the viewport");
 	}
 	f.view.handleInput("\r"); assert.equal(f.view.topic, "topic-7");
 	f.view.dispose();
@@ -441,11 +441,12 @@ test("worker model labels resolve recorded defaults and overrides in roster and 
 		workerModels: [{ workerId: "two", selection: { provider: "override-provider", modelId: "review-model", thinkingLevel: "high" } }],
 	};
 	f.view.handleInput("2");
-	assert.match(f.view.body(), /Model: default-model \(default-provider\) · Thinking: low/);
-	assert.match(f.view.body(), /Model: review-model \(override-provider\) · Thinking: high/);
+	assert.match(f.view.body(), /Model: default-model · Thinking: low/);
+	assert.match(f.view.body(), /Model: review-model · Thinking: high/);
+	assert.doesNotMatch(f.view.body(), /default-provider|override-provider/);
 	f.view.openConversation("two");
 	let screen = f.view.render(90).join("\n");
-	assert.match(screen, /Model: review-model \(override-provider\)/);
+	assert.match(screen, /Model: review-model/);
 	assert.match(screen, /Thinking: high/);
 	f.snapshot.run.sessions.selection.thinkingLevel = "medium";
 	f.tick();
@@ -471,7 +472,7 @@ test("worker model metadata is honest when absent and cannot inject terminal con
 		assert.ok(lines.every(line => !line.includes("\x1b[2J") && !line.includes("\n")));
 	}
 	assert.match(f.view.body(), /Thinking: off/);
-	assert.match(f.view.body(), /provider name/);
+	assert.doesNotMatch(f.view.body(), /provider name/);
 	f.view.dispose();
 });
 
@@ -487,7 +488,8 @@ test("compact topics preserve full selected titles, preview the latest message a
 	const lines = f.view.render(48, 16);
 	assert.ok(lines.every(line => visibleWidth(line) <= 48));
 	const body = f.view.body();
-	assert.ok(body.split("\n")[0].endsWith("…"));
+	assert.match(body.split("\n")[0], /^> stable-id +\[Blocked\]$/);
+	assert.equal(visibleWidth(body.split("\n")[0]), 44, "status aligns to content right edge");
 	assert.ok(body.includes(title), "selected title remains available after compact-heading truncation");
 	assert.match(body, /2 messages · one, Main agent/);
 	assert.match(body, /Latest · Main agent: Latest reply/);

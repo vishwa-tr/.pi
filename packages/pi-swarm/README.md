@@ -190,6 +190,32 @@ settings without another model choice. Every effective selection and provider/co
 disclosure appears in the agreement before any worker request. Status reports show the
 Swarm default, overrides, and each worker's effective settings.
 
+For a cost-conscious team, the main tool's planning guidance recommends low thinking
+and a cheaper default for routine inspection, extraction, documentation and bounded
+test work. Reserve stronger per-worker overrides for complex implementation, debugging
+and independent review. Check `pi --list-models` first; catalog availability varies.
+For a catalog containing these models, a proposal can include:
+
+```json
+{
+  "model": { "provider": "openai-codex", "modelId": "gpt-6-luna", "thinkingLevel": "low" },
+  "workerModels": [
+    { "workerId": "implementer", "selection": { "modelId": "gpt-6.1-sol", "thinkingLevel": "low" } },
+    { "workerId": "reviewer", "selection": { "modelId": "gpt-6.1-sol", "thinkingLevel": "low" } }
+  ]
+}
+```
+
+Use the exact planned worker IDs. This is proposal guidance, not automatic routing:
+the approved choices stay pinned, unavailable models are not silently substituted,
+and the role-to-model mapping is disclosed before `start`. Existing runs retain their
+recorded settings. Higher thinking can be proposed separately when task difficulty
+justifies it. OpenAI describes Luna as the cost-efficient choice for focused work
+and Sol as suited to complex technical work in its
+[model-selection guide](https://developers.openai.com/api/docs/guides/model-selection)
+(checked 2026-10-08). Actual account usage depends on the provider and plan; this
+policy does not assume API pricing equals subscription usage.
+
 To change settings in an existing running or paused run, the main agent uses
 `swarm_control` with `action: "configure"` and `model` and/or `workerModels`. Partial
 `model` fields update the pinned default. `workerModels` replaces the entire override
