@@ -105,7 +105,7 @@ def main(scripted=False, package_root=False):
         finally:
             terminal.close()
     print('PASS: real main-agent tools, genuine owner chat confirmation, cancelled/replayed reply exclusion, overlay emergency stop, dashboard and offline reload' if scripted else
-          'PASS: normal entry exposes only /swarm stop without model dispatch')
+          'PASS: normal Swarm command entry registers without model dispatch')
 
 def storage_reload():
     """Warm native old storage leaves, then exercise real Pi /reload and cold exit."""

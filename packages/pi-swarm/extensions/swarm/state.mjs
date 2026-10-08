@@ -1,3 +1,4 @@
+import { USAGE_LIMITS } from "./usage.mjs";
 import { createHash } from "node:crypto";
 import { validId } from "./store/files.mjs";
 import { validateModelSelection, validateWorkerModels } from "./model-settings.mjs";
@@ -52,7 +53,7 @@ function textList(value, name) {
 	for (const item of value) text(item, name);
 }
 function limits(value) {
-	exactKeys(value, Object.keys(DEFAULT_LIMITS));
+	exactKeys(value, [...Object.keys(DEFAULT_LIMITS), ...USAGE_LIMITS.filter(key => Object.hasOwn(value, key))]);
 	for (const [key, count] of Object.entries(value)) integer(count, key, 1);
 	requireCondition(value.active <= value.agents, "INPUT", "Active limit exceeds total agent limit");
 	return structuredClone(value);
@@ -210,6 +211,7 @@ export function reduceEvent(previous, event) {
 			state.cycle += 1;
 			state.generation += 1;
 			state.elapsedMs = 0;
+			if (state.sessions?.usage) state.sessions.usage = [];
 			state.tasksCreated = carried.length;
 			state.status = "running";
 			state.completionEvidence = null;

@@ -5,12 +5,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { privateDirectory } from "./store/files.mjs";
 import { makeSessionTools } from "./session-tools.mjs";
 import { failureDiagnostic, requireCondition as check } from "./errors.mjs";
-import { pendingMail, sessionWorker } from "./session-state.mjs";
+import { pendingMail, turnMail, sessionWorker } from "./session-state.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
 import { createSdkSession, readSessionHistory } from "./sdk-session.mjs";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { buildSpecialistPrompt, buildTurnPrompt } from "./specializations.mjs";
 import { effectiveWorkerSelection, resolveModelSettings } from "./model-settings.mjs";
+
+import { workerStatus, taskRows } from "./worker-context.mjs";
+import { usageLimitReason, measuredUsage } from "./usage.mjs";
 
 const attached = new WeakSet();
 const terminal = new Set(["paused", "stopped", "completed", "failed"]);
@@ -95,6 +98,8 @@ export class SwarmSessions {
 		this.#errors.push(failureDiagnostic(error));
 	}
 
+	#usageBlocked = false;
+
 	async #entry(workerId) {
 		if (this.#entries.has(workerId)) return this.#entries.get(workerId).ready;
 		const worker = this.#controller.snapshot().workers.find(worker => worker.id === workerId);
@@ -113,7 +118,23 @@ export class SwarmSessions {
 				sessionFile: binding ? join(this.#sessionDir, binding.sessionFile) : undefined,
 				modelRuntime: this.#modelRuntime, selection,
 				providerCapability,
-				admitRequest: async () => { await this.#controller.system("run.tick"); this.#requestGuard(entry); },
+				admitRequest: async () => {
+					await this.#controller.system("run.tick");
+					this.#requestGuard(entry);
+					if (this.#usageBlocked || usageLimitReason(this.#controller.snapshot())) {
+						this.#usageBlocked = true;
+						entry.usageDenied = true;
+						check(false, "USAGE_LIMIT", "Worker model allowance reached");
+					}
+					const id = randomUUID();
+					try { await this.#controller.system("session.request", { id, workerId }); }
+					catch (error) { if (error.code === "USAGE_LIMIT") { this.#usageBlocked = true; entry.usageDenied = true; } throw error; }
+					return id;
+				},
+				observeResponse: async (id, message) => {
+					await this.#controller.system("session.usage", { id, workerId, usage: measuredUsage(message) });
+					if (usageLimitReason(this.#controller.snapshot())) this.#usageBlocked = true;
+				},
 				systemPrompt: buildSpecialistPrompt(state, worker), customTools: tools,
 			});
 			Object.assign(entry, created);
@@ -163,13 +184,14 @@ export class SwarmSessions {
 		switch (name) {
 			case "swarm_status": {
 				// Host agreements and native storage bindings are not worker context.
-				const { status, revision, cycle, generation, objective, criteria, scope, limits,
-					guidanceRevision, guidance, workers, tasks, messages } = state;
-				return {
-					status, revision, cycle, generation, objective, criteria, scope, limits,
-					guidanceRevision, guidance, workers, tasks, messages,
-					coordination: this.#workspace.coordinationStatus(),
-				};
+				return workerStatus(state, entry.workerId, this.#workspace.coordinationStatus());
+			}
+			case "swarm_tasks": {
+				const offset = params.offset ?? 0, limit = params.limit ?? 10;
+				check(Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(limit) && limit >= 1 && limit <= 20, "INPUT", "Invalid task page");
+				const tasks = state.tasks.filter(task => !params.taskId || task.id === params.taskId);
+				const page = params.taskId ? tasks.slice(offset, offset + limit).map(task => ({ ...taskRows([task])[0], title: task.title, titleTruncated: false, candidate: task.candidate, reviews: task.reviews, contributors: task.contributors })) : taskRows(tasks, offset, limit);
+				return { total: tasks.length, offset, nextOffset: offset + page.length < tasks.length ? offset + page.length : null, tasks: page };
 			}
 			case "swarm_task": {
 				const { action, ...payload } = params;
@@ -236,7 +258,7 @@ export class SwarmSessions {
 	}
 
 	#pump() {
-		if (this.#quiescence) return;
+		if (this.#quiescence || this.#usageBlocked) return;
 		try { this.#admission?.assert(); } catch { this.#queue.clear(); return; }
 		const state = this.#controller.snapshot();
 		if (this.#closed || state.status !== "running") { this.#queue.clear(); return; }
@@ -249,14 +271,17 @@ export class SwarmSessions {
 	}
 
 	#launch(workerId, kind, reason) {
-		const promise = this.#execute(workerId, kind, reason).catch(async error => {
+		let settled = false;
+		const promise = this.#execute(workerId, kind, reason).then(outcome => { settled = outcome === "settled"; }).catch(async error => {
 			this.#recordError(error);
+			if (error.code === "USAGE_LIMIT") { this.#usageBlocked = true; return; }
 			if (["running", "verifying"].includes(this.#controller.snapshot().status)) {
 				try { await this.#controller.system("run.pause"); } catch (failure) { this.#recordError(failure); }
 			}
 		}).finally(async () => {
 			this.#active.delete(workerId);
 			await this.#settleDrain();
+			if (settled && !this.#usageBlocked && this.#controller.snapshot().status === "running" && pendingMail(this.#controller.snapshot(), workerId).length) this.#enqueue(workerId, "Remaining durable mail");
 			this.#pump();
 		});
 		this.#active.set(workerId, promise);
@@ -269,7 +294,7 @@ export class SwarmSessions {
 		const entry = await this.#entry(workerId);
 		const state = this.#controller.snapshot();
 		if (state.status !== "running" || state.cycle !== requested.cycle || state.generation !== requested.generation) return;
-		const messages = kind === "prompt" ? pendingMail(state, workerId) : [];
+		const messages = kind === "prompt" ? turnMail(state, workerId) : [];
 		const worker = state.workers.find(worker => worker.id === workerId);
 		const context = { id: randomUUID(), cycle: state.cycle, generation: state.generation, guidanceRevision: state.guidanceRevision, signal: this.#admission ? AbortSignal.any([this.#controller.executionSignal(), this.#admission.signal()]) : this.#controller.executionSignal(), worker: this.#controller.worker(workerId) };
 		try {
@@ -283,6 +308,7 @@ export class SwarmSessions {
 			throw error;
 		}
 		entry.active = context;
+		entry.usageDenied = false;
 		let abortPromise;
 		const abort = () => { entry.session.abortCompaction(); abortPromise ??= entry.session.abort(); void abortPromise.catch(error => this.#recordError(error)); };
 		context.signal.addEventListener("abort", abort, { once: true });
@@ -299,8 +325,9 @@ export class SwarmSessions {
 				await entry.session.prompt(prompt, { expandPromptTemplates: false });
 			}
 			await entry.session.waitForIdle();
+			await entry.flushUsage?.();
 			const last = entry.session.messages.filter(message => message.role === "assistant").at(-1);
-			if (last?.stopReason === "error") outcome = "failed";
+			if (last?.stopReason === "error") outcome = entry.usageDenied ? "interrupted" : "failed";
 			if (last?.stopReason === "aborted" || context.signal.aborted) outcome = "interrupted";
 		} catch (error) {
 			failure = error;
@@ -310,7 +337,7 @@ export class SwarmSessions {
 			await entry.session.waitForIdle();
 			if (abortPromise) await abortPromise;
 			context.signal.removeEventListener("abort", abort);
-			if (kind === "prompt" && outcome === "failed" && !context.signal.aborted) {
+			if (kind === "prompt" && outcome === "failed" && !context.signal.aborted && failure?.code !== "USAGE_LIMIT" && !entry.usageDenied) {
 				const task = this.#controller.snapshot().tasks.find(task => task.assignment?.workerId === workerId);
 				if (task && !task.pending) {
 					try {
@@ -327,11 +354,16 @@ export class SwarmSessions {
 			if (task && (task.pending || draining.has(this.#controller.snapshot().status))) await this.#workspace.settle(task.id);
 		}
 		if (failure && !context.signal.aborted) throw failure;
+		return outcome;
 	}
 
 	async #settleDrain() {
 		if (this.#drain) return this.#drain;
-		const state = this.#controller.snapshot();
+		let state = this.#controller.snapshot();
+		if (this.#usageBlocked && state.status === "running" && !this.#active.size && !state.sessions.turns.length && !state.workspace.operations.length) {
+			await this.#controller.system("run.pause");
+			state = this.#controller.snapshot();
+		}
 		if (!draining.has(state.status) || this.#active.size || state.sessions.turns.length || state.workspace.operations.length) return;
 		this.#queue.clear();
 		this.#drain = (async () => {
@@ -382,7 +414,9 @@ export class SwarmSessions {
 	async resume({ reconciled = false, restart = false } = {}) {
 		this.#admission?.assert();
 		check(!this.#active.size && !this.#drain, "UNSETTLED", "Settle session preparation and execution before continuation");
+		check(restart || !usageLimitReason(this.#controller.snapshot()), "USAGE_LIMIT", "Explicit restart/fresh objective required for exhausted or unmeasured model allowance");
 		await this.#controller.owner(restart ? "run.restart" : "run.resume", { reconciled });
+		this.#usageBlocked = Boolean(usageLimitReason(this.#controller.snapshot()));
 	}
 
 	async pause({ timeoutMs = 5000, stop = false } = {}) {

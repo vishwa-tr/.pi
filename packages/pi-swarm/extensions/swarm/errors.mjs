@@ -41,6 +41,7 @@ const FAILURE_MESSAGES = {
 	BUSY: "Another Swarm operation is still active.",
 	STATE: "This action is unavailable in the current run state.",
 	RUNTIME_STALE: "Reload retained incompatible Swarm storage modules. Exit Pi, cold-start it and resume this same session; do not clear it or delete ownership metadata. No workers will resume automatically; request a fresh proposal and approval.",
+	USAGE_LIMIT: "Worker model allowance is exhausted or unmeasured. New requests are fenced; inspect usage and settle before any approved continuation.",
 	TIME_LIMIT: "The saved run allowance is exhausted; recovery cannot reset it.",
 	DUPLICATE: "This run already exists; restore it instead.",
 	FAILED: "The Swarm operation failed; inspect status before continuing.",

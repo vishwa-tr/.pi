@@ -169,3 +169,111 @@ node docs/agents/scripts/swarm-run-observation.mjs /path/to/events.jsonl
 The [journal observation helper](../scripts/swarm-run-observation.mjs) uses the existing integrity-checked reader and pure reducer. It emits compact recorded counters without message bodies, host paths or model calls. The helper was checked against the settled run and an unreadable input; the latter failed without reporting an idle state. An inspection racing a write can fail; failure is not proof of settlement. Recorded zero counts do not establish live SDK/process quiescence and cannot authorize recovery or release. Use normal runtime status and settlement paths for transitions. Keep machine-specific journal paths and raw runtime output local.
 
 Wait until workers and operations settle before editing this observations document: external documentation edits during a protected command or review can invalidate the workspace fingerprint. Preserve the distinction between source findings, observed behavior, executed tests and proposed evaluations when adding future entries.
+
+## Token usage audit — 2026-10-08
+
+A metadata-only audit followed an owner report that the account meter rose from 17% to 79%. The Pi footer reads account rate-limit `usedPercent`, not a project-specific token counter. Screenshots around the compact-status implementation showed approximately 73% before its launch and 79% afterward; the entire 62-point increase cannot be assigned to that last change. Concurrent account activity and the subscription's usage accounting prevent an exact percentage attribution from local token logs.
+
+The latest main Pi chat recorded 240 model responses, 9,304,088 uncached input tokens and 14,325,248 cached input tokens across its work. Its per-response input context grew from 13,062 to 112,785 tokens and reached 183,546 at its peak. A small diff therefore did not imply a small amount of model processing.
+
+For the last implementation and final inspection, native session metadata recorded:
+
+| Role | Model responses | Uncached input | Cached input | Output |
+|---|---:|---:|---:|---:|
+| Pi coordinator | 44 | 701,002 | 2,927,488 | 4,605 |
+| Planner | 27 | 36,999 | 193,024 | 1,134 |
+| Implementer | 77 | 96,049 | 4,070,400 | 11,652 |
+| Reviewer | 28 | 54,596 | 599,552 | 2,601 |
+
+The coordinator accounted for about 79% of Pi's uncached input in this interval. Codex monitoring during approximately the same interval additionally recorded 253,349 uncached input tokens, 11,544,960 cached input tokens and 25,120 output tokens. Its 10,601 reasoning-output tokens are included in output, not an additional amount. These are recorded token counts, not billing or weekly quota estimates.
+
+The observed workflow used an outer Codex monitor, a Sol coordinator, a planner, an implementer and a reviewer. Repeated model-driven status/sleep loops, copied approval packets, long retained chat history, broad document reads and duplicate handoff turns increased processing. Low thinking addressed only part of the cost. The compact status improvement reduces future response size but does not remove old history or eliminate those coordination turns.
+
+Recommended priorities:
+
+1. Use Luna/low for routine coordination; reserve Sol for difficult implementation and review. For small edits, use a single implementer and a bounded review rather than a planner plus persistent coordinator.
+2. Compact the owner chat at settled objective boundaries before proposing another run. Prefer a short task brief and relevant source ranges; avoid carrying the complete earlier debugging transcript into every new objective.
+3. Replace model-issued sleep/status polling with a local event monitor that reports meaningful transitions. Let the model act when a decision, correction, review or final handoff is needed. Reduce outer-monitor polling too.
+4. Compact worker status/startup context and retrieve histories explicitly. Send a handoff after actual settlement through the runtime; deduplicate obsolete coordination messages without deleting evidence.
+5. Expose recorded input/cache/output usage per role and add approved model-turn/token warning budgets. Preserve unknown usage and safe settlement rather than aborting commands or granting extra allowance automatically.
+
+OpenAI's [pricing and usage guidance](https://learn.chatgpt.com/docs/pricing), checked on this date, explains that model choice, context, reasoning, tool use and caching affect allowance consumption, that extended sessions can use more per message, and that API pricing should not be used to estimate included subscription usage. Recommendations above are proposals; this audit did not change models, settings or runtime budgets.
+
+
+## Six savings measures and context investigation
+
+The owner authorized all six recommendations, then explicitly permitted direct
+implementation without another swarm. Changes include Luna/low main defaults,
+an approved single-implementer entry, settled-only `/swarm prepare`, native
+`swarm_wait` and a local transition watcher, compact worker status/startup data,
+and a durable per-worker usage ledger with opt-in request/token warning budgets.
+See the package README for admission, overshoot, missing-usage and restart semantics.
+
+A source and metadata check found **zero duplicate owner-mail deliveries** among
+nine recorded owner-mail batches in the examined main chat. Its largest retained
+tool outputs were file reads (357,808 characters), shell output (148,045), status
+(84,572) and control (79,776). Growing retained tool history and model-driven
+polling are established contributors; a duplicated-owner-mail defect was not
+established.
+
+A definite worker delivery bug was found: `pendingMail` included board messages,
+but `buildTurnPrompt` filtered them out while the runtime could acknowledge their
+IDs. The fix preserves board payloads and provenance before acknowledgment.
+Repeated full worker boards (including candidate receipts/review bodies), approved
+work and rolling status mail were also reduced. Human-facing status notifications
+now show compact counts instead of full task records. Historical transcripts and
+journals remain available; compact summaries do not certify execution or consent.
+
+Reusable tools:
+
+- [Transition watcher](../scripts/swarm-watch.mjs): local filesystem events,
+  bounded lifetime, meaningful transitions only; no model calls.
+- [Usage audit](../scripts/swarm-usage-audit.mjs): pass explicit native session
+  files to compare input/cache/output counts, peak context and owner-mail duplicates.
+  Copied histories can overlap and account quota cannot be attributed exactly.
+
+### Deferred caching investigation
+
+Treat deeper provider-prefix/cache behavior as a separate bounded task. Compare
+captured provider-request prefixes and actual usage across ordinary owner input,
+custom mail wakeups, mode hooks, compaction and model changes. Check stable system
+instructions/tool definitions/session cache keys before changing SDK/provider code.
+Measure cache-read fractions and uncached input for an equivalent workload; preserve
+scope, current guidance, history, durable mail and approval identity.
+
+The worker SDK intentionally disables **cache warming**, which prevents extra
+background requests; that is not evidence that passive provider prompt caching is
+disabled. Do not enable warming or rewrite old request-prefix messages merely to
+claim better caching. Main mode hooks add instructions and custom wakeups follow a
+different event path; this audit identified them for testing, not as a proven cache
+bug. No provider cache-key, transport or native SDK patch was made in this task.
+
+
+### Savings implementation verification
+
+- Direct implementation was used; no new Pi swarm or third planner was launched
+  for this work. The current Pi main model and tracked defaults are Luna/low.
+- The new settled-only preparation command compacted the live owner chat from
+  **112,902 tokens**. A subsequent five-token READY response on Luna recorded
+  **26,469 input-context tokens**. This is observed context reduction (about 76.6%),
+  not a controlled quota/cost comparison; no workers were started for the check.
+- The complete package suite passed **756 tests**. SDK-focused checks also passed
+  **129 tests**, including budget exhaustion after a final response, independent
+  per-worker allowances, multi-request native compaction accounting, actual board
+  payload delivery, and an admitted command finishing without being aborted when
+  another worker reaches the model allowance. Missing/synthetic error usage remains
+  unknown. All response observations are retained before the next gate/final flush.
+- The final blocker-change wait regression passed three checks. Clone-completeness
+  validation passed with a disposable index; the actual staging area was unchanged.
+  Configuration fixtures passed 10 tests and shared checks passed 19. Managed entry,
+  storage reload protection and terminal focus/composer checks passed on Linux/Pi
+  1.0.4. No Windows, live unknown-command fault injection, or live multi-worker budget
+  exhaustion test was performed. The model-request tests use the actual SDK with a
+  local scripted provider, not additional charged model calls.
+- New worker status/task pages and the local metadata audit/watcher were checked;
+  unreadable watch input fails without asserting idle. Human-facing budget warnings
+  occur once per state transition and do not inject model messages.
+- Cold-start Pi after this extension upgrade; native leaf modules can survive
+  `/reload`. The final cold start retains the same compacted owner chat and never
+  automatically resumes the stopped team. No dependency upgrade or provider cache
+  transport patch is part of these changes.

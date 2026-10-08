@@ -71,10 +71,10 @@ export function statusText(snapshot) {
 	const { run, driver, workspace } = snapshot;
 	return json({
 		runId: run.runId, status: run.status, cycle: run.cycle, elapsedMs: run.elapsedMs,
-		limits: run.limits, objective: run.objective, workers: run.workers, tasks: run.tasks,
+		limits: run.limits, objective: run.objective ? displayText(run.objective).slice(0, 512) : null, objectiveTruncated: (run.objective?.length ?? 0) > 512, workers: run.workers?.length ?? null, tasks: { total: run.tasks?.length ?? null, done: (run.tasks ?? []).filter(task => task.status === "done").length, blocked: (run.tasks ?? []).filter(task => task.blocker || task.status === "blocked").length },
 		active: driver?.active, queued: driver?.queued, claims: coordinationStatus(workspace?.coordinationStatus),
 		unresolvedOperations: run.workspace?.operations.slice(0, 32).map(({ id, workerId, taskId, kind, uncertain }) => ({ id, workerId, taskId, kind, uncertain })),
 		unresolvedTurns: run.sessions?.turns.slice(0, 32).map(({ id, workerId, kind }) => ({ id, workerId, kind })),
-		usage: "Not yet aggregated; cost unknown", errors: [...(snapshot.errors ?? []), ...(driver?.errors ?? [])].slice(0, 32).map(safeError)
+		usage: "See model-facing status/Agents for measured worker tokens; cost unknown", errors: [...(snapshot.errors ?? []), ...(driver?.errors ?? [])].slice(0, 32).map(safeError)
 	});
 }

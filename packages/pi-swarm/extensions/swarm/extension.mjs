@@ -10,6 +10,7 @@ import { createEmergencyInput } from "./emergency-input.mjs";
 import { showDashboard } from "./dashboard.mjs";
 import { specificationFingerprint } from "./host-approval.mjs";
 import { requestLaunchSpecification } from "./launch-input.mjs";
+import { waitForChange } from "./wait.mjs";
 import { registerMainTools, swarmSummary } from "./main-tools.mjs";
 import { inspectLease, releaseStaleLease } from "./store/lease.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
@@ -295,8 +296,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					if (current()) progress.launched();
 					remember(ctx);
 					if (pending.signal.aborted || retired) return;
-					await activeHost.recruit({ id: "planner", specialization: "Objective decomposition and coordination", brief: "Investigate the approved objective, create criterion-linked tasks, and recruit only useful independent specialists within limits.", reason: "Initial investigation and decomposition of the user-approved objective" });
-					if (!pending.signal.aborted && !retired) activeHost.wake("planner");
+					const initial = specification.initialWorker ?? { id: "planner", specialization: "Objective decomposition and coordination", brief: "Investigate the approved objective, create criterion-linked tasks, and recruit only useful independent specialists within limits." };
+					await activeHost.recruit({ ...initial, reason: "Initial worker in the user-approved objective" });
+					if (!pending.signal.aborted && !retired) activeHost.wake(initial.id);
 				} else if (selected === "restore") {
 					check(rest.length === 1, "INPUT", "Use restore <run-id>");
 					activeHost = await ensureHost(ctx);
@@ -447,9 +449,18 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			} finally { if (proposal?.gate !== gate) gate.dispose(); }
 		};
 		pi.registerCommand("swarm", {
-			description: "Emergency stop only: /swarm stop. Ask the main agent for all other Swarm actions.",
-			getArgumentCompletions: prefix => prefix.trim() !== "stop" && "stop".startsWith(prefix.trim()) ? [{ value: "stop", label: "stop" }] : null,
+			description: "Emergency stop: /swarm stop. Compact settled owner context: /swarm prepare. Ask the main agent for all other Swarm actions.",
+			getArgumentCompletions: prefix => ["stop", "prepare"].filter(value => value !== prefix.trim() && value.startsWith(prefix.trim())).map(value => ({ value, label: value })),
 			handler: async (args, ctx) => {
+				if (args.trim() === "prepare") {
+					const snapshot = host?.snapshot();
+					const run = snapshot?.run;
+					if (proposal || command || ctx.hasPendingMessages?.() || !ctx.isIdle?.() || run && (!["stopped", "completed", "failed"].includes(run.status) || run.sessions?.turns.length || run.workspace?.operations.length || run.tasks.some(task => task.assignment))) {
+						notify(ctx, "Settle/stop Swarm and pending approval/input before compacting owner context.", "warning"); return;
+					}
+					await new Promise((resolve, reject) => ctx.compact({ customInstructions: "Preserve current owner constraints, unresolved safety/ownership states, run identity, remaining allowances and next objective. Keep prior execution evidence references; omit historical status snapshots and obsolete coordination chatter. Compaction never grants consent or continuation.", onComplete: resolve, onError: reject }));
+					notify(ctx, "Owner context compacted. No Swarm workers were started.", "info"); return;
+				}
 				if (args.trim() !== "stop") {
 					notify(ctx, "Use /swarm stop to stop immediately. Ask the main agent to start, inspect, pause, restore, resume, restart, or reconcile Swarm.", "info");
 					return;
@@ -459,11 +470,11 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 		});
 		const inspect = (ctx, options) => {
 			check(!retired && (!owner || owner === ctx.sessionManager.getSessionId()), "OWNERSHIP", "This session cannot inspect the Swarm host");
-			return { ...swarmSummary(host?.snapshot(), options), restorePending: Boolean(restoreLink),
+			return { ...swarmSummary(host?.snapshot(), options), ownerContextTokens: ctx.getContextUsage?.()?.tokens ?? null, preparationRecommended: (ctx.getContextUsage?.()?.tokens ?? 0) >= 40000 ? "/swarm prepare after settlement" : null, restorePending: Boolean(restoreLink),
 				...(proposal ? { pendingAuthorization: { proposalId: proposal.id, action: proposal.action, confirmed: proposal.confirmed } } : {}) };
 		};
 		registerMainTools(pi, {
-			control, chatControl, inspect, tasks: ctx => { inspect(ctx); return host?.snapshot().run?.tasks ?? []; }, revoke: ctx => { inspect(ctx); cancel(); }, messages: ctx => { inspect(ctx); return host?.snapshot().run?.messages ?? []; }, history: (workerId, ctx) => {
+			control, chatControl, inspect, wait: async (ctx, args, signal) => { inspect(ctx); check(host, "STATE", "No attached Swarm run"); return waitForChange(host, { ...args, signal }); }, tasks: ctx => { inspect(ctx); return host?.snapshot().run?.tasks ?? []; }, revoke: ctx => { inspect(ctx); cancel(); }, messages: ctx => { inspect(ctx); return host?.snapshot().run?.messages ?? []; }, history: (workerId, ctx) => {
 				inspect(ctx);
 				check(host, "STATE", "No attached Swarm run");
 				return host.history(workerId);

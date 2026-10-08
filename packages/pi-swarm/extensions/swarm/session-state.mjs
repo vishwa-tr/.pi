@@ -2,8 +2,12 @@ import { isBoardMessage } from "./messaging.mjs";
 import { validateModelSelection, validateWorkerModels } from "./model-settings.mjs";
 import { requireCondition as check } from "./errors.mjs";
 
+import { recordRequest, recordResponse } from "./usage.mjs";
+
 export const SESSION_FIELDS = {
 	"sessions.configure": ["selection", "instructions", "codingTools"],
+	"session.request": ["id", "workerId"],
+	"session.usage": ["id", "workerId", "usage"],
 	"session.bind": ["workerId", "sessionId", "sessionFile"],
 	"session.turn.start": ["id", "workerId", "kind", "messageIds", "guidanceRevision"],
 	"session.turn.end": ["id", "outcome"],
@@ -23,6 +27,18 @@ export function sessionWorker(state, workerId) {
 
 export function requireSessionIdle(state) {
 	check(!state.sessions?.turns.length, "UNSETTLED", "Session turns must settle first");
+}
+
+/** Bound incoming work without truncating or acknowledging undispatched messages. */
+export function turnMail(state, workerId) {
+	const selected = [];
+	let characters = 0;
+	for (const message of pendingMail(state, workerId)) {
+		if (selected.length && (selected.length >= 10 || characters + message.text.length > 32768)) break;
+		selected.push(message);
+		characters += message.text.length;
+	}
+	return selected;
 }
 
 /** Before configuration, retain the model-free worker contract. */
@@ -116,6 +132,8 @@ export function reduceSession(state, event) {
 	}
 	check(state.sessions, "STATE", "Sessions are not configured");
 	switch (event.type) {
+		case "session.request": recordRequest(state, event.payload); break;
+		case "session.usage": recordResponse(state, event.payload); break;
 		case "session.bind": bind(state, event.payload); break;
 		case "session.turn.start": startTurn(state, event); break;
 		case "session.turn.end": endTurn(state, event); break;

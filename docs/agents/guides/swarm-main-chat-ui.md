@@ -361,3 +361,14 @@ reuse a deliberate choice. This is a design opportunity, not an implemented or
 verified capability. Do not restart the old coding objective, delete metadata,
 or silently clear the chat to claim same-session reuse succeeded. No lifecycle
 code was changed during this reproduction.
+
+
+## Low-usage preparation and monitoring
+
+The [package low-usage workflow](../../../packages/pi-swarm/README.md#low-usage-workflow)
+documents `/swarm prepare`, a single-implementer launch, native `swarm_wait`, compact
+worker status and approved request/token budgets. Prepare only at an idle settled
+boundary; use a cold restart after upgrading native leaf modules. The
+[observations and caching investigation](../notes/pi-swarm-improvement-proposals.md)
+record measured context reduction and the deferred provider-prefix audit. Local
+watch/audit helpers linked there avoid repeated model-driven sleep/status calls.

@@ -17,3 +17,6 @@
 ## Scripts
 
 - [Swarm recorded-run observation](scripts/swarm-run-observation.mjs) — Read-only, integrity-checked journal counters without message bodies or model calls; not proof of live settlement.
+
+- [Swarm transition watcher](scripts/swarm-watch.mjs) — Local event-driven task/lifecycle observation without model polling.
+- [Swarm usage audit](scripts/swarm-usage-audit.mjs) — Metadata-only native-session token/context/cache statistics without transcript content.

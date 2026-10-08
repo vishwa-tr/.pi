@@ -62,7 +62,7 @@ async function fixture(t, { policy = true, entries = [], root, hold = false, set
 async function until(predicate) { for (let i = 0; i < 1000; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 2)); } assert.fail("Worker did not settle"); }
 
 test("normal entry registers synchronously without model/auth; status and history are inert", async t => {
-	const f = await fixture(t); assert.deepEqual([...f.tools.keys()], ["swarm_start", "swarm_status", "swarm_control", "swarm_history"]);
+	const f = await fixture(t); assert.deepEqual([...f.tools.keys()], ["swarm_start", "swarm_wait", "swarm_status", "swarm_control", "swarm_history"]);
 	for (const name of ["swarm_status", "swarm_history", "swarm_status"]) assert.equal((await f.tool(name, {})).details.status, "unattached");
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0); await assert.rejects(f.command("start goal")); f.select("first"); f.ctx.sessionManager.getSessionFile = () => undefined; await assert.rejects(f.command("start goal")); assert.equal(f.auth(), 0);
 });

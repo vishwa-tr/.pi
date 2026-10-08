@@ -62,7 +62,7 @@ test("status bounds large boards, counts all tasks, and omits private host field
 		workers: [{ id: "planner" }], tasks: Array.from({ length: 500 }, (_, i) => ({ id: `task${i}`, title: "界".repeat(300), status: "blocked", blocker: "blocked", assignment: null })),
 		sessions: { turns: [{ workerId: "planner" }] }, workspace: { operations: [] } } };
 	const summary = swarmSummary(snapshot);
-	assert.equal(summary.tasks.length, 50); assert.equal(summary.tasksTruncated, true);
+	assert.equal(summary.tasks.length, 10); assert.equal(summary.tasksTruncated, true);
 	assert.equal(summary.progress.total, 500); assert.equal(summary.progress.blocked, 500);
 	assert.equal(summary.objective.length, 512); assert.equal(summary.objectiveTruncated, true);
 	assert.equal(summary.errorsPresent, true);
@@ -111,4 +111,16 @@ test("main coordination status bounds entries and allowlists IDs, purposes and s
 	assert.equal(summary.coordination.active[0].stage, "approval");
 	assert.equal(summary.coordination.active[1].workerId, null);
 	assert.doesNotMatch(JSON.stringify(summary.coordination), /private|secret|exception/);
+});
+
+
+test("usage warnings are bounded UI transitions without model wakeups or repeated chatter", t => {
+	const f = fixture(t);
+	f.snapshot.run.limits = { modelRequests: 10 };
+	f.snapshot.run.sessions.usage = [{ workerId: "planner", requests: 8, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, unknownResponses: 0, pending: [], completed: [] }];
+	f.update(); f.update();
+	assert.equal(f.notifications.length, 1); assert.match(f.notifications[0][0], /modelRequests allowance near/);
+	f.snapshot.run.sessions.usage[0].requests = 10; f.update(); f.update();
+	assert.equal(f.notifications.length, 2); assert.match(f.notifications[1][0], /exhausted/);
+	assert.deepEqual(f.messages, []); assert.deepEqual(f.statuses, []);
 });

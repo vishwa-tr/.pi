@@ -16,6 +16,11 @@ function collaborationDefinitions() {
 			parameters: object({}),
 		},
 		{
+			name: "swarm_tasks", label: "Swarm task details",
+			description: "Read a bounded task page, or select taskId for its candidate/review details. Inspection grants no assignment or approval.",
+			parameters: object({ taskId: Type.Optional(Type.String()), offset: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }),
+		},
+		{
 			name: "swarm_task", label: "Swarm task",
 			description: "Create scoped tasks, claim build or review work, unblock, yield, or report failure. Criteria are zero-based approved criterion indices. Yield or failure must be followed by stopping for runtime settlement.",
 			parameters: Type.Union([

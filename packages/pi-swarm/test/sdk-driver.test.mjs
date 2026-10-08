@@ -59,9 +59,10 @@ test("worker status exposes collaboration state, not host or storage metadata", 
 		f.driver.wake("builder"); await f.driver.idle();
 		const result = f.mock.calls[1].context.messages.find(message => message.role === "toolResult");
 		const status = JSON.parse(result.content[0].text);
-		assert.deepEqual(Object.keys(status).sort(), ["status", "revision", "cycle", "generation", "objective", "criteria", "scope", "limits", "guidanceRevision", "guidance", "workers", "tasks", "messages", "coordination"].sort());
+		assert.deepEqual(Object.keys(status).sort(), ["status", "revision", "cycle", "generation", "guidanceRevision", "guidance", "budgets", "usage", "workers", "tasks", "taskCount", "tasksTruncated", "exhaustedTaskCount", "messageCount", "coordination", "details"].sort());
 		assert.equal(status.workers[0].id, "builder");
-		assert.equal(status.objective, "Implement invitations");
+		assert.equal(Object.hasOwn(status, "objective"), false);
+		assert.match(getCurrentSystemPrompt(f.mock.calls[0].context.messages), /Implement invitations/);
 		assert.deepEqual(status.coordination.counts, { claims: 0, pending: 0, active: 0 });
 		assert.ok(!JSON.stringify(status).includes(f.root));
 		assert.ok(f.c.snapshot().sessions.workers[0].sessionFile);
@@ -395,4 +396,84 @@ test('exhausted Pi retries consume exactly one task failure', async t => {
   assert.equal(task.assignment, null);
   assert.equal(f.c.snapshot().sessions.history.filter(turn => turn.outcome === 'failed').length, 1);
  } finally { await shutdown(f); }
+});
+
+
+test("model request budget stops SDK follow-ups and settles paused without dispatching another request", async t => {
+	const f = await fixture(t, [tool("swarm_status", {}), { text: "Must not be dispatched" }], { modelRequests: 1 });
+	try {
+		await f.driver.recruit(specialist("builder"));
+		f.driver.wake("builder"); await f.driver.idle();
+		assert.equal(f.mock.calls.length, 1);
+		assert.equal(f.c.snapshot().status, "paused");
+		assert.equal(f.c.snapshot().sessions.usage[0].requests, 1);
+		assert.deepEqual(f.c.snapshot().sessions.usage[0].pending, []);
+		assert.equal(f.c.snapshot().sessions.turns.length, 0);
+		assert.equal(f.c.snapshot().workspace.operations.length, 0);
+		await assert.rejects(f.driver.resume(), code("USAGE_LIMIT"));
+		await f.driver.resume({ restart: true, reconciled: true });
+		assert.deepEqual(f.c.snapshot().sessions.usage, []);
+	} finally { await shutdown(f); }
+});
+
+test("a model budget fences new requests without aborting another worker's admitted command", async t => {
+	let release; let commandStarted; let commandSignal;
+	const held = new Promise(resolve => { release = resolve; });
+	const started = new Promise(resolve => { commandStarted = resolve; });
+	const f = await fixture(t, request => request.index === 0
+		? tool("swarm_task", { action: "claim", taskId: "work", kind: "build" }, "claim")
+		: request.index === 1 ? tool("bash", { command: "true" }, "command") : tool("swarm_status", {}, "observe"),
+		{ modelRequests: 3, active: 2 }, { runner: async ({ signal }) => { commandSignal = signal; commandStarted(); await held; return { exitCode: 0, stdout: "", stderr: "", settled: true, aborted: false }; } });
+	try {
+		await f.driver.recruit(specialist("builder")); await f.driver.recruit(specialist("reviewer"));
+		await f.c.owner("task.create", { id: "work", title: "Work", criteria: [0], dependencies: [] });
+		f.driver.wake("builder");
+		let timeout;
+		try { await Promise.race([started, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("Command was not admitted")), 2000); })]); }
+		finally { clearTimeout(timeout); }
+		f.driver.wake("reviewer");
+		for (let i = 0; i < 200 && (f.mock.calls.length < 3 || f.c.snapshot().sessions.turns.some(turn => turn.workerId === "reviewer")); i++) await new Promise(resolve => setTimeout(resolve, 5));
+		assert.equal(f.mock.calls.length, 3);
+		assert.equal(f.c.snapshot().status, "running");
+		assert.equal(f.c.snapshot().workspace.operations.length, 1);
+		assert.equal(commandSignal.aborted, false, "the admitted command is not interrupted by the model budget");
+		release(); await f.driver.idle();
+		assert.equal(f.mock.calls.length, 3); assert.equal(f.c.snapshot().status, "paused");
+		assert.equal(f.c.snapshot().workspace.operations.length, 0);
+		assert.equal(f.c.snapshot().sessions.turns.length, 0);
+	} finally { release(); await shutdown(f); }
+});
+
+test("board payload is actually delivered before its native-session cursor acknowledges it", async t => {
+	const f = await fixture(t, [{ text: "Board inspected" }]);
+	try {
+		await f.driver.recruit(specialist("builder"));
+		const receipt = await f.driver.send("@board", "BOARD_PAYLOAD_SENTINEL", "handoff");
+		await f.driver.idle();
+		assert.ok(JSON.stringify(f.mock.calls[0].context.messages).includes("BOARD_PAYLOAD_SENTINEL"));
+		assert.ok(f.c.snapshot().sessions.workers[0].delivered.includes(receipt.operationId));
+	} finally { await shutdown(f); }
+});
+
+test("native worker compaction is counted through the same admitted-request ledger", async t => {
+	const f = await fixture(t, request => ({ text: request.index < 12 ? "Relevant recorded detail. ".repeat(400) : "Preserve current objective and constraints" }), { modelRequests: 20 });
+	try {
+		await f.driver.recruit(specialist("builder"));
+		for (let i = 0; i < 12; i++) { f.driver.wake("builder"); await f.driver.idle(); }
+		await f.driver.compact("builder");
+		assert.ok(f.mock.calls.length > 12, JSON.stringify(f.driver.snapshot().errors));
+		assert.equal(f.c.snapshot().sessions.usage[0].requests, f.mock.calls.length);
+		assert.deepEqual(f.c.snapshot().sessions.usage[0].pending, []);
+	} finally { await shutdown(f); }
+});
+
+test("reaching the allowance on a final response pauses even without a follow-up request", async t => {
+	const f = await fixture(t, [{ text: "Final response" }], { modelRequests: 1 });
+	try {
+		await f.driver.recruit(specialist("builder")); f.driver.wake("builder"); await f.driver.idle();
+		assert.equal(f.mock.calls.length, 1);
+		assert.equal(f.c.snapshot().status, "paused");
+		assert.equal(f.c.snapshot().sessions.usage[0].requests, 1);
+		assert.equal(f.c.snapshot().sessions.usage[0].unknownResponses, 0);
+	} finally { await shutdown(f); }
 });

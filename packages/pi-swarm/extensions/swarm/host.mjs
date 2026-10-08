@@ -211,13 +211,19 @@ export class SwarmHost {
 	#draft(input) {
 		const settings = resolveModelSettings(input.model, input.workerModels, this.#defaults.model);
 		return structuredClone({ objective: input.objective, criteria: input.criteria, scope: input.scope, limits: { ...DEFAULT_LIMITS, ...input.limits }, model: settings.model, codingTools: input.codingTools ?? this.#defaults.codingTools, instructions: input.instructions ?? this.#defaults.instructions,
-			...(input.workerModels !== undefined ? { workerModels: settings.workerModels } : {}) });
+			...(input.workerModels !== undefined ? { workerModels: settings.workerModels } : {}),
+			...(input.initialWorker !== undefined ? { initialWorker: input.initialWorker } : {}) });
 	}
 
 	#validate(draft, root, runId) {
-		const fields = draft?.workerModels === undefined ? "codingTools,criteria,instructions,limits,model,objective,scope" : "codingTools,criteria,instructions,limits,model,objective,scope,workerModels";
+		const fields = ["codingTools", "criteria", "instructions", "limits", "model", "objective", "scope", ...(draft?.workerModels !== undefined ? ["workerModels"] : []), ...(draft?.initialWorker !== undefined ? ["initialWorker"] : [])].sort().join();
 		check(draft && Object.keys(draft).sort().join() === fields, "INPUT", "Invalid approval specification");
 		reduceEvent(null, { version: 1, operationId: "approval-preflight", actor: "owner", expectedRevision: 0, cycle: 1, generation: 0, atMs: 0, type: "run.create", payload: { runId, ownerSessionId: this.#sessionId, workspaceRoot: root, objective: draft.objective, criteria: draft.criteria, scope: draft.scope, limits: draft.limits } });
+		if (draft.initialWorker !== undefined) {
+			const worker = draft.initialWorker;
+			check(worker && Object.keys(worker).sort().join() === "brief,id,specialization" && typeof worker.id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(worker.id) && !["owner", "system"].includes(worker.id), "INPUT", "Invalid initial worker");
+			for (const key of ["specialization", "brief"]) check(typeof worker[key] === "string" && worker[key].trim().length > 0 && worker[key].length <= 32768, "INPUT", "Invalid initial worker description");
+		}
 		check(draft.model && Object.keys(draft.model).sort().join() === "modelId,provider,thinkingLevel", "MODEL", "Explicit model selection required");
 		resolveModelSettings(draft.model, draft.workerModels, draft.model);
 		for (const selection of this.#selections(draft)) {

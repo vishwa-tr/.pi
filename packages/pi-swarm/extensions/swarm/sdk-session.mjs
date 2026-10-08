@@ -65,7 +65,7 @@ function findSessionFile(sessionDir, cwd, sessionId, sessionFile) {
 
 /** Non-discovering SDK factory for offline mocks or the host's own Pi model runtime.
  * `admitRequest` runs before every model request the session makes. */
-export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile, modelRuntime, selection, systemPrompt, customTools, providerCapability, admitRequest }) {
+export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile, modelRuntime, selection, systemPrompt, customTools, providerCapability, admitRequest, observeResponse }) {
 	// Gate before directories, sessions, authentication lookup, or fallback selection.
 	const native = providerCapability !== undefined && providerDescriptor(providerCapability).transport === "pi-native";
 	if (providerCapability) assertProviderSelection(providerCapability, selection, modelRuntime);
@@ -117,23 +117,38 @@ export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile
 		validatePin();
 		// This boundary covers initial requests, follow-ups, retries and compaction.
 		const stream = session.agent.streamFunction;
+		let usageObservation = Promise.resolve();
 		session.agent.streamFunction = async (...request) => {
 			validatePin();
 			invariant(matchesModel(request[0]) && (request[2]?.reasoning ?? "off") === pinned.thinkingLevel,
 				"Provider request changed the approved model/thinking metadata");
-			await admitRequest?.();
+			await usageObservation;
+			const requestId = await admitRequest?.();
 			validatePin();
 			invariant(matchesModel(request[0]) && (request[2]?.reasoning ?? "off") === pinned.thinkingLevel,
 				"Provider request changed the approved model/thinking metadata");
 			request[2]?.signal?.throwIfAborted();
-			return stream(...request);
+			let response;
+			try { response = await stream(...request); }
+			catch (error) { if (observeResponse) await observeResponse(requestId, null); throw error; }
+			if (observeResponse) {
+				const responseObservation = response.result().then(
+					message => observeResponse(requestId, message),
+					() => observeResponse(requestId, null),
+				);
+				// Native compaction may issue multiple requests; retain every observation.
+				usageObservation = Promise.all([usageObservation, responseObservation]).then(() => undefined);
+				// Retain failures for the next gate/final flush without an unhandled rejection.
+				void usageObservation.catch(() => {});
+			}
+			return response;
 		};
 		const tools = session.getAllTools();
 		invariant(tools.length === names.length && tools.every((tool) => names.includes(tool.name) && tool.sourceInfo?.source === "sdk"),
 			"SDK exposed a tool outside the custom tool boundary");
 		invariant(session.getActiveToolNames().length === names.length &&
 			session.getActiveToolNames().every((name) => names.includes(name)), "SDK changed the custom tool allowlist");
-		return { session, manager, sessionId: manager.getSessionId(), sessionFile: manager.getSessionFile() };
+		return { session, manager, flushUsage: () => usageObservation, sessionId: manager.getSessionId(), sessionFile: manager.getSessionFile() };
 	} catch (error) {
 		session.dispose();
 		throw error;

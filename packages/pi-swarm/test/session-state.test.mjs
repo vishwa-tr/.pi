@@ -43,6 +43,8 @@ function reject(state, type, payload, expected, actor) {
 
 test("session field map is the exact public payload contract", () => {
 	assert.deepEqual(SESSION_FIELDS, {
+		"session.request": ["id", "workerId"],
+		"session.usage": ["id", "workerId", "usage"],
 		"sessions.configure": ["selection", "instructions", "codingTools"],
 		"session.bind": ["workerId", "sessionId", "sessionFile"],
 		"session.turn.start": ["id", "workerId", "kind", "messageIds", "guidanceRevision"],
@@ -293,4 +295,16 @@ test("reapplying the same event sequence reproduces history and retained selecti
 	assert.deepEqual(replay(), replay());
 	assert.deepEqual(replay().sessions.selection, selection);
 	assert.deepEqual(initial, fixture());
+});
+
+test("turn mail batches retain complete text and leave undispatched messages pending", async () => {
+	const { turnMail } = await import("../extensions/swarm/session-state.mjs");
+	const state = configured();
+	state.messages = Array.from({ length: 12 }, (_, i) => ({ ...mail(`mail-${i}`), text: "x".repeat(4000) }));
+	const before = structuredClone(state);
+	const batch = turnMail(state, "builder");
+	assert.equal(batch.length, 8); assert.equal(batch[0].text.length, 4000);
+	assert.deepEqual(state, before);
+	state.sessions.turns = [{ workerId: "builder", messageIds: batch.map(message => message.id) }];
+	assert.equal(pendingMail(state, "builder").length, 4);
 });

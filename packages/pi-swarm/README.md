@@ -112,10 +112,10 @@ fraction. The default is 0.2, validated range 0–0.5; this is presentation only
 changes persisted limits, permissions, admission or auto-extension. Exhausted fields name
 the admission they block. Task `failureAllowance` counts settled failed/rejected attempts,
 not successful assignments or SDK retry calls; `pendingSettlement` can mean the next
-failure charge has not yet occurred. Usage is not aggregated and cost remains unknown,
+failure charge has not yet occurred. Recorded worker usage is exposed separately and cost remains unknown,
 not a measured zero or subscription/API-price estimate.
 
-Status caps workers at 8, tasks at 50 and assigned IDs per worker at 20, with explicit
+Status caps workers at 8, tasks at 10 and assigned IDs per worker at 20, with explicit
 truncation flags. `swarm_history { channel: "tasks", offset: 50, limit: 10 }` retrieves
 additional task detail; `taskId` selects a task. Message and native-history pages remain
 available explicitly with `channel: "messages"` or `workerId`, `offset` and `limit`
@@ -595,3 +595,67 @@ Read the script's prerequisites first. It retains a unique test checkout and log
 The separately authorized [bounded live trial](test/live/README.md) remains opt-in;
 its default invocation is a dry run. Historical live outcomes are not validation of
 this migration, and no live provider request is part of the completion checks.
+
+## Low-usage workflow
+
+The repository defaults the main Pi model to `gpt-6-luna` with low thinking.
+Swarm choices remain explicit and pinned through the normal `start` agreement;
+no model is silently substituted. For bounded work, propose `initialWorker` with
+`id`, `specialization` and `brief` to start one implementer immediately. Recruit
+an independent reviewer after the candidate settles. Omit it for the legacy
+planner entry. Use `workerModels` to reserve Sol/low for difficult implementation
+or review; do not create a third planning worker merely to forward instructions.
+
+At an idle, stopped/settled objective boundary, `/swarm prepare` uses Pi's public
+compaction API to preserve current constraints and unresolved safety state while
+summarizing old coordination. It refuses running/unsettled work and pending
+approval/input. Status exposes `ownerContextTokens` and recommends preparation
+at 40,000 tokens. This command does not start or resume any workers.
+
+Prefer `swarm_wait` over shell sleep/status loops. It subscribes to settled task,
+guidance, lifecycle, ownership and safety transitions, ignoring clock ticks and
+routine counters. Its bounded timeout is not completion or settlement evidence;
+return control instead of polling. A local journal watcher can monitor without
+any model calls; see the project observations guide.
+
+Worker status returns 20 compact task rows with explicit detail access via
+`swarm_tasks` (offset/limit or taskId for candidate/review details). It excludes
+rolling messages, repeated approved scope, candidate receipts and review bodies.
+Stable system instructions retain the full approved objective/scope/criteria;
+current guidance remains complete in each turn. Incoming direct and board mail
+is delivered in full, in batches of at most 10 messages and about 32k text
+characters (one full maximum-size message always fits). Only admitted message
+IDs can be acknowledged; remaining mail is queued after successful settlement.
+No failed/interrupted turn causes an automatic mail retry.
+
+### Worker usage budgets
+
+Optional launch `limits` fields are `modelRequests`, `uncachedInputTokens` and
+`outputTokens` (positive integers). `workerModelRequests`,
+`workerUncachedInputTokens` and `workerOutputTokens` apply separate allowances
+to each worker rather than the aggregate. Exhausting any configured worker cap
+fences new run requests; peers already executing still settle normally. They appear in the inspected agreement and
+persist in the journal. Existing journals without these limits remain readable;
+the limits are opt-in and never silently added to an existing run.
+
+`usage` reports admitted requests and measured input/cache/output per worker for
+the current cycle. Owner/Codex usage and historical requests predating the ledger
+are excluded. Missing response usage remains unknown; reasoning is already in
+output and is not counted twice. The Agents page displays the recorded counters.
+The existing presentation warning threshold applies to aggregate usage budgets.
+Per-worker near-limit warnings use a 20% remaining threshold; UI notifications
+are emitted once per near/exhausted transition without model wakeups.
+
+The SDK gate covers initial logical calls, follow-ups and SDK retry invocations.
+Transport-level HTTP retries are not separately measured. Request caps are
+admission caps; an admission recorded before a later dispatch failure is still
+charged conservatively. Token ceilings are checked after response measurement
+and before another request, so in-flight responses can exceed a token ceiling.
+They are not a preflight billing estimate or a strict stream-output limit.
+
+On exhaustion, new requests are fenced and admitted commands/other turns settle
+normally before the run pauses. Resume cannot clear exhausted/unknown allowance.
+An explicit approved restart resets current-cycle counters; a fresh objective
+gets a fresh allowance. Durable events remain preserved. Unresolved/missing
+response usage fences token-limited continuation rather than assuming zero.
+Automatic compaction does not grant extra allowance or bypass these checks.

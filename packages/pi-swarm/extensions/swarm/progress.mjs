@@ -67,6 +67,16 @@ export function createProgress(pi, getContext) {
 		try {
 			const ctx = getContext();
 			if (ctx?.hasUI) {
+				for (const key of ["modelRequests", "uncachedInputTokens", "outputTokens"]) {
+					const limit = next.budgets?.[key];
+					if (["near", "exhausted"].includes(limit?.state) && limit.state !== previous?.budgets?.[key]?.state)
+						ctx.ui.notify(`Swarm worker ${key} allowance ${limit.state}. Inspect recorded usage; allowances are unchanged.`, "warning");
+				}
+				for (const worker of next.usage?.workers ?? []) for (const [key, limit] of Object.entries(worker.budgets ?? {})) {
+					const prior = previous?.usage?.workers.find(row => row.workerId === worker.workerId)?.budgets?.[key];
+					if (["near", "exhausted"].includes(limit.state) && limit.state !== prior?.state)
+						ctx.ui.notify(`Swarm ${worker.workerId} ${key} allowance ${limit.state}. Inspect usage; allowances are unchanged.`, "warning");
+				}
 				if (previous && next.status !== previous.status && ["failed", "stopped"].includes(next.status))
 					ctx.ui.notify(`Swarm run ${next.status}. Inspect status; this is not independent verification of physical settlement.`, next.status === "failed" ? "error" : "warning");
 				if (previous && next.errorsPresent && !previous.errorsPresent)

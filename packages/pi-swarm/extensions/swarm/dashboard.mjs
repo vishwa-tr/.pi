@@ -9,6 +9,8 @@ export function displayText(value) {
 	return String(value).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`).replace(/\t/g, "    ");
 }
 
+import { usageTotals } from "./usage.mjs";
+
 const sections = ["Messages", "Agents", "Topics", "Steer"];
 
 /** Only receives read capabilities. Actions are returned to the owning command after disposal. */
@@ -293,6 +295,8 @@ export class SwarmDashboard {
 			const activity = !driver ? "activity unavailable" : driver.active.includes(worker.id) ? "working" : driver.queued.includes(worker.id) ? "queued" : "idle";
 			rows.push(`${selected ? ">" : " "} ${worker.id} · ${activity} · ${worker.specialization}`);
 			rows.push(`  ${workerModelLines(run, worker.id).join(" · ")}`);
+			const usage = usageTotals(run).workers.find(row => row.workerId === worker.id);
+			if (usage) rows.push(`  Requests: ${usage.requests} · Input: ${usage.input} · Cached: ${usage.cacheRead} · Output: ${usage.output} · Unknown: ${usage.unknownResponses}`);
 			// Keep the roster scannable; only the selected agent reveals its detail.
 			if (selected) {
 				const tasks = run.tasks.filter(task => task.assignment?.workerId === worker.id);
@@ -303,7 +307,7 @@ export class SwarmDashboard {
 			rows.push("");
 		}
 		if (!run.workers.length) rows.push("No agents recruited yet.");
-		rows.push("Usage not aggregated; cost: unknown.");
+		rows.push(usageTotals(run).measured ? "Recorded worker usage above; owner usage excluded. Cost: unknown." : "Worker usage unavailable; cost: unknown.");
 		return rows.join("\n");
 	}
 

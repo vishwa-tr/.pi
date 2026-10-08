@@ -139,7 +139,10 @@ test("late confirmation still rejects workspace changes before execution", async
 });
 test("maximum objective is preserved without duplication into seeded fields", async t => {
 	const f = await fixture(t), constraints = "\nOnly src/example.js; no new dependencies; run tests", objective = "x".repeat(32768 - constraints.length) + constraints;
-	await f.command(`start ${objective}`); await until(() => f.mock.calls.length === 1); assert.equal((await f.status()).objective, objective);
+	await f.command(`start ${objective}`); await until(() => f.mock.calls.length === 1); assert.equal((await f.status()).objectiveTruncated, true);
+	const runId = (await f.tool("swarm_status", {})).details.runId;
+	const create = JSON.parse(readFileSync(prepareLayout(f.root, runId).journalPath, "utf8").split("\n")[0]).payload;
+	assert.equal(create.payload.objective, objective);
 	assert.ok(JSON.stringify(f.mock.calls[0].context).includes(JSON.stringify(JSON.stringify(objective)).slice(1, -1)));
 });
 test("busy main tool returns a proposal instead of waiting for user input", async t => { const f = await fixture(t); f.ctx.isIdle = () => false; assert.equal((await f.propose({ objective: "goal" })).awaitingConfirmation, true); assert.equal(f.mock.calls.length, 0); });
@@ -287,3 +290,28 @@ test("active and paused attachments reject another objective without changing hi
 });
 
 test("only /swarm stop is exposed; other slash actions are inert", async t => { const f = await fixture(t); assert.deepEqual([...f.commands.keys()], ["swarm"]); for (const action of ["", "start goal", "status", "pause", "restore run1", "resume", "restart", "reconcile", "dashboard"]) await f.slash(action); assert.equal(f.packets.length, 0); assert.equal(f.mock.calls.length, 0); assert.equal(f.entries.length, 0); await f.command("start goal"); await f.slash("stop"); assert.equal((await f.status()).status, "stopped"); });
+
+
+test("approved initialWorker starts a bounded implementer without recruiting a planner", async t => {
+	const f = await fixture(t);
+	const proposal = await f.propose({ objective: "One focused implementation", limits: { agents: 2, active: 1, modelRequests: 5 }, initialWorker: { id: "implementer", specialization: "Implementation", brief: "Implement the approved scope then stop" } });
+	assert.match(proposal.agreement, /initialWorker/);
+	await f.input("start"); await f.consume(proposal);
+	await until(() => f.mock.calls.length === 1);
+	const result = await f.tool("swarm_status", {});
+	assert.deepEqual(result.details.workers.map(worker => worker.id), ["implementer"]);
+	assert.equal(result.details.budgets.modelRequests.allowed, 5);
+	await f.slash("stop");
+});
+
+test("owner preparation compacts only an idle settled boundary and never starts workers", async t => {
+	const f = await fixture(t);
+	let compactions = 0;
+	f.ctx.isIdle = () => true; f.ctx.hasPendingMessages = () => false;
+	f.ctx.compact = options => { compactions++; options.onComplete({ summary: "Current constraints retained" }); };
+	await f.slash("prepare"); assert.equal(compactions, 1); assert.equal(f.mock.calls.length, 0);
+	await f.command("start goal"); await until(() => f.mock.calls.length === 1);
+	await f.slash("prepare"); assert.equal(compactions, 1, "a running run cannot compact owner context through this command");
+	await f.slash("stop"); await f.slash("prepare"); assert.equal(compactions, 2);
+	assert.equal(f.mock.calls.length, 1);
+});
