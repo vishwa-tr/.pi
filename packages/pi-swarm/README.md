@@ -257,35 +257,42 @@ main-agent work continues in the background. Ask the main agent to open the view
 (`swarm_control`, action `view`) when the status-line package is not loaded.
 
 **Alt+N initially opens the general Messages overview**, with no message editor.
-It does not open the focused worker's conversation or draft. Switch to **Agents**,
-select a worker and press **Enter** to open a **separate agent conversation page**,
-not the Messages tab. The inspection view has three tabs. The focused worker page has a native multiline
-message editor beneath its history, matching Subagents. All three tabs remain inspection-only:
+It does not open the focused worker's transcript or draft. Messages, Agents and
+Topics remain read-only; **Steer** is the only page with messaging.
 
-- **Messages:** conversations between agents and with the main agent. Focused
-  agent views show their peer mail and assistant messages. Tool calls, tool results,
-  reasoning and internal wake/context prompts stay out of the conversation view.
+- **Messages:** inter-agent mail and main-agent exchanges, not the native worker
+  chat transcript. Tool calls/results and internal context stay out of this view.
 - **Agents:** the main agent and worker roster, live activity, focus and assigned
-  tasks. Enter opens an agent's messages. Selecting main from the focused agent
-  roster returns to Pi's main chat.
+  tasks. Enter opens read-only agent mail, without an editor.
 - **Topics:** task discussions with their status, plus named conversation
   topics. Enter filters Messages to that discussion; `q` returns to Topics and
   `a` shows all messages again. Selection stays on the same topic during live updates.
+- **Steer:** select a worker and press Enter to see its native Pi user/assistant
+  transcript, tool calls/results and activity, with a visibly bordered multiline
+  message editor. This is distinct from agent mail. Selecting main returns to
+  Pi's main chat.
 
-Use `1`–`3`, Tab, or `h`/`l` to switch tabs; `j`/`k` or arrows select agents and
+Use `1`–`4`, Tab, or `h`/`l` to switch tabs; `j`/`k` or arrows select agents and
 topics or scroll messages. PageUp/PageDown scroll, `/` searches literally, `n`/`N`
 move between matches, and `f` follows new messages. `q`/Escape closes or returns
-from an agent conversation in the inspection dashboard. On the focused worker page,
+from agent mail in the inspection dashboard. On the focused **Steer** worker page,
 text and ordinary keys belong to the message editor instead: **Enter sends**, **Tab**
-switches panes, **PageUp/PageDown** scroll history, **Escape** returns to main, and
-**Alt+N** selects the next agent. Slash commands and `!` drafts move to the main editor
+switches panes, **PageUp/PageDown** scroll history and leave follow mode,
+**Ctrl+End** returns to the latest transcript and resumes following, **Escape**
+returns to main, and **Alt+N** selects the next agent. Steer opens at the latest
+transcript and follows additions until you scroll history; ordinary `f` remains
+editor text. Slash commands and `!` drafts move to the main editor
 without executing; press Enter there to run them. Agent mail is text-only; image paste
 is rejected. Native focus/cursor handling and multiline input are preserved.
+Transcript replay shows finalized active-branch messages plus working/queued
+activity, not token-by-token streaming or partial tool results. Attachments use
+text-only placeholders; opaque tool metadata is excluded.
 
 Sending uses the same guarded host path as main-agent mail and requires the current
 owned, running, approved Swarm. It can wake the recipient within that approved run;
 opening or navigating the view never dispatches work. Pending sends cannot be submitted
-twice. Drafts survive agent switching and failed/unavailable sends for the same run;
+twice. Paused, stopped or unowned runs cannot send. Drafts survive agent and page
+switching and failed/unavailable sends for the same run;
 feedback appears beside the editor. Delivery uncertainty is reported without automatic
 retry. Drafts are in-memory only and do not survive reload or a new run. The generic
 `swarm_control` inspection dashboard remains read-only. Lifecycle controls go through the
@@ -420,7 +427,7 @@ or deletion occurs.
 | `sessions.mjs`, `sdk-session.mjs`, `native-provider.mjs` | Native Pi sessions, host runtime selection, retries/compaction admission |
 | `session-tools.mjs`, `workspace.mjs`, `workspace-scheduler.mjs`, `workspace-files.mjs` | Native tool wrappers, claims, receipts and read-only fingerprints |
 | `store/` | External layout, durable files, journal and explicit lease recovery |
-| `dashboard.mjs`, `focus.mjs`, `composer.mjs`, `transcript.mjs`, `progress.mjs` | Inspection, focused-agent mail, transcript projection and event-driven notices |
+| `dashboard.mjs`, `focus.mjs`, `composer.mjs`, `transcript.mjs`, `progress.mjs` | Read-only mail inspection, Steer transcripts/composer and event-driven notices |
 
 ## Verification
 

@@ -85,9 +85,11 @@ test("Alt+N focus opens general Messages; only roster selection opens agent mail
 		assert.deepEqual(history, []);
 		component.handleInput("2"); component.handleInput("j"); component.handleInput("\r");
 		screen = component.render(80).join("\n");
-		assert.match(screen, /Agent conversation/); assert.match(screen, /Message agent/);
+		assert.match(screen, /Agent conversation/); assert.doesNotMatch(screen, /Message agent/);
 		assert.match(screen, /Beta mail/); assert.doesNotMatch(screen, /Alpha mail/);
 		assert.deepEqual(history, ["b"]);
+		component.handleInput("4"); component.handleInput("\r");
+		assert.match(component.render(80).join("\n"), /Steer · native Pi transcript/);
 		component.handleInput("Mail to beta"); component.handleInput("\r");
 		await new Promise(resolve => setImmediate(resolve));
 		assert.deepEqual(deliveries, [["b", "Mail to beta", "overview-run"]]);
@@ -95,7 +97,7 @@ test("Alt+N focus opens general Messages; only roster selection opens agent mail
 		screen = component.render(80).join("\n");
 		assert.match(screen, /Alpha mail/); assert.match(screen, /Beta mail/);
 		assert.doesNotMatch(screen, /Message agent/);
-		component.handleInput("2"); component.handleInput("j"); component.handleInput("\r");
+		component.handleInput("4"); component.handleInput("j"); component.handleInput("\r");
 		assert.match(component.render(80).join("\n"), /Retained beta draft/);
 	} finally { bridge.dispose(); }
 });

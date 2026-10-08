@@ -16,7 +16,7 @@ export default async function (pi) {
 	] };
 	const source = {
 		snapshot: () => ({ run, driver: { active: [], queued: [] } }),
-		history: id => [{ id: "fixture-history", message: { role: "assistant", content: `${id} fixture assistant message` } }],
+		history: id => [{ id: "fixture-history", message: { role: "assistant", content: [{ type: "text", text: `${id} fixture assistant message` }], stopReason: "stop" } }],
 		subscribe: () => () => {},
 	};
 	// Reference is an optional test input, never a production dependency. Only

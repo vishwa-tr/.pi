@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { matchesKey } from "@earendil-works/pi-tui";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { repository } from "./helpers.mjs";
 import { createMockRuntime } from "./sdk-env.mjs";
 import { mainAgentAction } from "./main-agent-actions.mjs";
@@ -177,12 +178,16 @@ for (const action of ["close", "pause", "stop", "tree", "shutdown", "prompt"]) t
 });
 test("dashboard cannot authorize continuation or overlap controls", async t => { const f = await fixture(t), view = dashboardUI(f); await f.command("start goal"); await f.command("pause"); const opened = f.command(""); await assert.rejects(f.command("resume")); view().handleInput("r"); assert.equal(view().closed, false); view().handleInput("\x1b"); await opened; f.replies.push("no"); await assert.rejects(f.command("resume")); assert.equal((await f.status()).status, "paused"); });
 test("focused composer delivers through the actual host and fences workspace and mode drift", async t => {
+	initTheme("dark");
 	const f = await fixture(t); let component;
 	const surface = { terminal: { rows: 24 }, requestRender() {}, showOverlay(value) { component = value; return { hide() {} }; } };
 	f.ctx.ui.setWidget = (_key, factory) => factory?.(surface, { fg: (_color, text) => text });
 	f.events.on("agent-focus:navigate", target => { if (target.action === "select") f.events.emit("agent-focus:focus", { source: "swarm", id: target.targetId }); });
 	await f.command("start composer goal"); await until(() => f.mock.calls.length === 1);
 	f.events.emit("agent-focus:focus", { source: "swarm", id: "planner" }); component.handleInput("2"); component.handleInput("\r");
+	assert.match(component.render(80).join("\n"), /Agent conversation/);
+	assert.doesNotMatch(component.render(80).join("\n"), /Message agent|Enter send/);
+	component.handleInput("4"); component.handleInput("\r");
 	assert.match(component.render(80).join("\n"), /Message agent/);
 	const mail = async () => (await f.tool("swarm_history", { channel: "messages" })).details.messages;
 	component.handleInput("Approved composer mail"); component.handleInput("\r");

@@ -1,3 +1,4 @@
+import { nativeTranscript } from "./native-transcript.mjs";
 import { isBoardMessage } from "./messaging.mjs";
 import { conversationText, messageText, topicsFor } from "./conversations.mjs";
 import { matchesKey, visibleWidth, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -7,7 +8,7 @@ export function displayText(value) {
 	return String(value).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`).replace(/\t/g, "    ");
 }
 
-const sections = ["Messages", "Agents", "Topics"];
+const sections = ["Messages", "Agents", "Topics", "Steer"];
 
 /** Only receives read capabilities. Actions are returned to the owning command after disposal. */
 export class SwarmDashboard {
@@ -44,11 +45,16 @@ export class SwarmDashboard {
 			const retainedTopic = topics.findIndex(topic => topic.name === this.selectedTopic);
 			this.topicIndex = retainedTopic >= 0 ? retainedTopic : Math.max(0, Math.min(this.topicIndex ?? 0, topics.length - 1));
 			this.selectedTopic = topics[this.topicIndex]?.name;
-			if (this.isConversation && this.workerId !== "owner") {
+			if ((this.isConversation || this.isSteer) && this.workerId !== "owner") {
 				const worker = workers[this.workerIndex];
 				const key = `${worker?.id}:${this.snapshot?.run?.revision}`;
-				if (key !== this.historyKey) {
-					this.history = worker ? this.source.history(worker.id) : [];
+				if (this.isSteer || key !== this.historyKey) {
+					const history = worker ? this.source.history(worker.id) : [];
+					// Native finalized messages can arrive without a controller revision.
+					const contentKey = this.isSteer ? JSON.stringify(history) : key;
+					if (contentKey !== this.nativeHistoryKey) this.nativeComponents = undefined;
+					this.nativeHistoryKey = contentKey;
+					this.history = history;
 					this.historyKey = key;
 				}
 			}
@@ -70,7 +76,7 @@ export class SwarmDashboard {
 		this.signal.removeEventListener("abort", this.abort);
 	}
 
-	invalidate() { }
+	invalidate() { this.nativeComponents = undefined; }
 
 	handleInput(data) {
 		if (this.closed) return;
@@ -110,18 +116,23 @@ export class SwarmDashboard {
 			return;
 		}
 		if (data === "q" || this.keybindings.matches(data, "tui.select.cancel")) {
-			if (this.isConversation) this.openSection(1);
+			if (this.isSteer) this.openSection(3);
+			else if (this.isConversation) this.openSection(1);
 			else if (this.section === 0 && this.topic) this.openSection(2);
 			else return this.finish();
 		} else if (data === "/" && this.section === 0) {
 			this.searching = true; this.draft = "";
 		} else if ((data === "n" || data === "N") && this.section === 0) this.seekMatch(data === "n" ? 1 : -1);
 		else if (data === "f" && this.section === 0) this.follow = !this.follow;
-		if (/^[1-3]$/.test(data)) this.openSection(Number(data) - 1);
-		else if (matchesKey(data, "tab") || data === "l") this.openSection((this.section + 1) % sections.length);
+		if (/^[1-4]$/.test(data)) this.openSection(Number(data) - 1);
+		else if (matchesKey(data, "tab") || data === "l") this.openSection(this.isSteer ? 3 : (this.section + 1) % sections.length);
 		else if (data === "h") this.openSection(this.isConversation ? 1 : Math.max(0, this.section - 1));
 		else if (this.section === 2 && this.keybindings.matches(data, "tui.select.confirm")) {
 			this.openTopic(this.selectedTopic);
+		}
+		else if (this.section === 3 && !this.isSteer && this.keybindings.matches(data, "tui.select.confirm")) {
+			if (this.workerId === "owner") { if (this.selectAgent?.("owner")) return; }
+			else this.openSteer();
 		}
 		else if (data === "a" && this.section === 0) { this.topic = undefined; this.openSection(0); }
 		else if ((data === "c" && (!this.messageEditor || this.section === 1)) || (this.section === 1 && this.keybindings.matches(data, "tui.select.confirm"))) {
@@ -135,7 +146,7 @@ export class SwarmDashboard {
 			this.selectedTopic = topics[this.topicIndex]?.name;
 			this.revealTopic = true;
 		}
-		else if (this.section === 1 && (data === "j" || data === "k" || matchesKey(data, "left") || matchesKey(data, "right") || matchesKey(data, "up") || matchesKey(data, "down"))) {
+		else if ((this.section === 1 || this.section === 3 && !this.isSteer) && (data === "j" || data === "k" || matchesKey(data, "left") || matchesKey(data, "right") || matchesKey(data, "up") || matchesKey(data, "down"))) {
 			const direction = data === "k" || matchesKey(data, "left") || matchesKey(data, "up") ? -1 : 1;
 			this.workerIndex = Math.max(-1, Math.min(this.workerIndex + direction, (this.snapshot?.run?.workers.length ?? 1) - 1));
 			this.workerId = this.snapshot?.run?.workers[this.workerIndex]?.id ?? "owner";
@@ -151,6 +162,17 @@ export class SwarmDashboard {
 		this.lastKey = data === "g" && this.lastKey !== "g" ? "g" : undefined;
 		this.refresh();
 		this.tui.requestRender();
+	}
+
+	get isSteer() { return this.section === 3 && this.steerOpen === true; }
+
+	openSteer(workerId = this.workerId) {
+		this.openSection(3);
+		this.workerId = workerId;
+		this.steerOpen = true;
+		this.follow = true;
+		this.historyKey = undefined;
+		this.refresh();
 	}
 
 	get isConversation() { return this.section === 0 && this.conversationOpen === true; }
@@ -172,12 +194,13 @@ export class SwarmDashboard {
 	openSection(section) {
 		this.section = section;
 		this.conversationOpen = false;
+		this.steerOpen = false;
 		this.topic = undefined;
 		this.offset = 0;
 		this.query = "";
 		this.matchOffset = undefined;
 		this.follow = false;
-		this.revealWorker = section === 1;
+		this.revealWorker = section === 1 || section === 3;
 		this.revealTopic = section === 2;
 	}
 
@@ -229,6 +252,7 @@ export class SwarmDashboard {
 				return `${this.topic ? `Topic: ${this.topic} · a shows all messages\n\n` : ""}${messageText(messages, run.workers) || "No messages yet. Ask the main agent to coordinate this team."}`;
 			}
 			case 1: return this.agentRoster(run, driver);
+			case 3: return this.isSteer ? "No native messages yet." : `Select a worker and press Enter for its native Pi transcript.\nMessaging is available only here; Agents shows inter-agent mail.\n\n${this.agentRoster(run, driver)}`;
 			case 2: {
 				const topics = topicsFor(run);
 				if (!topics.length) return "No topics yet. Ask the main agent to start a named discussion.";
@@ -272,20 +296,25 @@ export class SwarmDashboard {
 		const contentWidth = Math.max(1, width - (framed ? 4 : 0));
 		this.width = contentWidth;
 		const status = this.snapshot?.run?.status ?? "unattached";
-		const identity = this.isConversation ? ` · ${this.workerId === "owner" ? "Main agent" : this.workerId}` : "";
-		const heading = `${this.focusCounter ?? ""}Swarm · ${status}${identity} · ${this.messageEditor && this.isConversation ? "agent mail" : "read-only"}`;
-		const hints = this.searching ? "SEARCH · Enter find | Esc cancel" : this.help ? "HELP · j/k scroll | ? back" : this.focusNavigation ? this.messageEditor && this.isConversation ? "Alt+N next · Esc main · PgUp/PgDn history · Tab panes · /swarm stop" : "Alt+N next · Esc main · PgUp/PgDn history · q back · ? help · /swarm stop" : `q/Esc ${this.isConversation || this.topic ? "back" : "close"} · Tab pane · j/k move · ? help · /swarm stop`;
+		const identity = this.isConversation || this.isSteer ? ` · ${this.workerId === "owner" ? "Main agent" : this.workerId}` : "";
+		const heading = `${this.focusCounter ?? ""}Swarm · ${status}${identity} · ${this.isSteer ? "native Pi transcript" : "read-only"}`;
+		const hints = this.searching ? "SEARCH · Enter find | Esc cancel" : this.help ? "HELP · j/k scroll | ? back" : this.focusNavigation ? this.messageEditor && this.isSteer ? "Alt+N next · Esc main · PgUp/PgDn history · Tab panes · /swarm stop" : "Alt+N next · Esc main · PgUp/PgDn history · q back · ? help · /swarm stop" : `q/Esc ${this.isConversation || this.topic ? "back" : "close"} · Tab pane · j/k move · ? help · /swarm stop`;
 		const header = [this.styledLine(heading, width, "accent"), this.styledLine(hints, width, "dim")];
-		if (rows >= 6) header.push(this.isConversation
+		if (rows >= 6) header.push(this.isSteer
+			? this.styledLine(`Steer · native Pi transcript · ${this.snapshot?.driver?.active?.includes(this.workerId) ? "working" : this.snapshot?.driver?.queued?.includes(this.workerId) ? "queued" : "idle"} · Tab selects worker`, width, "muted")
+			: this.isConversation
 			? this.styledLine("Agent conversation · Tab opens Agents", width, "muted")
 			: this.tabLine(width));
-		const help = "NAVIGATION\nj/k or arrows: workers / scroll\nh/l: previous / next pane; Tab: next pane\ngg/G or Home/End: top / bottom\nCtrl-u/d: half page; PgUp/PgDn: page\nEnter on worker or c: conversation\nq/Esc: conversation back; otherwise close\nCONVERSATION\n/: local literal search; Enter applies; Esc cancels\nEmpty search clears; n/N: next / previous match\nf: toggle follow tail; scrolling stops following\nCONTROL\nAsk the main agent to change Swarm state.\nClose this view and use /swarm stop for an emergency stop.\nCtrl-c: unchanged Pi global control\nInspection never starts a worker. ? closes help.";
-		const renderedRows = this.contentRows(this.help ? help : this.body(), contentWidth);
+		const help = "NAVIGATION\nj/k or arrows: workers / scroll\nh/l: previous / next pane; Tab: next pane\ngg/G or Home/End: top / bottom\nCtrl-u/d: half page; PgUp/PgDn: page\nEnter on Agents: mail; Steer: native transcript\n4: Steer; Tab from transcript: select worker\nq/Esc: conversation back; otherwise close\nCONVERSATION\n/: local literal search; Enter applies; Esc cancels\nEmpty search clears; n/N: next / previous match\nf: toggle follow tail; scrolling stops following\nCONTROL\nAsk the main agent to change Swarm state.\nClose this view and use /swarm stop for an emergency stop.\nCtrl-c: unchanged Pi global control\nInspection never starts a worker. ? closes help.";
+		const native = this.isSteer && !this.help && !this.error;
+		if (native && !this.nativeComponents) this.nativeComponents = nativeTranscript(this.history, this.tui, this.snapshot?.run?.workspaceRoot ?? process.cwd());
+		const nativeLines = native ? this.nativeComponents.flatMap(component => component.render(contentWidth)) : [];
+		const renderedRows = native && nativeLines.length ? nativeLines.map(text => ({ text, native: true })) : this.contentRows(this.help ? help : this.body(), contentWidth);
 		const lines = renderedRows.map(row => row.text);
 		this.lines = lines;
 		// Reserve heading, hints, tabs, two frame rules and the footer first.
 		this.pageSize = Math.max(1, rows - header.length - (framed ? 2 : 0) - 1);
-		if (!this.help && ((this.section === 1 && this.revealWorker) || (this.section === 2 && this.revealTopic))) {
+		if (!this.help && (((this.section === 1 || this.section === 3 && !this.isSteer) && this.revealWorker) || (this.section === 2 && this.revealTopic))) {
 			const selected = lines.findIndex(line => line.startsWith("> "));
 			if (selected >= 0) {
 				const separator = lines.indexOf("", selected);
@@ -297,7 +326,7 @@ export class SwarmDashboard {
 			}
 			this.revealWorker = false; this.revealTopic = false;
 		}
-		if (this.follow && this.section === 0 && !this.help) this.offset = lines.length;
+		if (this.follow && (this.section === 0 || this.isSteer) && !this.help) this.offset = lines.length;
 		this.offset = Math.max(0, Math.min(this.offset, Math.max(0, lines.length - this.pageSize)));
 		const page = lines.slice(this.offset, this.offset + this.pageSize);
 		if (this.query && !this.help) {
@@ -305,14 +334,15 @@ export class SwarmDashboard {
 		}
 		const listFooter = this.section === 1 ? `Agent ${this.workerIndex + 2}/${(this.snapshot?.run?.workers.length ?? 0) + 1} · Enter messages` : this.section === 2 && this.selectedTopic ? `Topic ${(this.topicIndex ?? 0) + 1}/${topicsFor(this.snapshot?.run).length} · Enter discussion` : undefined;
 		const position = `${this.offset + 1}-${Math.min(lines.length, this.offset + this.pageSize)} / ${lines.length} lines`;
-		const footer = this.searching ? `/${this.draft} | Enter find · Esc cancel` : `${!this.help && this.snapshot?.run && listFooter ? `${listFooter} | ` : ""}${position}${this.isConversation ? ` | follow ${this.follow ? "ON" : "off"}` : ""}${this.query ? ` | /${this.query}: ${this.matchCount ?? 0} matches` : ""}`;
+		const footer = this.searching ? `/${this.draft} | Enter find · Esc cancel` : `${!this.help && this.snapshot?.run && listFooter ? `${listFooter} | ` : ""}${position}${this.isConversation || this.isSteer ? ` | follow ${this.follow ? "ON" : "off"}` : ""}${this.query ? ` | /${this.query}: ${this.matchCount ?? 0} matches` : ""}`;
 		const body = page.map((line, index) => {
 			const matched = this.query && !this.help && line.toLocaleLowerCase().includes(this.query.toLocaleLowerCase());
+			if (renderedRows[this.offset + index].native) return truncateToWidth(line, contentWidth, "");
 			return this.styledLine(line, contentWidth, matched ? "warning" : renderedRows[this.offset + index].color);
 		});
 		while (body.length < this.pageSize) body.push("");
 		if (!framed) return [...header, ...body, this.styledLine(footer, width, "dim")];
-		const caption = this.help ? " Help " : this.isConversation ? ` Agent · ${this.workerId} ` : ` ${sections[this.section]}${this.topic ? ` · ${this.topic}` : ""} `;
+		const caption = this.help ? " Help " : this.isSteer ? ` Steer · ${this.workerId} ` : this.isConversation ? ` Agent · ${this.workerId} ` : ` ${sections[this.section]}${this.topic ? ` · ${this.topic}` : ""} `;
 		return [...header, this.frameRule("╭", caption, "╮", width),
 			...body.map(line => this.frameRow(line, contentWidth)),
 			this.frameRule("╰", "", "╯", width), this.styledLine(footer, width, "dim")];

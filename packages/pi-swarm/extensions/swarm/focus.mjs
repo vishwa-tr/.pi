@@ -68,7 +68,7 @@ export function createFocusBridge(pi, source, ui, { send } = {}) {
 			view.focusCounter = `[${target.position}/${target.total}] `;
 		}
 		// Alt+N enters the shared Messages overview. Only an explicit roster
-		// selection opens an individual agent page and its composer.
+		// Agents selection opens read-only mail; Steer owns the native transcript/composer.
 		view.workerId = target.id;
 		if (openAgent) view.openConversation(target.id);
 		else view.refresh();

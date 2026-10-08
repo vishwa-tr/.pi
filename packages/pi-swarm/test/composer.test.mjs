@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, visibleWidth, CURSOR_MARKER } from "@earendil-works/pi-tui";
 import { AgentComposer } from "../extensions/swarm/composer.mjs";
 import { SwarmDashboard } from "../extensions/swarm/dashboard.mjs";
@@ -14,7 +15,7 @@ function fixture(send = async () => {}) {
 		keybindings: { matches: (data, action) => matchesKey(data, ({ "tui.select.cancel": "escape", "tui.select.confirm": "enter" })[action]) },
 		signal: new AbortController().signal, done() {}, schedule() {}, unschedule() {}
 	});
-	dashboard.messageEditor = true; dashboard.focusNavigation = true; dashboard.openConversation("one");
+	dashboard.messageEditor = true; dashboard.focusNavigation = true; dashboard.openSteer("one");
 	const drafts = new Map(); const pending = new Map();
 	const options = { dashboard, drafts, pending, runId: run.runId,
 		ui: { notify: (text, level) => notices.push({ text, level }), setEditorText: text => mainDrafts.push(text) },
@@ -25,22 +26,78 @@ function fixture(send = async () => {}) {
 
 const settled = () => new Promise(resolve => setImmediate(resolve));
 
-test("composer belongs only to the separate agent page, never Messages or Topics", () => {
+test("Steer opens at tail, follows completed additions, and Ctrl+End resumes after scroll without stealing drafts", () => {
+	initTheme("dark");
+	const f = fixture();
+	const dashboard = f.options.dashboard;
+	const history = Array.from({ length: 30 }, (_, index) => ({ message: { role: "user", content: `Message ${index}` } }));
+	dashboard.source.history = () => history;
+	try {
+		dashboard.openSteer("one");
+		let screen = f.view.render(100).join("\n");
+		assert.equal(dashboard.follow, true);
+		assert.match(screen, /Message 29/);
+		assert.equal(dashboard.offset, dashboard.lines.length - dashboard.pageSize);
+		assert.equal((screen.match(/Message agent/g) ?? []).length, 1, "one input label, on border only");
+		history.push({ message: { role: "user", content: "Followed addition" } });
+		dashboard.refresh(); screen = f.view.render(100).join("\n");
+		assert.match(screen, /Followed addition/);
+		f.view.handleInput("draft f123");
+		f.view.handleInput("\x1b[5~"); screen = f.view.render(100).join("\n");
+		assert.equal(dashboard.follow, false);
+		const scrolledOffset = dashboard.offset;
+		assert.doesNotMatch(screen, /Followed addition/);
+		history.push({ message: { role: "user", content: "Unfollowed addition" } });
+		dashboard.refresh(); screen = f.view.render(100).join("\n");
+		assert.equal(dashboard.offset, scrolledOffset);
+		assert.doesNotMatch(screen, /Unfollowed addition/);
+		f.view.handleInput("\x1b[1;5F"); screen = f.view.render(100).join("\n");
+		assert.equal(dashboard.follow, true);
+		assert.match(screen, /Unfollowed addition/);
+		assert.equal(f.view.editor.getText(), "draft f123");
+		assert.equal(f.deliveries.length, 0);
+	} finally { f.view.dispose(); }
+});
+
+test("unowned running Swarm retains drafts without invoking delivery", async () => {
+	const f = fixture();
+	f.options.dashboard.source.snapshot = () => ({ run: f.run, ownershipHeld: false });
+	try {
+		await f.view.submit("Do not dispatch");
+		assert.equal(f.deliveries.length, 0);
+		assert.equal(f.view.editor.getText(), "Do not dispatch");
+	} finally { f.view.dispose(); }
+});
+
+test("Steer switching retains independent per-worker drafts", () => {
+	const f = fixture();
+	f.run.workers.push({ id: "two", specialization: "Second" });
+	try {
+		f.view.handleInput("First draft"); f.view.handleInput("\t");
+		f.view.handleInput("j"); f.view.handleInput("\r");
+		f.view.handleInput("Second draft"); f.view.handleInput("\t");
+		f.view.handleInput("k"); f.view.handleInput("\r");
+		assert.equal(f.view.editor.getText(), "First draft");
+		assert.equal(f.drafts.get("two"), "Second draft");
+		assert.equal(f.deliveries.length, 0);
+	} finally { f.view.dispose(); }
+});
+
+test("composer belongs only to Steer; Agents and agent mail remain read-only", () => {
 	const f = fixture();
 	try {
 		let screen = f.view.render(80).join("\n");
-		assert.match(screen, /Agent conversation · Tab opens Agents/);
-		assert.match(screen, /╭ Agent · one/);
-		assert.match(screen, /Message agent/);
-		assert.doesNotMatch(screen, /1 Messages/);
+		assert.match(screen, /Steer · native Pi transcript/);
+		assert.match(screen, /╭ Message agent/);
 		f.view.handleInput("draft for one"); f.view.handleInput("\t");
 		for (const key of ["1", "3", "2"]) {
 			f.view.handleInput(key); screen = f.view.render(80).join("\n");
-			assert.match(screen, /1 Messages.*2 Agents.*3 Topics/);
-			assert.doesNotMatch(screen, /Message agent|Enter send|Agent conversation/);
+			assert.match(screen, /1 Messages.*2 Agents.*3 Topics.*4 Steer/);
+			assert.doesNotMatch(screen, /Message agent|Enter send/);
 		}
 		f.view.handleInput("\r"); screen = f.view.render(80).join("\n");
-		assert.match(screen, /Agent conversation/); assert.match(screen, /Message agent/);
+		assert.match(screen, /Agent conversation/); assert.doesNotMatch(screen, /Message agent|Enter send/);
+		f.view.handleInput("4"); f.view.handleInput("\r");
 		assert.equal(f.view.editor.getText(), "draft for one");
 		assert.equal(f.deliveries.length, 0);
 	} finally { f.view.dispose(); }
@@ -124,13 +181,13 @@ test("letters, navigation digits and pasted newlines belong to the editor; image
 	const f = fixture();
 	try {
 		f.view.handleInput("qcf123/?");
-		assert.equal(f.view.editor.getText(), "qcf123/?"); assert.equal(f.options.dashboard.isConversation, true);
+		assert.equal(f.view.editor.getText(), "qcf123/?"); assert.equal(f.options.dashboard.isSteer, true);
 		f.view.handleInput("\x1b[200~"); f.view.handleInput("\nMore text\t"); f.view.handleInput("\x1b[201~");
 		assert.equal(f.deliveries.length, 0); assert.match(f.view.editor.getText(), /More text/);
 		f.view.handleInput("\x16"); assert.match(f.notices.at(-1).text, /text only/);
-		f.view.handleInput("\t"); assert.equal(f.options.dashboard.section, 1);
+		f.view.handleInput("\t"); assert.equal(f.options.dashboard.section, 3);
 		assert.match(f.drafts.get("one"), /qcf123/);
-		f.view.handleInput("\r"); assert.equal(f.options.dashboard.isConversation, true);
+		f.view.handleInput("\r"); assert.equal(f.options.dashboard.isSteer, true);
 		assert.match(f.view.editor.getText(), /qcf123/);
 	} finally { f.view.dispose(); }
 });
@@ -225,9 +282,9 @@ test("feedback clears on pane, recipient and displayed run state changes without
 		f.view.handleInput("\r"); assert.equal(f.view.editor.getText(), "Retained draft");
 		f.view.handleInput("\x16");
 		f.run.workers.push({ id: "two", specialization: "Second" });
-		f.options.dashboard.openConversation("two"); f.view.render(100);
+		f.options.dashboard.openSteer("two"); f.view.render(100);
 		assert.equal(f.view.feedback, undefined); assert.equal(f.drafts.get("one"), "Retained draft");
-		f.options.dashboard.openConversation("one"); f.view.render(100);
+		f.options.dashboard.openSteer("one"); f.view.render(100);
 		assert.equal(f.view.editor.getText(), "Retained draft");
 		for (const mutate of [() => { f.run.status = "paused"; }, () => { f.run.status = "running"; },
 			() => { f.run.runId = "replacement"; }, () => { f.run.workers = []; }]) {
@@ -249,7 +306,7 @@ test("late send settlement cannot restore feedback after recipient or run state 
 			assert.match(f.view.render(100).join("\n"), /Sending…/);
 			if (changeRecipient) {
 				f.run.workers.push({ id: "two", specialization: "Second" });
-				f.options.dashboard.openConversation("two");
+				f.options.dashboard.openSteer("two");
 			} else f.run.status = "paused";
 			f.view.render(100); complete(); await settled();
 			const screen = f.view.render(100).join("\n");

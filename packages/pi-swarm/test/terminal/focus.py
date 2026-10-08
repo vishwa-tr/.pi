@@ -25,10 +25,10 @@ def expect_focus(terminal, args, position):
 
 
 def open_worker(terminal, worker, composer=False):
-    terminal.send("2")
+    terminal.send("4" if composer else "2")
     terminal.expect(f"> {worker}")
     terminal.send("\r")
-    terminal.expect("Agent conversation")
+    terminal.expect("Steer · native Pi transcript" if composer else "Agent conversation")
     if composer:
         if isinstance(terminal, Terminal):
             terminal.cursor = terminal.last_expect_start  # Conversation and editor arrive in one redraw.
@@ -72,7 +72,7 @@ def exercise(terminal, args):
         open_worker(terminal, "alpha", composer=True)
         capture_sizes(terminal, args, "swarm-agent", composing=True)
         terminal.send("\t")
-        terminal.expect("╭ Agents")
+        terminal.expect("╭ Steer")
         for key, caption in [("1", "╭ Messages"), ("3", "╭ Topics")]:
             terminal.send(key)
             terminal.expect(caption)

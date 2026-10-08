@@ -15,7 +15,7 @@ export class AgentComposer {
 		this.syncRecipient(); this.syncSubmission();
 	}
 
-	get composing() { return this.dashboard.isConversation && this.dashboard.workerId !== "owner"; }
+	get composing() { return this.dashboard.isSteer && this.dashboard.workerId !== "owner"; }
 	get focused() { return this.editor.focused; }
 	set focused(value) { this.editor.focused = value; }
 
@@ -79,10 +79,11 @@ export class AgentComposer {
 		this.editor.setText(text);
 		this.drafts.set(to, text);
 		let run;
-		try { run = this.dashboard.source.snapshot()?.run; }
+		let ownershipHeld;
+		try { const snapshot = this.dashboard.source.snapshot(); run = snapshot?.run; ownershipHeld = snapshot?.ownershipHeld; }
 		catch { this.report("Agent availability could not be checked; draft retained.", "error"); return; }
 		const context = this.feedbackContext(run, to);
-		if (run?.runId !== this.runId || run?.status !== "running" || !run.workers.some(worker => worker.id === to)) {
+		if (ownershipHeld === false || run?.runId !== this.runId || run?.status !== "running" || !run.workers.some(worker => worker.id === to)) {
 			this.report("This agent cannot receive mail now. Resume the approved Swarm first; draft retained.", "warning", context);
 			return;
 		}
@@ -122,6 +123,8 @@ export class AgentComposer {
 			this.dashboard.handleInput(data); this.syncRecipient();
 		} else if (matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) {
 			this.dashboard.scroll((matchesKey(data, "pageUp") ? -1 : 1) * (this.dashboard.pageSize ?? 1));
+		} else if (matchesKey(data, "ctrl+end")) {
+			this.dashboard.follow = true;
 		} else if (matchesKey(data, "ctrl+v")) {
 			this.report("Agent mail supports text only. Return to the main chat for image attachments.", "warning");
 		} else if (!this.pending.has(this.recipient)) this.handleEditorInput(data);
@@ -136,22 +139,26 @@ export class AgentComposer {
 		// Native Editor needs two layout columns for wide graphemes plus its cursor.
 		// Tiny terminals keep the draft untouched instead of entering its width-one wrapper.
 		if (width < 4) return this.dashboard.shortViewport(width, rows);
-		const contentWidth = Math.max(3, width - (width >= 16 ? 4 : 0));
+		const bordered = width >= 8 && rows >= 8;
+		const contentWidth = Math.max(3, width - (bordered ? 4 : 0));
 		const editorLines = this.editor.render(contentWidth);
-		const labelRows = rows >= 8 ? 2 : 0;
-		const inputBudget = Math.max(1, Math.min(8, rows - labelRows - 4));
+		const labelRows = rows >= 8 ? 1 : 0;
+		const borderRows = bordered ? 2 : 0;
+		const inputBudget = Math.max(1, Math.min(8, rows - labelRows - borderRows - 4));
 		const cursorRow = editorLines.findIndex(line => line.includes(CURSOR_MARKER));
 		const start = cursorRow < 0 ? Math.max(0, editorLines.length - inputBudget)
 			: Math.max(0, Math.min(editorLines.length - inputBudget, cursorRow - inputBudget + 1));
 		const input = editorLines.slice(start, start + inputBudget);
-		const historyRows = Math.max(0, rows - labelRows - input.length);
+		const historyRows = Math.max(0, rows - labelRows - borderRows - input.length);
 		const history = historyRows ? this.dashboard.render(width, historyRows) : [];
 		const run = this.dashboard.snapshot?.run;
 		if (this.feedback?.context !== this.feedbackContext(run)) this.feedback = undefined;
-		const state = this.pending.has(this.recipient) ? "Sending…" : run?.status === "running" ? "Enter send · / or ! to main · text only · Tab panes" : "Paused/unavailable · draft retained · Tab panes";
+		const state = this.pending.has(this.recipient) ? "Sending…" : run?.status === "running" ? "Enter send · / or ! to main · Ctrl+End follow · Tab panes" : "Paused/unavailable · draft retained · Tab panes";
 		const feedback = !this.pending.has(this.recipient) && this.feedback;
-		const labels = labelRows ? [this.dashboard.styledLine("Message agent", width, "accent"), this.dashboard.styledLine(feedback ? feedback.text : state, width, feedback ? feedback.color : "dim")] : [];
-		return [...history, ...labels, ...input.map(line => (width >= 16 ? "  " : "") + line)].slice(-rows);
+		const labels = labelRows ? [this.dashboard.styledLine(feedback ? feedback.text : state, width, feedback ? feedback.color : "dim")] : [];
+		const field = bordered ? [this.dashboard.frameRule("╭", " Message agent ", "╮", width),
+			...input.map(line => this.dashboard.frameRow(line, contentWidth)), this.dashboard.frameRule("╰", "", "╯", width)] : input;
+		return [...history, ...labels, ...field].slice(-rows);
 	}
 
 	invalidate() { this.dashboard.invalidate(); this.editor.invalidate(); }

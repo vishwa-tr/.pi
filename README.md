@@ -124,8 +124,10 @@ root `.agents/skills/` is the canonical global skill library.
   tools. The agent proposes sensible settings and explains the full objective and
   configuration in chat; execution waits for your explicit confirmation there. Swarm
   opens no confirmation dialogs and preserves existing work by default. The only direct
-  user command is `/swarm stop`. Its read-only Messages/Agents/Topics view joins Pi agent
-  navigation; the main agent handles messaging and controls. Plan and Safety are optional
+  user command is `/swarm stop`. Its Messages/Agents/Topics inspection and **Steer**
+  page join Pi agent navigation. Only Steer offers a bordered message editor beside
+  a worker's native Pi transcript; other pages remain read-only. The main agent
+  handles lifecycle controls. Plan and Safety are optional
   integrations. Without Safety, your confirmed bounded run policy authorizes the selected
   worker coding tools; an enabled Safety provider still applies its own policy. Durable
   state lives beside Pi's project sessions, and another session can restore a run paused.
