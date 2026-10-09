@@ -277,3 +277,27 @@ bug. No provider cache-key, transport or native SDK patch was made in this task.
   `/reload`. The final cold start retains the same compacted owner chat and never
   automatically resumes the stopped team. No dependency upgrade or provider cache
   transport patch is part of these changes.
+
+
+## Bounded caching audit completed — 2026-10-08
+
+The [cache prefix audit](../guides/pi-cache-prefix-audit.md) found and fixed a
+mode-extension bug: normal input forced a leading prompt that native mail wakes
+skipped after the SDK cleared it. This changed the cacheable prefix and omitted
+mode instructions on wakes, although hard tool restrictions remained enforced.
+The correction consistently projects the owned mode section through the public
+SDK request-context hook, preserving other instructions, tool declarations and
+history. It does not freeze old policy when the owner changes mode or skill.
+
+Actual SDK/provider serialization reproduced the defect offline before fixing it.
+The complete mode suite passed 45 checks and 75 relevant Swarm checks passed.
+Three successful Luna/low live replies then measured 0%, 94.9% and 94.6% cached
+input respectively; the third was a native mail wake. Each reply used five output
+tokens. Instruction/tool/settings/cache-key hashes and prior prefixes remained
+stable. No workers, warming, SDK transport patches or extra normalization model
+turns were used. These results demonstrate working reuse, not a quota/billing
+forecast or a measured before/after savings estimate.
+
+The guide and temporary diagnostic extension retain the method for future
+regressions. Other sources of prefix changes, cache lifetime/routing and possible
+performance tradeoffs remain separate evidence-driven investigations.

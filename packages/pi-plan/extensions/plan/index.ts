@@ -35,6 +35,7 @@ import {
 	buildAutomaticTemplateInstructions,
 	discoverPlanTemplates,
 	loadSkillBody,
+	type PlanSkillDescriptor,
 } from "./templates.ts";
 
 const STATE_ENTRY = "plan-mode.state";
@@ -647,16 +648,15 @@ export default function planExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("before_agent_start", (event, ctx) => {
-		const runMode = modeLifecycle.startRun();
-		modeBridge.publish();
-		if (runMode !== "plan") {
-			return {
-				systemPrompt: `${event.systemPrompt}\n\n${buildNonPlanModeInstructions(runMode)}`,
-			};
-		}
+	let promptSkills: PlanSkillDescriptor[] | undefined;
 
-		const skills = event.systemPromptOptions.skills ?? [];
+	function modeInstructions(runMode: AgentMode, ctx: ExtensionContext): string {
+		if (runMode !== "plan") return buildNonPlanModeInstructions(runMode);
+		// A cold custom wake has no before_agent_start skill snapshot. Preserve an
+		// explicit selection rather than treating unknown metadata as a missing skill.
+		if (promptSkills === undefined) return buildPlanModeInstructions(FALLBACK_PLAN_INSTRUCTIONS,
+			selectedPlanSkill ? `The user selected ${JSON.stringify(selectedPlanSkill)}. Skill metadata is unavailable on this wake. Preserve the selection; do not substitute another template.` : "Use the current approved task and planning constraints.");
+		const skills = promptSkills;
 		const loadedSkillBody = loadSkillBody(skills.find((candidate) => candidate.name === PLAN_SKILL_NAME));
 		if (!loadedSkillBody && !warnedMissingSkill) {
 			warnedMissingSkill = true;
@@ -693,9 +693,35 @@ export default function planExtension(pi: ExtensionAPI): void {
 			templateInstructions = buildAutomaticTemplateInstructions(automaticTemplates);
 		}
 
-		return {
-			systemPrompt: `${event.systemPrompt}\n\n${buildPlanModeInstructions(skillBody, templateInstructions)}`,
-		};
+		return buildPlanModeInstructions(skillBody, templateInstructions);
+	}
+
+	pi.on("before_agent_start", (event, ctx) => {
+		const runMode = modeLifecycle.startRun();
+		modeBridge.publish();
+		promptSkills = event.systemPromptOptions.skills ?? [];
+		// Resolve ordinary-input skill selection before the first model request.
+		modeInstructions(runMode, ctx);
+	});
+
+	pi.on("context_with_system", (event, ctx) => {
+		const instructions = modeInstructions(modeLifecycle.enforcedMode, ctx);
+		const section = `<pi_plan_mode>\n${instructions}\n</pi_plan_mode>`;
+		const leading = event.messages.findIndex(message => message.role === "system");
+		if (leading < 0) return { messages: [{ role: "system" as const, content: "", sections: { pi_plan_mode: section }, timestamp: Date.now() }, ...event.messages] };
+		// Project only this extension's policy, consistently for ordinary input,
+		// retries and custom wakes. Preserve history, every other system section
+		// and all tool declarations. A real mode change intentionally changes it.
+		return { messages: event.messages.map((message, index) => {
+			if (message.role !== "system") return message;
+			const sections = { ...message.sections };
+			delete sections.pi_plan_mode;
+			if (index === leading) {
+				if (message.content) return { ...message, sections, content: `${message.content}\n\n${section}` };
+				return { ...message, sections: { ...sections, pi_plan_mode: section } };
+			}
+			return message.sections && Object.hasOwn(message.sections, "pi_plan_mode") ? { ...message, sections } : message;
+		}) };
 	});
 
 	pi.on("agent_settled", (_event, ctx) => {

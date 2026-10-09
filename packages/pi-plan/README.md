@@ -28,7 +28,7 @@ Mode controls are accepted while the agent is running. Selecting a different mod
 
 Routine mode transitions are silent because the footer already shows the selected next-turn state. Invalid-command errors, deferred-input notices, queued-task cancellation notices, fallback warnings, and explicit `status` responses remain visible.
 
-Every run receives an authoritative current-mode prompt block. In Off mode, that block disables only pi-plan's Discuss, Plan, and Quick restrictions, marks earlier mode claims as historical, and preserves every other current instruction, safety policy, and active-tool restriction.
+Every provider request receives an authoritative current-mode prompt block, including native custom-message/mail wakeups. In Off mode, that block disables only pi-plan's Discuss, Plan, and Quick restrictions, marks earlier mode claims as historical, and preserves every other current instruction, safety policy, and active-tool restriction.
 
 The selected mode, explicit Plan skill, authorized Plan path, and Plan-spawned subagent scope are persisted as branch-local session state. Reload, resume, fork, and `/tree` restore state from the active branch; legacy `{ enabled: boolean }` Plan entries migrate to `plan` or `off`. A new session starts Off.
 
@@ -170,3 +170,31 @@ node --test packages/pi-plan/extensions/plan/mode-bridge.integration.test.ts
 ```
 
 An offline RPC `get_commands` smoke test should report `discuss`, `plan`, `quick`, and `skill:pi-plan-mode`, confirming that the package and shared skill load successfully.
+
+
+## Stable request prefixes
+
+Mode instructions are projected through the public `context_with_system` hook
+into the leading system message's owned `pi_plan_mode` section. The extension
+preserves other system sections, conversation history and tool declarations.
+It does not use a transient `before_agent_start` forced-string replacement:
+native mail wakes skip that hook after the SDK clears the forced run prompt.
+That old path changed the cacheable prefix and omitted current-mode instructions
+on custom wakes.
+
+Unchanged mode instructions now produce a consistent prefix for ordinary input,
+retries and native mail wakes. A real mode/skill-policy change intentionally
+changes instructions; cache reuse must never preserve obsolete restrictions.
+A cold Plan wake without skill metadata uses the conservative Plan fallback and
+preserves an explicit selection instead of clearing it as supposedly missing.
+
+The managed-SDK regression exercises actual Swarm mail delivery and the real
+Codex payload serializer, stopping at `onPayload` before headers/transport:
+
+```bash
+node --experimental-import-meta-resolve --import ./packages/pi-swarm/test/sdk-register.mjs \
+  --test packages/pi-plan/extensions/plan/cache-prefix.integration.test.mjs
+```
+
+The [cache audit guide](../../docs/agents/guides/pi-cache-prefix-audit.md) records
+the bounded Luna/low live check and a hashes-only temporary diagnostic extension.

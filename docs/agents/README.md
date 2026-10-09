@@ -6,6 +6,8 @@
 
 ## Guides
 
+- [Pi cache prefix audit](guides/pi-cache-prefix-audit.md) — Demonstrated mode/mail prefix bug, fix, bounded live measurements and hashes-only diagnostic extension.
+
 - [Pi account login navigation](guides/pi-login-navigation.md) — Locate the OpenAI legacy account provider and distinguish stored credentials from successful authentication.
 
 - [Swarm main-chat presentation](guides/swarm-main-chat-ui.md) — Main-chat and Steer behavior, same-session objectives, start approval, desktop verification, and journal evidence tooling.
