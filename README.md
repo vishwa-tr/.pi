@@ -58,6 +58,8 @@ source of the local Pi packages enabled by `agent/settings.json`.
 The parent owns Pi code and setup. The submodule owns reusable knowledge, roles,
 and skills for multiple agents. See [.agents/README.md](.agents/README.md) for its index.
 The same subagent definitions serve both Pi Subagents and Pi Teams.
+See [Choosing agent coordination](docs/agents/guides/choosing-agent-coordination.md)
+for when to use Subagents, Teams, or Swarm, with agent-facing examples and safeguards.
 
 Read this README, `MANIFEST.md`, relevant package documentation, and applicable
 `AGENTS.md` instructions before changing the layout or active resources.

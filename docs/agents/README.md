@@ -6,6 +6,8 @@
 
 ## Guides
 
+- [Choosing agent coordination](guides/choosing-agent-coordination.md) — When agents should use Pi Subagents, Teams, or Swarm, with examples and execution safeguards.
+
 - [Pi cache prefix audit](guides/pi-cache-prefix-audit.md) — Demonstrated mode/mail prefix bug, fix, bounded live measurements and hashes-only diagnostic extension.
 
 - [Pi account login navigation](guides/pi-login-navigation.md) — Locate the OpenAI legacy account provider and distinguish stored credentials from successful authentication.
