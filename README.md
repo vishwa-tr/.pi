@@ -47,13 +47,14 @@ source of the local Pi packages enabled by `agent/settings.json`.
     ├── skills/
     ├── subagents/
     ├── procedures/
-    ├── plans/
-    ├── docs/
-    └── scripts/
+    ├── knowledge/           # One directory per searchable topic
+    ├── scripts/
+    └── tests/
 ```
 
 The parent owns Pi code and setup. The submodule owns reusable knowledge, roles,
-and skills for multiple agents. See [.agents/README.md](.agents/README.md) for its index.
+and skills for multiple agents. See [.agents/README.md](.agents/README.md) for its
+layout and notes-first, search-based discovery rules.
 The same subagent definitions serve both Pi Subagents and Pi Teams.
 See the package READMEs for [Subagents](packages/pi-subagents/README.md),
 [Teams](packages/pi-teams/README.md), and [Swarm](packages/pi-swarm/README.md)

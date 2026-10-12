@@ -18,8 +18,9 @@ documentation and nested instructions.
 
 Pi project artifacts belong in ignored `docs/agents/<category>/`; do not commit them.
 Maintained extension usage and API documentation belongs with its package under `packages/`.
-Reusable cross-project artifacts belong in the matching `.agents/` category after removing
-project-specific, private, and personal examples or data. Do not put Pi project-specific
+Reusable cross-project knowledge belongs in `.agents/knowledge/<topic>/README.md`, with
+relative links to implementations under `.agents/scripts/`. Remove project-specific, private,
+and personal examples or data before saving it. Do not put Pi project-specific
 artifacts inside the shared submodule. Keep Pi Subagents and Pi Teams on the same
 `.agents/subagents/` definitions; do not create a second role library.
 

@@ -143,8 +143,11 @@ try {
   if (modulePath !== ".agents" || moduleUrl !== "https://github.com/voidverse-xyz/.agents.git") {
     fail(".agents submodule configuration must use the shared repository");
   }
-  for (const category of ["skills", "subagents", "procedures", "plans", "docs"]) {
+  for (const category of ["skills", "subagents", "procedures", "knowledge"]) {
     if (!existsSync(join(root, ".agents", category))) fail(`shared resource category is missing: ${category}`);
+  }
+  for (const obsoletePath of ["docs", "plans", "procedures/git", "procedures/github", "procedures/reviews"]) {
+    if (existsSync(join(root, ".agents", obsoletePath))) fail(`obsolete shared resource directory must be absent: ${obsoletePath}`);
   }
 } catch (error) {
   fail(`cannot inspect shared submodule; run git submodule update --init --recursive: ${error.message}`);
@@ -372,7 +375,7 @@ function requireGuidance(relativePath, clauses) {
   }
 }
 
-const delegatedReviewPath = join(root, ".agents", "procedures", "reviews", "delegated-review-results", "delegated-review-results.md");
+const delegatedReviewPath = join(root, ".agents", "procedures", "delegated-review-results", "delegated-review-results.md");
 const delegatedReviewProcedure = readFileSync(delegatedReviewPath, "utf8");
 for (const obsoleteText of ["waitFor:", "subagent_collect", "`attention`"]) {
   if (delegatedReviewProcedure.includes(obsoleteText)) {

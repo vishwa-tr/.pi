@@ -1,14 +1,24 @@
+import {
+  cpSync,
+  rmSync,
+  mkdirSync,
+  existsSync,
+  symlinkSync,
+  mkdtempSync,
+  readFileSync,
+  copyFileSync,
+  writeFileSync,
+} from "node:fs";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("configuration validation follows the portable skill layout and retains safeguards", async (t) => {
+test("configuration validation follows the shared knowledge layout and retains safeguards", async (t) => {
   const temporary = mkdtempSync(join(tmpdir(), "pi-config-validation-"));
   const fixture = join(temporary, "repository");
   try {
@@ -30,6 +40,23 @@ test("configuration validation follows the portable skill layout and retains saf
     for (const path of ["scripts/validate-global-config.mjs", ".gitignore", "packages/pi-subagents/README.md"]) {
       copyFileSync(join(root, path), join(fixture, path));
     }
+    // The local migration may not yet be committed. Overlay only migrated resource
+    // directories, leaving the cloned submodule's Git metadata and HEAD unchanged.
+    for (const path of [
+      "knowledge",
+      "procedures/babysit-pr",
+      "procedures/split-to-prs",
+      "procedures/delegated-code-review",
+      "procedures/delegated-review-results",
+    ]) {
+      const source = join(root, ".agents", path);
+      assert.ok(existsSync(source), `shared migration must exist before testing: ${path}`);
+      rmSync(join(fixture, ".agents", path), { recursive: true, force: true });
+      cpSync(source, join(fixture, ".agents", path), { recursive: true });
+    }
+    for (const path of ["docs", "plans", "procedures/git", "procedures/github", "procedures/reviews"]) {
+      rmSync(join(fixture, ".agents", path), { recursive: true, force: true });
+    }
     // Model a clean clone without local records or misplaced container tooling.
     const removedPaths = execFileSync("git", ["-C", fixture, "ls-files", "-z", "--", "docs/", "containers/"], { encoding: "utf8" })
       .split("\0").filter(Boolean);
@@ -42,13 +69,44 @@ test("configuration validation follows the portable skill layout and retains saf
     // Built-in MCP needs no shared custom-client guide or category directory.
     rmSync(join(fixture, ".agents", "mcp"), { recursive: true, force: true });
 
-    await t.test("accepts the skill layout without local docs, containers, or legacy MCP resources", () => {
+    await t.test("accepts knowledge and flat procedures without obsolete shared categories", () => {
+      assert.equal(existsSync(join(fixture, ".agents", "knowledge")), true);
+      assert.equal(existsSync(join(fixture, ".agents", "procedures", "delegated-review-results", "delegated-review-results.md")), true);
+      for (const path of ["docs", "plans", "procedures/git", "procedures/github", "procedures/reviews"]) {
+        assert.equal(existsSync(join(fixture, ".agents", path)), false);
+      }
       assert.equal(existsSync(join(fixture, "docs")), false);
       assert.equal(existsSync(join(fixture, "containers")), false);
       assert.equal(existsSync(join(fixture, ".agents", "mcp")), false);
       const result = validate(fixture);
       assert.equal(result.status, 0, result.output);
       assert.match(result.output, /39 global skills/);
+    });
+    await t.test("rejects a missing knowledge category", () => {
+      const knowledge = join(fixture, ".agents", "knowledge");
+      rmSync(knowledge, { recursive: true });
+      try {
+        assertFailure(fixture, "shared resource category is missing: knowledge");
+      } finally {
+        cpSync(join(root, ".agents", "knowledge"), knowledge, { recursive: true });
+      }
+    });
+    for (const path of ["docs", "plans", "procedures/git", "procedures/github", "procedures/reviews"]) {
+      await t.test(`rejects obsolete shared directory ${path}`, () => {
+        const obsoleteDirectory = join(fixture, ".agents", path);
+        mkdirSync(obsoleteDirectory, { recursive: true });
+        try {
+          assertFailure(fixture, `obsolete shared resource directory must be absent: ${path}`);
+        } finally {
+          rmSync(obsoleteDirectory, { recursive: true });
+        }
+      });
+    }
+    await t.test("requires lifecycle guidance in the flat delegated review procedure", () => {
+      withChangedFile(fixture, ".agents/procedures/delegated-review-results/delegated-review-results.md",
+        (text) => text.replaceAll("new envelope ID", "previous envelope ID"), () => {
+          assertFailure(fixture, "delegated-review-results is missing current lifecycle guidance: new envelope ID");
+        });
     });
     await t.test("requires project-only documentation to remain ignored", () => {
       withChangedFile(fixture, ".gitignore",
