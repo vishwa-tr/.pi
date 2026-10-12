@@ -49,8 +49,7 @@ source of the local Pi packages enabled by `agent/settings.json`.
     ├── procedures/
     ├── plans/
     ├── docs/
-    ├── scripts/
-    └── codex/
+    └── scripts/
 ```
 
 The parent owns Pi code and setup. The submodule owns reusable knowledge, roles,
