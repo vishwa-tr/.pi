@@ -194,6 +194,45 @@ credentials, OAuth and provider routing; the displayed endpoint is informational
 No credentials are copied into run records. Provider context includes the
 objective, instructions, workspace content, tool results, history and compaction summaries.
 
+## Worker context selection
+
+Main selects `contextMode: "auto" | "focus" | "fork"` in `swarm_start`. Auto defaults
+to fork strictly below 30% of main's context window, otherwise focus; unknown usage
+prefers focus. Main can explicitly choose either mode at any percentage. Approved
+`workerContexts` overrides target particular worker IDs, including future recruits:
+
+```json
+{
+  "objective": "Implement and independently review the requested feature",
+  "contextMode": "auto",
+  "workerContexts": [{ "workerId": "reviewer", "mode": "focus" }]
+}
+```
+
+The proposal captures the active, compaction-aware main conversation after context
+edits. Approval displays resolved modes, source IDs, usage percentage, message count
+and snapshot digest; it does not echo the full chat. Forked history goes through the
+selected workers' approved providers. A focused default with a fork override retains
+one snapshot for that forked worker. No model call generates a context summary.
+
+The inspected snapshot stays pinned when the owner replies `start`, even if main chat
+has advanced. New runs choose fresh snapshots. Model configuration and recovery retain
+approved context choices. Future recruits use the run's retained snapshot and their
+approved override/default; workers cannot change this policy themselves.
+
+Only new native sessions are seeded. Existing workers retain memory. Each worker keeps
+its own instructions, model/thinking, tools, identity, limits and task board. Settings,
+extension state, live agents and pending operations are not cloned. Completed calls
+remain historical, unfinished calls are excluded, and inherited approval text cannot
+authorize execution. Incomplete initialization fences reuse. Usage admission counts
+only new worker requests. Native context limits and compaction still apply; token/cache
+savings have not been measured.
+
+The helper is bundled under this package's `extensions/swarm/context/` directory.
+This package has no runtime dependency on either other extension or the parent repository.
+The repository maintains identical copies from a canonical source; installing this
+package alone includes everything needed for context selection.
+
 ## Independent model and thinking settings
 
 Ask the main agent to select a different Swarm default or settings for individual workers.

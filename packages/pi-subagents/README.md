@@ -3,6 +3,30 @@
 Background fan-out workers for Pi with a strict hub-and-spoke model: subagents
 can report to the main agent but cannot spawn, inspect, or message peers.
 
+## Worker context selection
+
+Main selects `contextMode: "auto" | "focus" | "fork"` when spawning a worker. Auto
+is the default: prefer copied main chat strictly below 30% context usage, otherwise
+prefer focused role/task context. Unknown usage defaults to focus. Explicit focus
+or fork overrides the preference at any percentage.
+
+Fork copies one snapshot of the active, compaction-aware conversation after context
+edits, then appends the new assignment. No model call prepares a summary. The worker
+keeps its own system instructions, identity, tools and permissions. Completed calls
+are historical, unfinished calls are excluded, and old approval text grants no consent.
+Explicit fork requires readable canonical main history.
+
+Only new workers are seeded. Reusing an address preserves existing memory regardless
+of a later contextMode; use a new ID for a new fork. Taskless forks save their history
+before receiving work and survive reload. Spawn returns contextMode as fork, focus or
+existing. Copied parent usage is excluded from worker token/cost/turn totals while
+native context estimates remain intact. Token/cache savings have not been measured.
+
+The helper is bundled under this package's `extensions/subagents/context/` directory.
+This package has no runtime dependency on either other extension or the parent repository.
+The repository maintains identical copies from a canonical source; installing this
+package alone includes everything needed for context selection.
+
 ## Main-agent tools
 
 - `subagent_spawn` — create or wake a typed or ad-hoc worker

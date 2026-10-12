@@ -1,20 +1,21 @@
 import { SwarmHost } from "./host.mjs";
 import { randomUUID } from "node:crypto";
+import { waitForChange } from "./wait.mjs";
 import { ModeGate } from "./host-gates.mjs";
 import { createFocusBridge } from "./focus.mjs";
 import { createProgress } from "./progress.mjs";
+import { showDashboard } from "./dashboard.mjs";
 import { prepareLayout } from "./store/layout.mjs";
 import { requireCondition as check } from "./errors.mjs";
-import { createNativeRuntime, nativeModelRuntime } from "./native-provider.mjs";
 import { createEmergencyInput } from "./emergency-input.mjs";
-import { showDashboard } from "./dashboard.mjs";
 import { specificationFingerprint } from "./host-approval.mjs";
 import { requestLaunchSpecification } from "./launch-input.mjs";
-import { waitForChange } from "./wait.mjs";
 import { registerMainTools, swarmSummary } from "./main-tools.mjs";
 import { inspectLease, releaseStaleLease } from "./store/lease.mjs";
 import { assertProviderSelection } from "./provider-capability.mjs";
+import { captureWorkerContext } from "./context/fork.mjs";
 import { registerSwarmRenderers, approvalPacket, statusText } from "./ui.mjs";
+import { createNativeRuntime, nativeModelRuntime } from "./native-provider.mjs";
 
 const LINK = "swarm-run-v1";
 
@@ -404,6 +405,9 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 					// defaults. Store it in the proposal so delayed approval stays pinned.
 					args = { ...args, model: { provider: selection.mainModel?.provider, modelId: selection.mainModel?.id,
 						thinkingLevel: selection.thinkingLevel, ...args.model } };
+				}
+				if (action === "start" && !accepted) {
+					args = { ...args, workerContext: captureWorkerContext(ctx, args.contextMode, args.workerContexts?.some(item => item.mode === "fork") === true) };
 				}
 				const present = text => update?.({ content: [{ type: "text", text }], details: {} });
 				const ask = async request => {

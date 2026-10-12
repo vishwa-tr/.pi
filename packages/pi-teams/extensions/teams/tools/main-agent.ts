@@ -1,3 +1,10 @@
+import { Type } from "typebox";
+import type { SubagentsCore } from "../core.ts";
+import { parseAddress } from "../mail/envelope.ts";
+import { errorResult, jsonResult } from "./results.ts";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { captureWorkerContext } from "../context/fork.mjs";
+
 /**
  * tools/main-agent.ts — the team_* tools the MAIN agent's LLM sees
  * (intent-grouped, D16): spawn, send, steer, collect, await, interrupt,
@@ -6,11 +13,6 @@
  * Tools talk ONLY to the core facade.
  */
 
-import { Type } from "typebox";
-import type { SubagentsCore } from "../core.ts";
-import { parseAddress } from "../mail/envelope.ts";
-import { errorResult, jsonResult } from "./results.ts";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 type GetCore = () => SubagentsCore;
 
@@ -21,6 +23,7 @@ function agentTargetError(address: string): ReturnType<typeof errorResult> | nul
 }
 
 const SpawnParams = Type.Object({
+	contextMode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("focus"), Type.Literal("fork")], { description: "Main chooses context for new workers. Auto prefers copied main chat below 30% context usage, otherwise focused context. Explicit focus/fork overrides the preference at any percentage. Existing workers retain memory." })),
 	type: Type.String({ description: "Type definition name from global or project subagents." }),
 	id: Type.Optional(Type.String({ description: "Persistent instance id; defaults to main." })),
 	task: Type.Optional(Type.String({ description: "Optional initial asynchronous task." })),
@@ -48,6 +51,7 @@ export function createSpawnTool(getCore: GetCore): ToolDefinition<typeof SpawnPa
 					...(params.id !== undefined ? { id: params.id } : {}),
 					...(params.task !== undefined ? { task: params.task } : {}),
 					...(params.label !== undefined ? { label: params.label } : {}),
+					workerContext: captureWorkerContext(ctx, params.contextMode),
 					inherit: { ...(ctx.model ? { modelRef: `${ctx.model.provider}/${ctx.model.id}` } : {}) },
 				});
 				return jsonResult(result);

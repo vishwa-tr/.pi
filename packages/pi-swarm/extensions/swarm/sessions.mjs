@@ -4,17 +4,17 @@ import { join, resolve, basename } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { privateDirectory } from "./store/files.mjs";
 import { makeSessionTools } from "./session-tools.mjs";
-import { failureDiagnostic, requireCondition as check } from "./errors.mjs";
-import { pendingMail, turnMail, sessionWorker } from "./session-state.mjs";
-import { assertProviderSelection } from "./provider-capability.mjs";
-import { createSdkSession, readSessionHistory } from "./sdk-session.mjs";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
-import { buildSpecialistPrompt, buildTurnPrompt } from "./specializations.mjs";
-import { effectiveWorkerSelection, resolveModelSettings } from "./model-settings.mjs";
-
+import { coordinationHandoffs } from "./coordination.mjs";
 import { workerStatus, taskRows } from "./worker-context.mjs";
 import { usageLimitReason, measuredUsage } from "./usage.mjs";
-import { coordinationHandoffs } from "./coordination.mjs";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { assertProviderSelection } from "./provider-capability.mjs";
+import { selectWorkerContext } from "./context/fork.mjs";
+import { createSdkSession, readSessionHistory } from "./sdk-session.mjs";
+import { pendingMail, turnMail, sessionWorker } from "./session-state.mjs";
+import { failureDiagnostic, requireCondition as check } from "./errors.mjs";
+import { buildSpecialistPrompt, buildTurnPrompt } from "./specializations.mjs";
+import { effectiveWorkerSelection, resolveModelSettings } from "./model-settings.mjs";
 
 const attached = new WeakSet();
 const terminal = new Set(["paused", "stopped", "completed", "failed"]);
@@ -22,7 +22,7 @@ const draining = new Set(["pausing", "stopping", "failing"]);
 
 /** Host-owned native SDK worker lifecycle and admission. */
 export class SwarmSessions {
-	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission, providerCapability, workerModels, resolveProviderCapability, settlementOnly = false } = {}) {
+	static async attach(controller, { workspace, modelRuntime, mainModel, thinkingLevel = "off", override, codingTools = ["read", "edit", "write", "bash"], instructions = "", tickIntervalMs = 1000, admission, providerCapability, workerModels, resolveProviderCapability, workerContext, workerContexts, settlementOnly = false } = {}) {
 		controller.assertOwned();
 		check(!attached.has(controller), "OWNERSHIP", "Controller already has an SDK driver");
 		const state = controller.snapshot();
@@ -46,7 +46,7 @@ export class SwarmSessions {
 		makeSessionTools(async () => { }, state.sessions?.codingTools ?? codingTools);
 		attached.add(controller);
 		try {
-			if (!state.sessions) await controller.owner("sessions.configure", { selection, instructions, codingTools, ...(workerModels !== undefined ? { workerModels } : {}) });
+			if (!state.sessions) await controller.owner("sessions.configure", { selection, instructions, codingTools, ...(workerModels !== undefined ? { workerModels } : {}), ...(workerContext !== undefined ? { workerContext } : {}), ...(workerContexts !== undefined ? { workerContexts } : {}) });
 			return new SwarmSessions(controller, workspace, modelRuntime, tickIntervalMs, admission, providerCapability, resolveProviderCapability);
 		} catch (error) {
 			attached.delete(controller);
@@ -141,6 +141,7 @@ export class SwarmSessions {
 					if (usageLimitReason(this.#controller.snapshot())) this.#usageBlocked = true;
 				},
 				systemPrompt: buildSpecialistPrompt(state, worker), customTools: tools,
+				...(state.sessions.workerContext ? { workerContext: selectWorkerContext(state.sessions.workerContext, state.sessions.workerContexts?.find(item => item.workerId === workerId)?.mode) } : {}),
 			});
 			Object.assign(entry, created);
 			if (binding) check(created.sessionId === binding.sessionId, "IDENTITY", "Persisted specialist identity changed");

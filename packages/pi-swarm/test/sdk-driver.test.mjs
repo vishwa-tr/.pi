@@ -1,4 +1,3 @@
-import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import test from "node:test";
 import { join } from "node:path";
 import assert from "node:assert/strict";
@@ -6,19 +5,20 @@ import { repository } from "./helpers.mjs";
 import { createMockRuntime } from "./sdk-env.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
 import { SwarmSessions } from "../extensions/swarm/sessions.mjs";
-import { WorkspaceRuntime } from "../extensions/swarm/workspace.mjs";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
+import { WorkspaceRuntime } from "../extensions/swarm/workspace.mjs";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 
 const code = expected => error => error.code === expected;
 function tool(name, args, id = name) { return { toolCalls: [{ id, name, arguments: args }] }; }
-async function fixture(t, script, limits, workspaceOptions = {}) {
+async function fixture(t, script, limits, workspaceOptions = {}, sessionOptions = {}) {
 	const root = repository(t);
 	const mock = await createMockRuntime(script);
 	const config = { workspace: root, runId: "run1", ownerSessionId: "owner1", clock: () => 0 };
 	const c = await SwarmController.open({ ...config, create: { objective: "Implement invitations", criteria: ["Invitations work"], scope: ["src"], limits } });
 	const workspace = await WorkspaceRuntime.attach(c, { authorize: async () => true, ...workspaceOptions });
-	const driver = await SwarmSessions.attach(c, { workspace, modelRuntime: mock.modelRuntime, mainModel: mock.model, tickIntervalMs: 0 });
+	const driver = await SwarmSessions.attach(c, { workspace, modelRuntime: mock.modelRuntime, mainModel: mock.model, tickIntervalMs: 0, ...sessionOptions });
 	await driver.resume({ reconciled: true });
 	return { root, config, mock, c, workspace, driver };
 }
@@ -595,5 +595,31 @@ test("queued owner steering is delivered before a deferred final command", { tim
 		await f.driver.recruit(specialist("builder")); f.driver.wake("builder"); await f.driver.idle();
 		assert.equal(f.c.snapshot().status, "completed"); assert.equal(finalApprovals, 1);
 		assert.deepEqual(f.driver.snapshot().errors, []);
+	} finally { await shutdown(f); }
+});
+
+
+test("Swarm fork defaults and per-worker overrides preserve native identity, history and request accounting", async t => {
+	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+	const { captureWorkerContext } = await import("../../shared/worker-context.mjs");
+	const parent = SessionManager.inMemory("/fixture-parent");
+	parent.appendMessage({ role: "user", content: "APPROVED_PARENT_SCHEMA", timestamp: 1 });
+	const seed = captureWorkerContext({ sessionManager: parent, getContextUsage: () => ({ percent: 80 }) }, "fork");
+	const f = await fixture(t, () => ({ text: "Inspected assigned work." }), undefined, {}, { workerContext: seed, workerContexts: [{ workerId: "focused", mode: "focus" }] });
+	try {
+		await f.driver.recruit(specialist("forked")); await f.driver.recruit(specialist("focused"));
+		f.driver.wake("forked"); await f.driver.idle();
+		assert.match(JSON.stringify(f.mock.calls[0].context.messages), /APPROVED_PARENT_SCHEMA/);
+		assert.match(getCurrentSystemPrompt(f.mock.calls[0].context.messages), /forked focus/);
+		f.driver.wake("focused"); await f.driver.idle();
+		assert.doesNotMatch(JSON.stringify(f.mock.calls[1].context.messages), /APPROVED_PARENT_SCHEMA/);
+		assert.equal(f.c.snapshot().sessions.usage.reduce((sum, worker) => sum + worker.requests, 0), 2);
+		const binding = f.c.snapshot().sessions.workers.find(worker => worker.workerId === "forked");
+		assert.notEqual(binding.sessionId, parent.getSessionId());
+		const before = await f.driver.history("forked", 100);
+		await f.driver.pause(); await f.driver.resume({ reconciled: true });
+		f.driver.wake("forked"); await f.driver.idle();
+		assert.ok((await f.driver.history("forked", 100)).length > before.length);
+		assert.equal((await f.driver.history("forked", 100)).filter(entry => entry.type === "custom" && entry.customType === "worker-context" && entry.data.status === "ready").length, 1);
 	} finally { await shutdown(f); }
 });

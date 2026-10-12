@@ -33,7 +33,8 @@ assert.deepEqual(
 assert.deepEqual(keysOf(ext.commands), ["teams"], "/teams command");
 
 const spawn = ext.tools.get("team_spawn").definition;
-assert.deepEqual(Object.keys(spawn.parameters.properties).sort(), ["id", "label", "task", "type"], "spawn only exposes persistent-agent options");
+assert.deepEqual(Object.keys(spawn.parameters.properties).sort(), ["contextMode", "id", "label", "task", "type"], "spawn exposes persistent-agent options and main-controlled context");
+assert.deepEqual(spawn.parameters.properties.contextMode.anyOf.map(option => option.const), ["auto", "focus", "fork"]);
 assert.match(spawn.description, /team_retire/, "explicit retirement is the only lifecycle end");
 
 const peers = ext.tools.get("team_peers").definition;

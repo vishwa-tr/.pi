@@ -1,3 +1,14 @@
+import { Type, type Static } from "typebox";
+import type { SubagentsCore } from "../core.ts";
+import { parseAddress } from "../mail/envelope.ts";
+import type { Lifetime } from "../store/registry.ts";
+import type { AwaitTarget } from "../runtime/types.ts";
+import { errorResult, jsonResult } from "./results.ts";
+import { labelFromSource, MAX_LABEL_CHARS } from "../text.ts";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { THINKING_LEVELS, type ThinkingLevel } from "../typedefs/parse.ts";
+import { captureWorkerContext } from "../context/fork.mjs";
+
 /**
  * tools/main-agent.ts — the subagent_* tools the MAIN agent's LLM sees:
  * spawn, send, steer, await, cancel, retire, status.
@@ -5,15 +16,6 @@
  * Tools talk ONLY to the core facade.
  */
 
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type, type Static } from "typebox";
-import type { SubagentsCore } from "../core.ts";
-import { parseAddress } from "../mail/envelope.ts";
-import type { Lifetime } from "../store/registry.ts";
-import { THINKING_LEVELS, type ThinkingLevel } from "../typedefs/parse.ts";
-import type { AwaitTarget } from "../runtime/types.ts";
-import { labelFromSource, MAX_LABEL_CHARS } from "../text.ts";
-import { errorResult, jsonResult } from "./results.ts";
 
 type GetCore = () => SubagentsCore;
 
@@ -34,6 +36,7 @@ function agentTargetError(address: string): ReturnType<typeof errorResult> | nul
 }
 
 const SpawnParams = Type.Object({
+	contextMode: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("focus"), Type.Literal("fork")], { description: "Main chooses context for new workers. Auto prefers copied main chat below 30% context usage, otherwise focused context. Explicit focus/fork overrides the preference at any percentage. Existing workers retain memory." })),
 	type: Type.Optional(
 		Type.String({ description: "Type definition name from global or project subagents; exclusive with prompt." }),
 	),
@@ -98,6 +101,7 @@ export function createSpawnTool(getCore: GetCore): ToolDefinition<typeof SpawnPa
 					...(params.model !== undefined ? { model: params.model } : {}),
 					...(params.thinking !== undefined ? { thinking: params.thinking as ThinkingLevel } : {}),
 					...(params.tools !== undefined ? { tools: params.tools } : {}),
+					workerContext: captureWorkerContext(ctx, params.contextMode),
 					inherit: { ...(ctx.model ? { modelRef: `${ctx.model.provider}/${ctx.model.id}` } : {}) },
 				});
 				return jsonResult(result);

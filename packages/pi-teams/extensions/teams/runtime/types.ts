@@ -1,3 +1,9 @@
+import type { ArchivedInfo } from "../store/archive.ts";
+import type { PeerControl } from "../store/settings.ts";
+import type { ThinkingLevel } from "../typedefs/parse.ts";
+import type { AgentState, AgentVitals } from "../store/registry.ts";
+import type { WorkerContext } from "../context/fork.mjs";
+
 /**
  * runtime/types.ts — the SubagentRuntime interface: D7's swap-point.
  *
@@ -6,17 +12,13 @@
  * RPC-child or daemon runtime is one new file implementing this interface.
  *
  * The interface mirrors the power matrix — powers it denies (approve, suspend,
- * retune, compact, fork) have no methods, so they cannot be re-invented above
+ * retune, compact, reparent existing sessions) have no methods, so they cannot be re-invented above
  * the swap-point. NOTE: human approval/escalation is NOT here in v2 — it's
  * delegated to pi-safety over pi.events (D10a).
  *
  * Contract-only module: types + one interface, no implementation.
  */
 
-import type { ArchivedInfo } from "../store/archive.ts";
-import type { PeerControl } from "../store/settings.ts";
-import type { ThinkingLevel } from "../typedefs/parse.ts";
-import type { AgentState, AgentVitals } from "../store/registry.ts";
 
 /**
  * Peer-messaging control (D12). "llm" = the main agent decides via team_peers.
@@ -57,7 +59,7 @@ export interface InheritedDefaults {
 	thinkingLevel?: ThinkingLevel;
 }
 
-/** Instance identity ONLY — every type-level knob is frontmatter (D19). No team (D12). */
+/** Persistent identity, assignment and main-context seed; role/model/tool settings remain in frontmatter. */
 export interface SpawnOptions {
 	/** Type name — resolved live against the type libraries at wake (D6). */
 	type: string;
@@ -72,9 +74,12 @@ export interface SpawnOptions {
 	label?: string;
 	/** Session defaults for fields the frontmatter leaves unset. */
 	inherit?: InheritedDefaults;
+	/** Immutable main-chat seed, applied only when creating a new worker. */
+	workerContext?: WorkerContext;
 }
 
 export interface SpawnResult {
+	contextMode?: "focus" | "fork" | "existing";
 	/** `<type>/<id>`. */
 	address: string;
 	/** false = existed, spawn woke it, memory intact (get-or-create, D4/D5). */

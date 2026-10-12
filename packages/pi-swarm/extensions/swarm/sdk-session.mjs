@@ -8,6 +8,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { invariant, privateDirectory } from "./store/files.mjs";
 import { assertProviderSelection, providerDescriptor } from "./provider-capability.mjs";
+import { seedWorkerSession, workerContextInstructions, assertWorkerContextReady } from "./context/fork.mjs";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -65,7 +66,7 @@ function findSessionFile(sessionDir, cwd, sessionId, sessionFile) {
 
 /** Non-discovering SDK factory for offline mocks or the host's own Pi model runtime.
  * `admitRequest` runs before every model request the session makes. */
-export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile, modelRuntime, selection, systemPrompt, customTools, providerCapability, admitRequest, observeResponse }) {
+export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile, modelRuntime, selection, systemPrompt, customTools, providerCapability, admitRequest, observeResponse, workerContext }) {
 	// Gate before directories, sessions, authentication lookup, or fallback selection.
 	const native = providerCapability !== undefined && providerDescriptor(providerCapability).transport === "pi-native";
 	if (providerCapability) assertProviderSelection(providerCapability, selection, modelRuntime);
@@ -93,11 +94,15 @@ export async function createSdkSession({ cwd, sessionDir, sessionId, sessionFile
 	privateDirectory(sessionDir);
 	canonicalPath(sessionDir);
 	const manager = openManager(cwd, sessionDir, sessionId, sessionFile);
+	assertWorkerContextReady(manager);
+	invariant(sessionFile === undefined || workerContext?.mode !== "fork" || workerContextInstructions(manager).length > 0,
+		"Fork worker history is missing; existing workers cannot be silently reseeded");
+	seedWorkerSession(manager, workerContext);
 	const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" });
 	const { session, modelFallbackMessage } = await createAgentSession({
 		cwd, agentDir: sessionDir, modelRuntime, model, thinkingLevel: selection.thinkingLevel,
 		scopedModels: [{ model, thinkingLevel: selection.thinkingLevel }],
-		sessionManager: manager, settingsManager, resourceLoader: isolatedLoader(systemPrompt),
+		sessionManager: manager, settingsManager, resourceLoader: isolatedLoader([systemPrompt, ...workerContextInstructions(manager)].join("\n\n")),
 		tools: names, customTools,
 	});
 	const pinned = Object.freeze({ ...selection });

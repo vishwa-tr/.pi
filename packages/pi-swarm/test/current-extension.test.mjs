@@ -1,4 +1,3 @@
-import { InMemoryCredentialStore, createAssistantMessageEventStream, createProvider, envApiKeyAuth } from "@earendil-works/pi-ai";
 import test from "node:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,14 +7,15 @@ import { repository } from "./helpers.mjs";
 import { guardNetwork } from "./network-guard.mjs";
 import { mainAgentAction } from "./main-agent-actions.mjs";
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
-import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
-import { acquireLease, inspectLease } from "../extensions/swarm/store/lease.mjs";
-import { atomicJson } from "../extensions/swarm/store/files.mjs";
 import { SwarmError } from "../extensions/swarm/errors.mjs";
 import { SwarmController } from "../extensions/swarm/core.mjs";
+import { atomicJson } from "../extensions/swarm/store/files.mjs";
+import { prepareLayout } from "../extensions/swarm/store/layout.mjs";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createCurrentSwarmExtension } from "../extensions/swarm/extension.mjs";
+import { acquireLease, inspectLease } from "../extensions/swarm/store/lease.mjs";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { InMemoryCredentialStore, createAssistantMessageEventStream, createProvider, envApiKeyAuth } from "@earendil-works/pi-ai";
 
 async function fixture(t, { policy = true, entries = [], root, hold = false, settlement } = {}) {
 	guardNetwork(t);
@@ -23,7 +23,9 @@ async function fixture(t, { policy = true, entries = [], root, hold = false, set
 	const source = await ModelRuntime.create({ credentials, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
 	const model = { id: "first", name: "Entry fixture", provider: "entry-fixture", api: "openai-responses", baseUrl: "https://entry.invalid/v1", reasoning: true, input: ["text"], contextWindow: 128000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 	const calls = [], signals = [], providers = []; let auth = 0; const originalAuth = source.getAuth.bind(source); source.getAuth = (...args) => { auth++; return originalAuth(...args); };
+	const contexts = [];
 	const stream = (selected, _context, options) => {
+		contexts.push(structuredClone(_context.messages));
 		assert.equal(options.apiKey, "memory-fixture"); calls.push({ model: selected.id, reasoning: options.reasoning }); signals.push(options.signal); providers.push(selected.provider);
 		const output = createAssistantMessageEventStream();
 		const message = { role: "assistant", content: [{ type: "text", text: "Offline answer" }], api: selected.api, provider: selected.provider, model: selected.id, timestamp: Date.now(), stopReason: "stop", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
@@ -55,7 +57,7 @@ async function fixture(t, { policy = true, entries = [], root, hold = false, set
 	const consume = p => tool(p.action === "start" ? "swarm_start" : "swarm_control", { ...(p.action === "start" ? {} : { action: p.action }), proposalId: p.proposalId });
 	const command = text => mainAgentAction(tools, ctx, text, update, async p => { const reply = replies.shift(); await input(typeof reply === "function" ? await reply(p) : reply ?? (p.action === "reconcile" ? "I confirm settlement: Independently verified all listed execution stopped" : "start")); });
 	t.after(() => event("session_shutdown"));
-	return { tools, tool, consume, input, command, updates, messages, renderers, ctx, source, calls, signals, providers, replies, entries, event, events, notices, terminalListeners, statuses, auth: () => auth,
+	return { tools, tool, consume, input, command, updates, messages, renderers, ctx, source, calls, contexts, signals, providers, replies, entries, event, events, notices, terminalListeners, statuses, auth: () => auth,
 		terminal: data => { for (const listener of terminalListeners) { const result = listener(data); if (result) return result; } }, select(id) { ctx.model = source.getModel(model.provider, id); }, thinking(value) { thinking = value; },
 		slash: args => slash.handler(args, ctx), status: async () => { await command("status"); return notices.at(-1).startsWith("{") ? JSON.parse(notices.at(-1)) : { status: "unattached" }; } };
 }
@@ -380,3 +382,30 @@ test("mail renderer shows semantic conversation without private protocol fields"
 	const f = await fixture(t), view = f.renderers.get("swarm-agent-mail")({ content: "INTERNAL_CONTEXT", details: { runId: "PRIVATE_RUN", messageIds: ["PRIVATE_ID"], messages: [{ from: "builder", to: "main", text: "Please review \x1b[2J", topic: "Auth", cycle: 1 }] } }, { expanded: false }, { fg: (_role, value) => value, bg: (_role, value) => value });
 	const text = view.render(80).join("\n"); assert.match(text, /builder → Main agent.*Auth/); assert.match(text, /Please review this|Please review/); assert.doesNotMatch(text, /INTERNAL_CONTEXT|PRIVATE_RUN|PRIVATE_ID|cycle/);
 });
+
+
+for (const [mode, percent, expected] of [[undefined, 10, "fork"], ["focus", 10, "focus"], ["fork", 80, "fork"], [undefined, 30, "focus"]]) {
+	test(`main-selected Swarm context ${mode ?? "auto"} at ${percent}% is disclosed and pinned through approval`, async t => {
+		const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+		const f = await fixture(t); f.select("first");
+		const parent = SessionManager.inMemory(f.ctx.cwd);
+		parent.appendMessage({ role: "user", content: "PINNED_PARENT_CONTEXT_DETAIL", timestamp: 1 });
+		f.ctx.getContextUsage = () => ({ percent });
+		f.ctx.sessionManager.buildSessionProjection = () => parent.buildSessionProjection();
+		f.ctx.sessionManager.getLeafId = () => parent.getLeafId();
+		const proposal = (await f.tool("swarm_start", { objective: "Inspect approved worker context", ...(mode ? { contextMode: mode } : {}) })).details;
+		assert.equal(proposal.awaitingConfirmation, true);
+		assert.match(proposal.agreement, new RegExp(`"mode": "${expected}"`));
+		if (expected === "fork") assert.match(proposal.agreement, /inspected main-chat snapshot will be sent as background/);
+		assert.doesNotMatch(proposal.agreement, /PINNED_PARENT_CONTEXT_DETAIL/, "approval shows metadata, not a second transcript dump");
+		assert.equal(f.calls.length, 0);
+		parent.appendMessage({ role: "user", content: "LATER_OWNER_MESSAGE_NOT_IN_APPROVED_SNAPSHOT", timestamp: 2 });
+		await f.input("start"); assert.equal((await f.consume(proposal)).isError, undefined);
+		await until(() => f.calls.length === 1);
+		assert.equal(JSON.stringify(f.contexts[0]).includes("PINNED_PARENT_CONTEXT_DETAIL"), expected === "fork");
+		assert.doesNotMatch(JSON.stringify(f.contexts[0]), /LATER_OWNER_MESSAGE_NOT_IN_APPROVED_SNAPSHOT/);
+		const status = (await f.tool("swarm_status", {})).details;
+		assert.equal(status.context.mode, expected); assert.equal(status.context.requested, mode ?? "auto");
+		assert.doesNotMatch(JSON.stringify(status), /PINNED_PARENT_CONTEXT_DETAIL/);
+	});
+}

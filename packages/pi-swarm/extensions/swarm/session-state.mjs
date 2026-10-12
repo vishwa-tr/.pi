@@ -1,8 +1,8 @@
 import { isBoardMessage } from "./messaging.mjs";
-import { validateModelSelection, validateWorkerModels } from "./model-settings.mjs";
 import { requireCondition as check } from "./errors.mjs";
-
 import { recordRequest, recordResponse } from "./usage.mjs";
+import { validateWorkerContext } from "./context/fork.mjs";
+import { validateModelSelection, validateWorkerModels } from "./model-settings.mjs";
 
 export const SESSION_FIELDS = {
 	"sessions.configure": ["selection", "instructions", "codingTools"],
@@ -71,6 +71,12 @@ function configure(state, payload) {
 	check(typeof payload.instructions === "string" && payload.instructions.length <= 32768, "INPUT", "Invalid session instructions");
 	check(Array.isArray(payload.codingTools) && new Set(payload.codingTools).size === payload.codingTools.length && payload.codingTools.every(name => ["read", "edit", "write", "bash"].includes(name)), "INPUT", "Unsupported or duplicate coding tools");
 	state.sessions = { selection: structuredClone(payload.selection), instructions: payload.instructions, codingTools: [...payload.codingTools], workers: [], turns: [], history: [] };
+	if (payload.workerContext !== undefined) state.sessions.workerContext = structuredClone(validateWorkerContext(payload.workerContext));
+	if (payload.workerContexts !== undefined) {
+		check(state.sessions.workerContext && Array.isArray(payload.workerContexts) && new Set(payload.workerContexts.map(item => item.workerId)).size === payload.workerContexts.length, "INPUT", "Invalid worker context overrides");
+		for (const item of payload.workerContexts) check(item && Object.keys(item).sort().join() === "mode,workerId" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(item.workerId) && ["focus", "fork"].includes(item.mode), "INPUT", "Invalid worker context override");
+		state.sessions.workerContexts = structuredClone(payload.workerContexts);
+	}
 	if (Object.hasOwn(payload, "workerModels")) state.sessions.workerModels = validateWorkerModels(payload.workerModels, state.hostApprovals?.at(-1));
 }
 

@@ -26,6 +26,7 @@ for (const configured of packages) {
     }
   }
 }
+files.push(...walk(join(root, "packages/shared")).filter(file => /\.test\.mjs$/.test(file)));
 files.push(...["runtime.test.mjs", "managed-runtime.test.mjs", "standalone-invocation.test.mjs", "shared-resources.test.mjs"].map((name) => join(root, "tests", name)));
 const results = [];
 for (const [index, file] of [...new Set(files)].sort().entries()) {

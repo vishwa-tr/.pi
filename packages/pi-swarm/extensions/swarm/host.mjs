@@ -2,29 +2,30 @@ import {
 	providerDescriptor,
 	assertProviderSelection,
 } from "./provider-capability.mjs";
-import { lstatSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
-import { validId } from "./store/files.mjs";
-import { SwarmController } from "./core.mjs";
-import { recipientId } from "./messaging.mjs";
-import { inspectRecovery } from "./recovery-inspection.mjs";
-import { releaseStaleLease } from "./store/lease.mjs";
-import { SwarmSessions } from "./sessions.mjs";
-import { prepareLayout } from "./store/layout.mjs";
-import { WorkspaceRuntime } from "./workspace.mjs";
-import { readSessionHistory } from "./sdk-session.mjs";
-import { DEFAULT_LIMITS, reduceEvent } from "./state.mjs";
-import { ModeGate, requestSafety } from "./host-gates.mjs";
 import {
 	inPhase,
 	SwarmError,
 	failureDiagnostic,
 	requireCondition as check,
 } from "./errors.mjs";
+import { lstatSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { join, resolve } from "node:path";
+import { validId } from "./store/files.mjs";
+import { SwarmController } from "./core.mjs";
+import { recipientId } from "./messaging.mjs";
+import { SwarmSessions } from "./sessions.mjs";
+import { prepareLayout } from "./store/layout.mjs";
+import { WorkspaceRuntime } from "./workspace.mjs";
+import { releaseStaleLease } from "./store/lease.mjs";
+import { readSessionHistory } from "./sdk-session.mjs";
+import { DEFAULT_LIMITS, reduceEvent } from "./state.mjs";
+import { ModeGate, requestSafety } from "./host-gates.mjs";
+import { inspectRecovery } from "./recovery-inspection.mjs";
+import { validateWorkerContext } from "./context/fork.mjs";
 import { inspectCheckout, specificationFingerprint } from "./host-approval.mjs";
-import { createNativeSelection, nativeModelRuntime } from "./native-provider.mjs";
 import { resolveModelSettings, providerAgreements } from "./model-settings.mjs";
+import { createNativeSelection, nativeModelRuntime } from "./native-provider.mjs";
 
 function freeze(value) {
 	if (value && typeof value === "object") {
@@ -212,13 +213,20 @@ export class SwarmHost {
 		const settings = resolveModelSettings(input.model, input.workerModels, this.#defaults.model);
 		return structuredClone({ objective: input.objective, criteria: input.criteria, scope: input.scope, limits: { ...DEFAULT_LIMITS, ...input.limits }, model: settings.model, codingTools: input.codingTools ?? this.#defaults.codingTools, instructions: input.instructions ?? this.#defaults.instructions,
 			...(input.workerModels !== undefined ? { workerModels: settings.workerModels } : {}),
-			...(input.initialWorker !== undefined ? { initialWorker: input.initialWorker } : {}) });
+			...(input.initialWorker !== undefined ? { initialWorker: input.initialWorker } : {}),
+			...(input.workerContext !== undefined ? { workerContext: input.workerContext } : {}),
+			...(input.workerContexts !== undefined ? { workerContexts: input.workerContexts } : {}) });
 	}
 
 	#validate(draft, root, runId) {
-		const fields = ["codingTools", "criteria", "instructions", "limits", "model", "objective", "scope", ...(draft?.workerModels !== undefined ? ["workerModels"] : []), ...(draft?.initialWorker !== undefined ? ["initialWorker"] : [])].sort().join();
+		const fields = ["codingTools", "criteria", "instructions", "limits", "model", "objective", "scope", ...(draft?.workerModels !== undefined ? ["workerModels"] : []), ...(draft?.initialWorker !== undefined ? ["initialWorker"] : []), ...(draft?.workerContext !== undefined ? ["workerContext"] : []), ...(draft?.workerContexts !== undefined ? ["workerContexts"] : [])].sort().join();
 		check(draft && Object.keys(draft).sort().join() === fields, "INPUT", "Invalid approval specification");
 		reduceEvent(null, { version: 1, operationId: "approval-preflight", actor: "owner", expectedRevision: 0, cycle: 1, generation: 0, atMs: 0, type: "run.create", payload: { runId, ownerSessionId: this.#sessionId, workspaceRoot: root, objective: draft.objective, criteria: draft.criteria, scope: draft.scope, limits: draft.limits } });
+		if (draft.workerContext !== undefined) validateWorkerContext(draft.workerContext);
+		if (draft.workerContexts !== undefined) {
+			check(draft.workerContext && Array.isArray(draft.workerContexts) && new Set(draft.workerContexts.map(item => item.workerId)).size === draft.workerContexts.length, "INPUT", "Invalid worker context overrides");
+			for (const item of draft.workerContexts) check(item && Object.keys(item).sort().join() === "mode,workerId" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(item.workerId) && ["focus", "fork"].includes(item.mode), "INPUT", "Invalid worker context override");
+		}
 		if (draft.initialWorker !== undefined) {
 			const worker = draft.initialWorker;
 			check(worker && Object.keys(worker).sort().join() === "brief,id,specialization" && typeof worker.id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(worker.id) && !["owner", "system"].includes(worker.id), "INPUT", "Invalid initial worker");
@@ -370,6 +378,8 @@ export class SwarmHost {
 			mainModel: settlementOnly ? undefined : this.#modelRuntime.getModel(specification.model.provider, specification.model.modelId), thinkingLevel: specification.model.thinkingLevel, settlementOnly,
 			codingTools: specification.codingTools, instructions: specification.instructions,
 			...(specification.workerModels !== undefined ? { workerModels: specification.workerModels } : {}),
+			...(specification.workerContext !== undefined ? { workerContext: specification.workerContext } : {}),
+			...(specification.workerContexts !== undefined ? { workerContexts: specification.workerContexts } : {}),
 			tickIntervalMs: this.#tickInterval, admission, providerCapability: settlementOnly ? undefined : this.#capability(specification.model),
 			resolveProviderCapability: selection => this.#capability(selection)
 		});
@@ -379,7 +389,9 @@ export class SwarmHost {
 	#specification() {
 		const state = this.#controller.snapshot();
 		return state.sessions ? { objective: state.objective, criteria: state.criteria, scope: state.scope, limits: state.limits, model: state.sessions.selection, codingTools: state.sessions.codingTools, instructions: state.sessions.instructions,
-			...(state.sessions.workerModels !== undefined ? { workerModels: state.sessions.workerModels } : {}) } : this.#launchSpecification;
+			...(state.sessions.workerModels !== undefined ? { workerModels: state.sessions.workerModels } : {}),
+			...(state.sessions.workerContext !== undefined ? { workerContext: state.sessions.workerContext } : {}),
+			...(state.sessions.workerContexts !== undefined ? { workerContexts: state.sessions.workerContexts } : {}) } : this.#launchSpecification;
 	}
 
 	#assertFreshObjective(workspace) {
@@ -500,7 +512,9 @@ export class SwarmHost {
 			check(state.elapsedMs < state.limits.durationMs, "TIME_LIMIT", "Recovery cannot reset exhausted allowances");
 		}
 		const specification = { objective: state.objective, criteria: state.criteria, scope: state.scope, limits: state.limits, model: state.sessions.selection, codingTools: state.sessions.codingTools, instructions: state.sessions.instructions,
-			...(state.sessions.workerModels !== undefined ? { workerModels: state.sessions.workerModels } : {}) };
+			...(state.sessions.workerModels !== undefined ? { workerModels: state.sessions.workerModels } : {}),
+			...(state.sessions.workerContext !== undefined ? { workerContext: state.sessions.workerContext } : {}),
+			...(state.sessions.workerContexts !== undefined ? { workerContexts: state.sessions.workerContexts } : {}) };
 		const live = attached ? this.#workspace?.snapshot().uncertain ?? [] : [];
 		if (attached) check((this.#driver?.snapshot().active ?? []).every(workerId => state.workspace.operations.some(item => item.workerId === workerId && live.includes(item.id))), "UNSETTLED", "Live SDK turns must settle normally before recovery");
 		const previousApproval = state.hostApprovals.at(-1);

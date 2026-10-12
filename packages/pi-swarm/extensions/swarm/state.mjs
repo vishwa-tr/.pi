@@ -1,12 +1,13 @@
-import { USAGE_LIMITS } from "./usage.mjs";
 import { createHash } from "node:crypto";
+import { USAGE_LIMITS } from "./usage.mjs";
 import { validId } from "./store/files.mjs";
-import { validateModelSelection, validateWorkerModels } from "./model-settings.mjs";
 import { recipientId } from "./messaging.mjs";
 import { requireCondition } from "./errors.mjs";
 import { validateApproval } from "./approval-state.mjs";
+import { validateModelSelection, validateWorkerModels } from "./model-settings.mjs";
 import { SESSION_FIELDS, reduceSession, requireSessionIdle, requireWorkerTurn } from "./session-state.mjs";
 import { WORKSPACE_FIELDS, invalidateCandidates, reduceWorkspace, requireCandidate, requireFinalEvidence } from "./workspace-state.mjs";
+
 export { SwarmError, requireCondition } from "./errors.mjs";
 
 export const DEFAULT_LIMITS = Object.freeze({ agents: 8, active: 4, tasks: 100, attempts: 3, durationMs: 60 * 60 * 1000 });
@@ -122,7 +123,9 @@ export function reduceEvent(previous, event) {
 	integer(event.cycle, "cycle", 1); integer(event.generation, "generation"); integer(event.atMs, "timestamp");
 	let payloadFields = FIELDS[event.type];
 	if (event.type === "message.send" && event.payload && Object.hasOwn(event.payload, "topic")) payloadFields = [...payloadFields, "topic"];
-	if (event.type === "sessions.configure" && event.payload && Object.hasOwn(event.payload, "workerModels")) payloadFields = [...payloadFields, "workerModels"];
+	if (event.type === "sessions.configure" && event.payload) for (const key of ["workerModels", "workerContext", "workerContexts"]) {
+		if (Object.hasOwn(event.payload, key)) payloadFields = [...payloadFields, key];
+	}
 	exactKeys(event.payload, payloadFields);
 	if (previous === null) return create(event);
 
@@ -182,7 +185,9 @@ export function reduceEvent(previous, event) {
 			const workerModels = validateWorkerModels(p.workerModels, p.approval);
 			const specification = { objective: state.objective, criteria: state.criteria, scope: state.scope,
 				limits: state.limits, model: p.selection, codingTools: state.sessions.codingTools,
-				instructions: state.sessions.instructions, workerModels };
+				instructions: state.sessions.instructions, workerModels,
+				...(state.sessions.workerContext !== undefined ? { workerContext: state.sessions.workerContext } : {}),
+				...(state.sessions.workerContexts !== undefined ? { workerContexts: state.sessions.workerContexts } : {}) };
 			const fingerprint = createHash("sha256").update(JSON.stringify(canonical(specification))).digest("hex");
 			requireCondition(p.approval.specificationFingerprint === fingerprint, "SCOPE", "Configuration does not match approved specification");
 			state.sessions.selection = structuredClone(p.selection);

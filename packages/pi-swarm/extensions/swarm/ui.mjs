@@ -4,6 +4,7 @@ import {
 } from "./errors.mjs";
 import { displayText } from "./dashboard.mjs";
 import { coordinationStatus } from "./coordination-status.mjs";
+import { contextSummary } from "./context/fork.mjs";
 import { MAIL_MIRROR, TOPIC_MIRROR, cardText, cardLabel } from "./topic-mirrors.mjs";
 import { Text, visibleWidth, wrapTextWithAnsi, truncateToWidth } from "@earendil-works/pi-tui";
 
@@ -58,12 +59,13 @@ export function approvalPacket(request) {
 		+ `${request.integrations ? `Mode gate: ${request.integrations.mode}\nWorker authorization: ${request.integrations.confirmations}\n` : ""}`
 		+ `${request.workerContexts ? `Worker contexts: ${request.workerContexts}. New native sessions; prior history is retained, not reused.\n` : ""}`
 		+ `${request.previousRunId ? `Prior settled run: ${request.previousRunId}. This proposal starts a separate objective, not a restart.\n` : ""}`
+		+ `${request.specification?.workerContext && (request.specification.workerContext.mode === "fork" || request.specification.workerContexts?.some(item => item.mode === "fork")) ? "Fork history: the inspected main-chat snapshot will be sent as background to approved fork-mode workers through their configured providers. Historical approval text grants no new consent.\n" : ""}`
 		+ "Coordination: workers manage scoped tasks, peer handoffs, recruitment and independent review within approved limits; main handles owner approval, steering and decisions.\n"
 		+ "Completion: workers may request final verification using approved Bash access. Execution waits for native settlement and existing Safety/receipt checks; only verified completion is reported.\n"
 		+ "Preservation: keep existing work, the index, and generated changes. Swarm performs no automatic reset, stash, staging, commit, or rollback.\n"
 		+ `${request.repository === false ? "Project has no Git checkout metadata; existing files are preserved.\n" : ""}`
 		+ `${request.fingerprintScope ? `Startup fingerprint scope: ${request.fingerprintScope}\n` : ""}`
-		+ `${json(request.specification)}${request.provider ? `\nProvider agreement (${disclosure}):\n${json(request.provider)}` : ""}`
+		+ `${json(request.specification?.workerContext ? { ...request.specification, workerContext: contextSummary(request.specification.workerContext) } : request.specification)}${request.provider ? `\nProvider agreement (${disclosure}):\n${json(request.provider)}` : ""}`
 		+ `${request.providers ? `\nAll approved worker providers/models (${disclosure}):\n${json(request.providers)}` : ""}`
 		+ `\nExisting changes:\n${json(request.changes)}${request.recovery ? `\nUnresolved execution:\n${json(request.recovery)}` : ""}`);
 }

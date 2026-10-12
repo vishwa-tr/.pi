@@ -33,6 +33,8 @@ export interface AgentVitals {
 }
 
 export interface AgentRecord {
+	/** A fork must never silently restart with empty history if its native file is lost. */
+	contextMode?: "fork";
 	type: string;
 	id: string;
 	lifetime: Lifetime;

@@ -437,3 +437,18 @@ for (const cancel of [false, true]) test(`automatic compaction ${cancel ? 'cance
  }
  assert.equal(admissions, f.calls.length);
 });
+
+
+test("a bound fork with missing native history is fenced rather than reseeded", async t => {
+	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+	const { captureWorkerContext } = await import("../../shared/worker-context.mjs");
+	const { unlinkSync } = await import("node:fs");
+	const f = await fixture(t);
+	const parent = SessionManager.inMemory(f.options.cwd);
+	parent.appendMessage({ role: "user", content: "Snapshot background", timestamp: 1 });
+	const workerContext = captureWorkerContext({ sessionManager: parent }, "fork");
+	const first = await f.open({ workerContext });
+	assert.ok(existsSync(first.sessionFile)); first.session.dispose(); unlinkSync(first.sessionFile);
+	await assert.rejects(f.open({ workerContext, sessionId: first.sessionId, sessionFile: first.sessionFile }), /Fork worker history is missing/);
+	assert.equal(f.calls.length, 0);
+});

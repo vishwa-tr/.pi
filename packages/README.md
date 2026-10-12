@@ -1,6 +1,7 @@
 # Pi Agent Packages
 
-Each child directory is a Pi extension package enabled by `../agent/settings.json`.
+Each extension package is enabled by `../agent/settings.json`. The `shared/` directory
+holds internal source and tests used by multiple packages; it is not a Pi extension.
 Clone the parent repository to `~/.pi` with its submodules initialized.
 
 - [Manifest](../MANIFEST.md): enabled package inventory.

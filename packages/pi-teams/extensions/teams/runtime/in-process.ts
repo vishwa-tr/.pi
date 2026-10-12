@@ -1,17 +1,3 @@
-/**
- * runtime/in-process.ts — the in-process SubagentRuntime (D7).
- *
- * Each live agent is a real `AgentSession` (createAgentSession) resuming a
- * Pi-native JSONL under its instance dir (D3). Mutual exclusion is the host-scope
- * lease (D7) — NO per-agent run-owner locks. Turns are gated by the concurrency
- * scheduler (D13) and serialized per address by a chain.
- *
- * Turns are MAIL-driven (D11/D14): a wake drains the agent's mailbox, composes a
- * deterministic wake digest (answers-with-quoted-questions first), prompts the
- * session with it, and marks the mail done only after the turn completes. A
- * spawn `task` is just the first envelope (from `main`) into the mailbox.
- */
-
 import {
 	SessionManager,
 	resolveCliModel,
@@ -104,6 +90,22 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "
 import { composeContext, type IdentityOptions, type PeerInfo } from "../context/compose.ts";
 import { Deliverer, type DelivererHooks, type DeliveryOutcome, type HopsGuard } from "../mail/deliver.ts";
 import { collapseWhitespace, flattenMessageContent, liveThinkingSummary, retainLatestThought } from "../text.ts";
+import { seedWorkerSession, workerSessionStats, workerContextInstructions, assertWorkerContextReady, validateWorkerContext } from "../context/fork.mjs";
+
+/**
+ * runtime/in-process.ts — the in-process SubagentRuntime (D7).
+ *
+ * Each live agent is a real `AgentSession` (createAgentSession) resuming a
+ * Pi-native JSONL under its instance dir (D3). Mutual exclusion is the host-scope
+ * lease (D7) — NO per-agent run-owner locks. Turns are gated by the concurrency
+ * scheduler (D13) and serialized per address by a chain.
+ *
+ * Turns are MAIL-driven (D11/D14): a wake drains the agent's mailbox, composes a
+ * deterministic wake digest (answers-with-quoted-questions first), prompts the
+ * session with it, and marks the mail done only after the turn completes. A
+ * spawn `task` is just the first envelope (from `main`) into the mailbox.
+ */
+
 
 type ModelRuntime = NonNullable<CreateAgentSessionServicesOptions["modelRuntime"]>;
 
@@ -137,7 +139,7 @@ interface Handle {
 }
 
 function vitalsFrom(session: AgentSession, state: AgentState): AgentVitals {
-	const stats = session.getSessionStats();
+	const stats = workerSessionStats(session);
 	return {
 		state,
 		ctxPercent: stats.contextUsage?.percent ?? null,
@@ -215,6 +217,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		const resolved = resolveTypeDef(this.layout, type, { projectTrusted: this.projectTrusted() });
 		if (!resolved.ok) throw new Error(resolved.error);
 
+		if (options.workerContext) validateWorkerContext(options.workerContext);
 		const address = formatAgentAddress(type, id);
 		const now = new Date().toISOString();
 		// The label is display-only: trim, collapse whitespace, cap — never trusted as a path/key.
@@ -227,6 +230,11 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			...(label ? { label } : {}),
 		});
 		mkdirSync(this.layout.agentInstanceDir(type, id), { recursive: true });
+		if (created && options.workerContext?.mode === "fork") {
+			record.contextMode = "fork";
+			const manager = SessionManager.create(this.layout.cwd, this.layout.agentInstanceDir(type, id));
+			seedWorkerSession(manager, options.workerContext);
+		}
 		this.persist();
 
 		let taskEnvelopeId: string | undefined;
@@ -239,6 +247,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		return {
 			address,
 			created,
+			contextMode: created ? options.workerContext?.mode ?? "focus" : "existing",
 			state: record.vitals.state,
 			vitals: record.vitals,
 			...(taskEnvelopeId !== undefined ? { taskEnvelopeId } : {}),
@@ -465,7 +474,8 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		return [...this.activity.entries()]
 			.map(([address, a]) => {
 				const record = getAgent(this.registry, address);
-				const stats = this.handles.get(address)?.session.getSessionStats();
+				const liveSession = this.handles.get(address)?.session;
+				const stats = liveSession ? workerSessionStats(liveSession) : undefined;
 				// A null live percentage (notably just after compaction) means unknown;
 				// preserve it rather than falling back to a stale pre-compaction value.
 				const ctxPercent = stats?.contextUsage === undefined ? (record?.vitals.ctxPercent ?? null) : stats.contextUsage.percent;
@@ -863,6 +873,8 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 
 		const latest = this.latestSessionFile(record.type, record.id);
 		const sessionManager = latest ? SessionManager.open(latest, instanceDir, layout.cwd) : SessionManager.create(layout.cwd, instanceDir);
+		assertWorkerContextReady(sessionManager);
+		if (record.contextMode === "fork" && !workerContextInstructions(sessionManager).length) throw new Error("Fork worker history is missing; inspect it before starting another worker");
 
 		const peersDefault = def.config.peers !== false;
 		const peersEnabled = this.effectivePeers(peersDefault);
@@ -878,7 +890,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 				noPromptTemplates: true,
 				noThemes: true,
 				noContextFiles: !def.config.projectContext,
-				appendSystemPrompt: composed.appendSystemPrompt,
+				appendSystemPrompt: [...composed.appendSystemPrompt, ...workerContextInstructions(sessionManager)],
 			},
 		});
 		this.modelRuntime = services.modelRuntime;

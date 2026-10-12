@@ -1,3 +1,88 @@
+import {
+	SessionManager,
+	resolveCliModel,
+	type AgentSession,
+	type ModelRegistry,
+	type SettingsManager,
+	createAgentSessionServices,
+	createAgentSessionFromServices,
+	type CreateAgentSessionServicesOptions,
+	type CreateAgentSessionFromServicesOptions,
+} from "@earendil-works/pi-coding-agent";
+import {
+	MAIN_ADDRESS,
+	parseAddress,
+	USER_ADDRESS,
+	type Envelope,
+	seedUlidClock,
+	isValidIdSegment,
+	formatAgentAddress,
+	terminalTaskAnchors,
+} from "../mail/envelope.ts";
+import {
+	markDone,
+	readPending,
+	pendingCount,
+	beginDelivery,
+	maxEnvelopeId,
+} from "../mail/mailbox.ts";
+import {
+	getAgent,
+	listAgents,
+	patchAgent,
+	removeAgent,
+	upsertAgent,
+	readRegistry,
+	type Registry,
+	writeRegistry,
+	type AgentState,
+	type AgentRecord,
+	type AgentVitals,
+} from "../store/registry.ts";
+import type {
+	SendResult,
+	AgentDetail,
+	AwaitResult,
+	AwaitTarget,
+	RosterEntry,
+	SendOptions,
+	SpawnResult,
+	SteerResult,
+	AwaitOptions,
+	CancelResult,
+	EnvelopeView,
+	RetireResult,
+	RuntimeEvent,
+	SpawnOptions,
+	AgentActivity,
+	OpenTaskEntry,
+	TargetOutcome,
+	SubagentRuntime,
+	AgentActivityRow,
+	InheritedDefaults,
+	RuntimeEventListener,
+} from "./types.ts";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { Scheduler } from "./scheduler.ts";
+import type { Layout } from "../store/layout.ts";
+import { atomicWriteText } from "../store/atomic.ts";
+import { composeContext } from "../context/compose.ts";
+import { readTranscriptTail } from "../session-read.ts";
+import { composeWakeDigest, type DigestItem } from "../mail/digest.ts";
+import { parseTypeFile, type TypeDefinition } from "../typedefs/parse.ts";
+import { existsSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
+import { type ConfirmFn, denyAllConfirm } from "../sandbox/safety-bridge.ts";
+import { buildSandboxedTools, selectToolNames } from "../sandbox/tools-filter.ts";
+import { createSubagentTools, type SubagentMailPort } from "../tools/sub-agent.ts";
+import { makeCommandDenyCheck, makeSystemDenyCheck } from "../sandbox/system-deny.ts";
+import { archiveAgentDir, type ArchivedInfo, readArchived } from "../store/archive.ts";
+import { Deliverer, type DelivererHooks, type DeliveryOutcome } from "../mail/deliver.ts";
+import { closeAllFor, closeOpenTask, readOpenTasks, recordOpenTask } from "../store/open-tasks.ts";
+import { ellipsize, labelFromSource, liveThinkingSummary, MAX_LABEL_CHARS, retainLatestThought } from "../text.ts";
+import { ADHOC_TYPE, composeAdhocDef, resolveAdhocDef, type ResolveResult, resolveTypeDef, sha256 } from "../typedefs/discover.ts";
+import { seedWorkerSession, workerSessionStats, workerContextInstructions, assertWorkerContextReady, validateWorkerContext } from "../context/fork.mjs";
+
 /**
  * runtime/in-process.ts — the in-process SubagentRuntime.
  *
@@ -16,89 +101,6 @@
  * pipeline as library type defs, so persistence and live-retune are identical.
  */
 
-import { existsSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import {
-	type AgentSession,
-	createAgentSessionFromServices,
-	createAgentSessionServices,
-	type CreateAgentSessionFromServicesOptions,
-	type CreateAgentSessionServicesOptions,
-	type ModelRegistry,
-	resolveCliModel,
-	SessionManager,
-	type SettingsManager,
-} from "@earendil-works/pi-coding-agent";
-import { composeContext } from "../context/compose.ts";
-import { Deliverer, type DelivererHooks, type DeliveryOutcome } from "../mail/deliver.ts";
-import { composeWakeDigest, type DigestItem } from "../mail/digest.ts";
-import {
-	type Envelope,
-	formatAgentAddress,
-	isValidIdSegment,
-	MAIN_ADDRESS,
-	parseAddress,
-	seedUlidClock,
-	terminalTaskAnchors,
-	USER_ADDRESS,
-} from "../mail/envelope.ts";
-import {
-	beginDelivery,
-	markDone,
-	maxEnvelopeId,
-	pendingCount,
-	readPending,
-} from "../mail/mailbox.ts";
-import { archiveAgentDir, type ArchivedInfo, readArchived } from "../store/archive.ts";
-import { closeAllFor, closeOpenTask, readOpenTasks, recordOpenTask } from "../store/open-tasks.ts";
-import {
-	type AgentRecord,
-	type AgentState,
-	type AgentVitals,
-	getAgent,
-	listAgents,
-	patchAgent,
-	type Registry,
-	readRegistry,
-	removeAgent,
-	upsertAgent,
-	writeRegistry,
-} from "../store/registry.ts";
-import { atomicWriteText } from "../store/atomic.ts";
-import type { Layout } from "../store/layout.ts";
-import { ADHOC_TYPE, composeAdhocDef, resolveAdhocDef, type ResolveResult, resolveTypeDef, sha256 } from "../typedefs/discover.ts";
-import { parseTypeFile, type TypeDefinition } from "../typedefs/parse.ts";
-import { createSubagentTools, type SubagentMailPort } from "../tools/sub-agent.ts";
-import { buildSandboxedTools, selectToolNames } from "../sandbox/tools-filter.ts";
-import { makeCommandDenyCheck, makeSystemDenyCheck } from "../sandbox/system-deny.ts";
-import { type ConfirmFn, denyAllConfirm } from "../sandbox/safety-bridge.ts";
-import { readTranscriptTail } from "../session-read.ts";
-import { ellipsize, labelFromSource, liveThinkingSummary, MAX_LABEL_CHARS, retainLatestThought } from "../text.ts";
-import type {
-	AgentActivity,
-	AgentActivityRow,
-	AgentDetail,
-	AwaitOptions,
-	AwaitResult,
-	AwaitTarget,
-	CancelResult,
-	EnvelopeView,
-	InheritedDefaults,
-	OpenTaskEntry,
-	RetireResult,
-	RosterEntry,
-	RuntimeEvent,
-	RuntimeEventListener,
-	SendOptions,
-	SendResult,
-	SpawnOptions,
-	SpawnResult,
-	SteerResult,
-	SubagentRuntime,
-	TargetOutcome,
-} from "./types.ts";
-import { Scheduler } from "./scheduler.ts";
 
 const TMP_ID_BYTES = 4;
 const AWAIT_POLL_MS = 40;
@@ -138,7 +140,7 @@ interface TurnFailure {
 }
 
 function vitalsFrom(session: AgentSession, state: AgentState): AgentVitals {
-	const stats = session.getSessionStats();
+	const stats = workerSessionStats(session);
 	return {
 		state,
 		ctxPercent: stats.contextUsage?.percent ?? null,
@@ -246,6 +248,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			hash = resolved.resolved.hash;
 		}
 
+		if (options.workerContext) validateWorkerContext(options.workerContext);
 		const address = formatAgentAddress(type, id);
 		const existing = getAgent(this.registry, address);
 		// Get-or-create keeps the established human identity. A required label on a
@@ -254,6 +257,11 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 		const now = new Date().toISOString();
 		const { record, created } = upsertAgent(this.registry, { type, id, lifetime, label, typeFileHash: hash, now });
 		mkdirSync(this.layout.agentInstanceDir(type, id), { recursive: true });
+		if (created && options.workerContext?.mode === "fork") {
+			record.contextMode = "fork";
+			const manager = SessionManager.create(this.layout.cwd, this.layout.agentInstanceDir(type, id));
+			seedWorkerSession(manager, options.workerContext);
+		}
 		this.persist();
 
 		let taskEnvelopeId: string | undefined;
@@ -270,6 +278,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 			address,
 			label,
 			created,
+			contextMode: created ? options.workerContext?.mode ?? "focus" : "existing",
 			state: record.vitals.state,
 			vitals: record.vitals,
 			...(taskEnvelopeId !== undefined ? { taskEnvelopeId } : {}),
@@ -933,6 +942,8 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 
 		const latest = this.latestSessionFile(record.type, record.id);
 		const sessionManager = latest ? SessionManager.open(latest, instanceDir, layout.cwd) : SessionManager.create(layout.cwd, instanceDir);
+		assertWorkerContextReady(sessionManager);
+		if (record.contextMode === "fork" && !workerContextInstructions(sessionManager).length) throw new Error("Fork worker history is missing; inspect it before starting another worker");
 
 		const purview = record.type === ADHOC_TYPE ? def.config.description : record.id;
 		const composed = composeContext(def, { address, purview, lifetime: record.lifetime });
@@ -947,7 +958,7 @@ export class InProcessRuntime implements SubagentRuntime, SubagentMailPort {
 				noPromptTemplates: true,
 				noThemes: true,
 				noContextFiles: !def.config.projectContext,
-				appendSystemPrompt: composed.appendSystemPrompt,
+				appendSystemPrompt: [...composed.appendSystemPrompt, ...workerContextInstructions(sessionManager)],
 			},
 		});
 		this.modelRuntime = services.modelRuntime;

@@ -1,3 +1,9 @@
+import type { OpenTask } from "../store/open-tasks.ts";
+import type { ArchivedInfo } from "../store/archive.ts";
+import type { ThinkingLevel } from "../typedefs/parse.ts";
+import type { WorkerContext } from "../context/fork.mjs";
+import type { AgentState, AgentVitals, Lifetime } from "../store/registry.ts";
+
 /**
  * runtime/types.ts — the SubagentRuntime interface: the runtime swap-point.
  *
@@ -12,10 +18,6 @@
  * Contract-only module: types + one interface, no implementation.
  */
 
-import type { ArchivedInfo } from "../store/archive.ts";
-import type { AgentState, AgentVitals, Lifetime } from "../store/registry.ts";
-import type { OpenTask } from "../store/open-tasks.ts";
-import type { ThinkingLevel } from "../typedefs/parse.ts";
 
 export interface AgentActivity {
 	/** The current tool name (e.g. "bash", "read"), or "" while thinking. */
@@ -66,6 +68,8 @@ export interface SpawnOptions {
 	task?: string;
 	/** Session defaults for fields the def leaves unset. */
 	inherit?: InheritedDefaults;
+	/** Immutable main-chat seed, applied only when creating a new worker. */
+	workerContext?: WorkerContext;
 	/** Ad-hoc only: model override (`provider/modelId` or a CLI model ref). */
 	model?: string;
 	/** Ad-hoc only: thinking level override. */
@@ -75,6 +79,7 @@ export interface SpawnOptions {
 }
 
 export interface SpawnResult {
+	contextMode?: "focus" | "fork" | "existing";
 	/** `<type>/<id>`. */
 	address: string;
 	/** Stable human display name used by TUI surfaces. */
