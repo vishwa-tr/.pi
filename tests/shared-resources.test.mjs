@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createPiJiti, findPiPackage } from "./runtime.mjs";
@@ -13,10 +13,15 @@ test("Pi discovers the shared skills through its compatibility directory", async
   try {
     const { loadSkills } = await import(pathToFileURL(join(findPiPackage(), "dist/index.js")).href);
     const result = loadSkills({ cwd: temporary, agentDir: join(root, "agent"), skillPaths: [], includeDefaults: true });
-    assert.equal(result.skills.length, 39);
+    assert.equal(result.skills.length, 37);
     assert.deepEqual(result.diagnostics, []);
+    const names = new Set(result.skills.map((skill) => skill.name));
+    assert.ok(names.has("coding"));
+    for (const oldName of ["code-conventions", "readable-code", "reviewable-code"]) {
+      assert.equal(names.has(oldName), false, `${oldName} must not remain discoverable`);
+    }
     for (const skill of result.skills) {
-      assert.ok(realpathSync(skill.filePath).startsWith(realpathSync(join(root, ".agents/skills")) + "/"));
+      assert.ok(realpathSync(skill.filePath).startsWith(realpathSync(join(root, ".agents/skills")) + sep));
     }
   } finally {
     rmSync(temporary, { recursive: true, force: true });

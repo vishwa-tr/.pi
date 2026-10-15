@@ -104,7 +104,8 @@ codex/configs/.tmp/
 **/venv/
 **/coverage/
 
-# Local-only project plans, notes, and investigation records.
+# Legacy local records remain quarantined; new artifacts use .agents/artifacts/.
+# That path belongs to the submodule and is ignored by .agents/.gitignore.
 /docs/
 
 # Local agent state and setup bundles.

@@ -37,12 +37,13 @@ test("configuration validation follows the shared knowledge layout and retains s
       }
     }
     // Exercise the working validator against an isolated copy of committed resources.
-    for (const path of ["scripts/validate-global-config.mjs", ".gitignore", "packages/pi-subagents/README.md"]) {
+    for (const path of ["scripts/validate-global-config.mjs", ".gitignore", ".agents/.gitignore", "packages/pi-subagents/README.md"]) {
       copyFileSync(join(root, path), join(fixture, path));
     }
     // The local migration may not yet be committed. Overlay only migrated resource
     // directories, leaving the cloned submodule's Git metadata and HEAD unchanged.
     for (const path of [
+      "skills",
       "knowledge",
       "procedures/babysit-pr",
       "procedures/split-to-prs",
@@ -80,7 +81,50 @@ test("configuration validation follows the shared knowledge layout and retains s
       assert.equal(existsSync(join(fixture, ".agents", "mcp")), false);
       const result = validate(fixture);
       assert.equal(result.status, 0, result.output);
-      assert.match(result.output, /39 global skills/);
+      assert.match(result.output, /37 global skills/);
+    });
+    await t.test("artifact boundary: local paths stay ignored in the owning submodule", () => {
+      withChangedFile(fixture, ".agents/.gitignore",
+        (text) => text.replace(/^\/artifacts\/\r?\n/gm, ""), () => {
+          const result = validate(fixture);
+          assert.equal(result.status, 1, result.output);
+          for (const probe of ["artifacts/probe.md", "artifacts/notes/NOTES.md", "artifacts/memory/probe.md"]) {
+            assert.ok(result.output.includes(`expected shared artifact ignore is not covered: ${probe}`), result.output);
+          }
+        });
+    });
+    await t.test("artifact boundary: selective ignore exceptions do not expose local files", () => {
+      const probe = join(fixture, ".agents", "artifacts", "exposed", "private-artifact.md");
+      mkdirSync(dirname(probe), { recursive: true });
+      writeFileSync(probe, "Local output\n");
+      try {
+        withChangedFile(fixture, ".agents/.gitignore",
+          (text) => text.replace(/^\/artifacts\/\r?\n/gm, "/artifacts/*\n!/artifacts/exposed/\n"), () => {
+            const result = validate(fixture);
+            assert.equal(result.status, 1, result.output);
+            assert.ok(result.output.includes("shared local artifacts must remain ignored"), result.output);
+            assert.equal(result.output.includes("expected shared artifact ignore is not covered"), false, result.output);
+            assert.equal(result.output.includes("private-artifact.md"), false);
+          });
+      } finally {
+        rmSync(join(fixture, ".agents", "artifacts"), { recursive: true, force: true });
+      }
+    });
+    await t.test("artifact boundary: force-added local files cannot become shared content", () => {
+      const shared = join(fixture, ".agents");
+      const probe = join(shared, "artifacts", "private-artifact.md");
+      mkdirSync(dirname(probe), { recursive: true });
+      writeFileSync(probe, "Local output\n");
+      try {
+        execFileSync("git", ["-C", shared, "add", "--force", "--", "artifacts/private-artifact.md"], { stdio: "pipe" });
+        const result = validate(fixture);
+        assert.equal(result.status, 1, result.output);
+        assert.ok(result.output.includes("shared local artifacts must remain untracked"), result.output);
+        assert.equal(result.output.includes("private-artifact.md"), false);
+      } finally {
+        execFileSync("git", ["-C", shared, "rm", "--cached", "--", "artifacts/private-artifact.md"], { stdio: "pipe" });
+        rmSync(join(shared, "artifacts"), { recursive: true, force: true });
+      }
     });
     await t.test("rejects a missing knowledge category", () => {
       const knowledge = join(fixture, ".agents", "knowledge");
@@ -108,14 +152,14 @@ test("configuration validation follows the shared knowledge layout and retains s
           assertFailure(fixture, "delegated-review-results is missing current lifecycle guidance: new envelope ID");
         });
     });
-    await t.test("requires project-only documentation to remain ignored", () => {
+    await t.test("requires legacy local documentation to remain ignored", () => {
       withChangedFile(fixture, ".gitignore",
         (text) => text.replace(/^\/docs\/\r?\n/gm, ""), () => {
           assertFailure(fixture, "expected ignored path is not covered: docs/probe.md");
-          assertFailure(fixture, "expected ignored path is not covered: docs/agents/NOTES.md");
+          assertFailure(fixture, "expected ignored path is not covered: docs/legacy-probe.md");
         });
     });
-    await t.test("rejects forcibly tracked project-only documentation", () => {
+    await t.test("rejects forcibly tracked legacy local documentation", () => {
       const probe = join(fixture, "docs", "probe.md");
       mkdirSync(dirname(probe), { recursive: true });
       writeFileSync(probe, "# Local investigation record\n");
