@@ -33,7 +33,6 @@ source of the local Pi packages enabled by `agent/settings.json`.
 ├── MANIFEST.md               # Enabled Pi package inventory
 ├── packages/                 # Pi extensions and package-local tests
 ├── tests/                    # Shared test tools and integration checks
-├── docs/                     # Optional local-only records (ignored, not in clones)
 ├── scripts/                  # Pi validation and setup
 ├── keybindings.json          # Portable keybindings
 ├── agent/                    # Effective Pi configuration and local runtime
@@ -44,6 +43,7 @@ source of the local Pi packages enabled by `agent/settings.json`.
 │   └── procedures -> ../.agents/procedures
 └── .agents/                  # Shared-resource Git submodule
     ├── AGENTS.md
+    ├── artifacts/          # Optional ignored project-local outputs, never shared
     ├── skills/
     ├── subagents/
     ├── procedures/
@@ -63,8 +63,12 @@ for supported behavior and usage.
 Read this README, `MANIFEST.md`, relevant package documentation, and applicable
 `AGENTS.md` instructions before changing the layout or active resources.
 Package paths resolve relative to `agent/settings.json` through `agent/packages`.
-Pi development records may be kept locally in ignored `docs/agents/`; do not commit them.
-Shared, general-purpose material belongs in `.agents/`; extension usage/API docs stay with packages.
+Necessary project artifacts belong in ignored `.agents/artifacts/<category>/`; do not commit them.
+This is an explicit local-only exception inside the shared submodule, whose `.gitignore` owns
+the ignore rule. It does not require reports or backups for every task. Legacy `docs/` remains
+ignored as a privacy quarantine, not the destination for new agent artifacts.
+Shared, general-purpose material belongs in the other `.agents/` resource directories;
+extension usage/API docs stay with packages.
 
 ## Submodule workflow
 
@@ -259,7 +263,7 @@ The validator reads `agent/settings.json` and checks its portable package paths
 and package manifests through `agent/packages`. It also checks JSON files,
 resource directories, the canonical shared definition inventory, absence of the
 legacy definition directory, linked-file safety, and the tracked-versus-local
-boundary. The typecheck uses an already installed TypeScript compiler; set
+boundary, including the shared submodule's ignored, untracked artifact exception. The typecheck uses an already installed TypeScript compiler; set
 `PI_TSC` to select its executable. It does not install dependencies or tooling.
 
 ## Development
@@ -267,7 +271,8 @@ boundary. The typecheck uses an already installed TypeScript compiler; set
 Active Pi packages remain under `packages/` alongside shared test tooling in `tests/`.
 Extension usage and API docs stay with their package. Project-specific plans,
 implementation notes, and investigation records remain local and untracked under
-ignored `docs/agents/`. Sanitized general-purpose methods and helpers go into the
-matching `.agents/` directory; do not copy project-specific or private data there.
+ignored `.agents/artifacts/<category>/` when needed. Sanitized general-purpose methods and
+helpers go into the matching shared `.agents/` resource directory; do not copy project-specific
+or private data outside the ignored artifact exception.
 
 No commit or push is performed automatically after configuration changes.

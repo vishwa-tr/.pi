@@ -10,7 +10,7 @@ const failures = [];
 const notes = [];
 
 const EXPECTED_PACKAGE_COUNT = 32;
-const EXPECTED_SKILL_COUNT = 39;
+const EXPECTED_SKILL_COUNT = 37;
 const AGENT_PACKAGE_PREFIX = "./packages/";
 
 function fail(message) {
@@ -151,6 +151,27 @@ try {
   }
 } catch (error) {
   fail(`cannot inspect shared submodule; run git submodule update --init --recursive: ${error.message}`);
+}
+
+// The submodule owns this local-only exception; parent ignore rules do not apply inside it.
+try {
+  const sharedRoot = join(root, ".agents");
+  const trackedArtifacts = execFileSync("git", ["-C", sharedRoot, "ls-files", "-z", "--", "artifacts"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (trackedArtifacts.length > 0) fail("shared local artifacts must remain untracked");
+  const unignoredArtifacts = execFileSync("git", ["-C", sharedRoot, "ls-files", "--others", "--exclude-standard", "-z", "--", "artifacts"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (unignoredArtifacts.length > 0) fail("shared local artifacts must remain ignored");
+  for (const path of ["artifacts/probe.md", "artifacts/notes/NOTES.md", "artifacts/memory/probe.md"]) {
+    const result = spawnSync("git", ["-C", sharedRoot, "check-ignore", "--no-index", "-q", path]);
+    if (result.status !== 0) fail(`expected shared artifact ignore is not covered: ${path}`);
+  }
+} catch {
+  fail("cannot verify the shared local artifact boundary");
 }
 
 function validateKeybindings(relativePath) {
@@ -553,7 +574,7 @@ try {
 
 for (const ignoredPath of [
   "docs/probe.md",
-  "docs/agents/NOTES.md",
+  "docs/legacy-probe.md",
   "auth.json",
   "oauth.json",
   "models.json",
