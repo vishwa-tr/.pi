@@ -65,7 +65,10 @@ thinking level, provider, mode, ownership, run revision and inspected workspace.
 revalidates the complete agreement and current workspace; changes invalidate it and require
 a fresh proposal rather than replaying confirmation. Inspection, host approval callbacks and
 independent Safety requests retain their separate bounded timeouts. Pause, stop, reload and
-shutdown cancel pending proposals. Resume preserves allowances; restart explicitly
+shutdown cancel pending proposals. Cancelling the main turn that created a proposal
+also revokes it, even if its inspection tool already returned. Let that turn finish
+before replying `start`; after cancellation, prepare and confirm a fresh proposal.
+Resume preserves allowances; restart explicitly
 begins a fresh cycle. Neither undoes changes, and unsettled work blocks continuation.
 
 Launch, resume, restart and recovery require the interactive main chat in a TUI. Print,
