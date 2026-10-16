@@ -167,6 +167,26 @@ test("tool cancellation consumes approval permanently and makes no auth calls", 
 	const signal = new AbortController(); signal.abort(); assert.equal((await f.tool("swarm_start", { proposalId: p.proposalId }, signal.signal)).isError, true);
 	await f.command("pause"); assert.equal((await f.consume(p)).isError, true); assert.equal(f.auth(), 0);
 });
+test("aborting a completed proposal turn revokes it but a fresh proposal can launch", async t => {
+	const f = await fixture(t, { hold: true }); f.select("first");
+	const turn = new AbortController();
+	const cancelled = (await f.tool("swarm_start", { objective: "Cancelled proposal turn" }, turn.signal)).details;
+	assert.equal(cancelled.awaitingConfirmation, true);
+	turn.abort();
+	await f.input("start");
+	assert.equal((await f.consume(cancelled)).isError, true);
+	assert.equal(f.auth(), 0);
+	assert.equal(f.calls.length, 0);
+
+	const fresh = (await f.tool("swarm_start", { objective: "Fresh approved proposal" })).details;
+	assert.equal(fresh.awaitingConfirmation, true);
+	await f.input("start");
+	assert.equal((await f.consume(fresh)).details.status, "running");
+	await until(() => f.calls.length === 1);
+	const stopped = await f.tool("swarm_control", { action: "stop" });
+	assert.equal(stopped.details.status, "stopped");
+	assert.deepEqual(stopped.details.unsettled, { turns: 0, operations: 0, assignments: 0 });
+});
 test("non-Git launch and continuation preserve the project without setup/disposition dialogs", async t => {
 	const root = mkdtempSync(join(tmpdir(), "swarm-chat-")); t.after(() => rmSync(root, { recursive: true, force: true })); writeFileSync(join(root, "user.txt"), "Preserve me"); writeFileSync(join(root, ".gitignore"), "# rules\r\n", { mode: 0o640 });
 	const f = await fixture(t, { root, hold: true, policy: false }); f.select("first"); await f.command("start Fixture \u001b[31m \u202e goal"); await until(() => f.calls.length === 1);
