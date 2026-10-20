@@ -88,7 +88,7 @@ test("configuration validation follows the shared knowledge layout and retains s
         (text) => text.replace(/^\/artifacts\/\r?\n/gm, ""), () => {
           const result = validate(fixture);
           assert.equal(result.status, 1, result.output);
-          for (const probe of ["artifacts/probe.md", "artifacts/notes/NOTES.md", "artifacts/memory/probe.md"]) {
+          for (const probe of ["artifacts/probe.md", "artifacts/plans/probe.md", "artifacts/knowledge/probe.md"]) {
             assert.ok(result.output.includes(`expected shared artifact ignore is not covered: ${probe}`), result.output);
           }
         });

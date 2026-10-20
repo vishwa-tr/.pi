@@ -166,7 +166,7 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (unignoredArtifacts.length > 0) fail("shared local artifacts must remain ignored");
-  for (const path of ["artifacts/probe.md", "artifacts/notes/NOTES.md", "artifacts/memory/probe.md"]) {
+  for (const path of ["artifacts/probe.md", "artifacts/plans/probe.md", "artifacts/knowledge/probe.md"]) {
     const result = spawnSync("git", ["-C", sharedRoot, "check-ignore", "--no-index", "-q", path]);
     if (result.status !== 0) fail(`expected shared artifact ignore is not covered: ${path}`);
   }

@@ -27,6 +27,10 @@ and personal examples or data before saving it. Outside ignored `artifacts/`, do
 Pi project-specific artifacts inside the shared submodule. Keep Pi Subagents and Pi Teams on the same
 `.agents/subagents/` definitions; do not create a second role library.
 
+Pi's project instructions live in this file. Because `.agents/` is the shared submodule, Pi has
+no project library of its own: there is no project `RULES.md`, `NOTES.md`, or memory folder.
+Pi-specific lessons that must stay local use ignored `.agents/artifacts/knowledge/<topic>/`.
+
 ## Validation and publication
 
 Run `node scripts/validate-global-config.mjs` and the relevant tests described in
