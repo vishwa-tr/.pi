@@ -18,7 +18,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-test("configuration validation follows the shared knowledge layout and retains safeguards", async (t) => {
+test("configuration validation follows the shared documents layout and retains safeguards", async (t) => {
   const temporary = mkdtempSync(join(tmpdir(), "pi-config-validation-"));
   const fixture = join(temporary, "repository");
   try {
@@ -44,7 +44,7 @@ test("configuration validation follows the shared knowledge layout and retains s
     // directories, leaving the cloned submodule's Git metadata and HEAD unchanged.
     for (const path of [
       "skills",
-      "knowledge",
+      "documents",
       "procedures/babysit-pr",
       "procedures/split-to-prs",
       "procedures/delegated-code-review",
@@ -55,7 +55,7 @@ test("configuration validation follows the shared knowledge layout and retains s
       rmSync(join(fixture, ".agents", path), { recursive: true, force: true });
       cpSync(source, join(fixture, ".agents", path), { recursive: true });
     }
-    for (const path of ["docs", "plans", "procedures/git", "procedures/github", "procedures/reviews"]) {
+    for (const path of ["docs", "plans", "knowledge", "procedures/git", "procedures/github", "procedures/reviews"]) {
       rmSync(join(fixture, ".agents", path), { recursive: true, force: true });
     }
     // Model a clean clone without local records or misplaced container tooling.
@@ -70,10 +70,10 @@ test("configuration validation follows the shared knowledge layout and retains s
     // Built-in MCP needs no shared custom-client guide or category directory.
     rmSync(join(fixture, ".agents", "mcp"), { recursive: true, force: true });
 
-    await t.test("accepts knowledge and flat procedures without obsolete shared categories", () => {
-      assert.equal(existsSync(join(fixture, ".agents", "knowledge")), true);
+    await t.test("accepts documents and flat procedures without obsolete shared categories", () => {
+      assert.equal(existsSync(join(fixture, ".agents", "documents")), true);
       assert.equal(existsSync(join(fixture, ".agents", "procedures", "delegated-review-results", "delegated-review-results.md")), true);
-      for (const path of ["docs", "plans", "procedures/git", "procedures/github", "procedures/reviews"]) {
+      for (const path of ["docs", "plans", "knowledge", "procedures/git", "procedures/github", "procedures/reviews"]) {
         assert.equal(existsSync(join(fixture, ".agents", path)), false);
       }
       assert.equal(existsSync(join(fixture, "docs")), false);
@@ -88,7 +88,7 @@ test("configuration validation follows the shared knowledge layout and retains s
         (text) => text.replace(/^\/artifacts\/\r?\n/gm, ""), () => {
           const result = validate(fixture);
           assert.equal(result.status, 1, result.output);
-          for (const probe of ["artifacts/probe.md", "artifacts/plans/probe.md", "artifacts/knowledge/probe.md"]) {
+          for (const probe of ["artifacts/probe.md", "artifacts/plans/probe.md", "artifacts/documents/probe.md"]) {
             assert.ok(result.output.includes(`expected shared artifact ignore is not covered: ${probe}`), result.output);
           }
         });
@@ -126,16 +126,16 @@ test("configuration validation follows the shared knowledge layout and retains s
         rmSync(join(shared, "artifacts"), { recursive: true, force: true });
       }
     });
-    await t.test("rejects a missing knowledge category", () => {
-      const knowledge = join(fixture, ".agents", "knowledge");
-      rmSync(knowledge, { recursive: true });
+    await t.test("rejects a missing documents category", () => {
+      const documents = join(fixture, ".agents", "documents");
+      rmSync(documents, { recursive: true });
       try {
-        assertFailure(fixture, "shared resource category is missing: knowledge");
+        assertFailure(fixture, "shared resource category is missing: documents");
       } finally {
-        cpSync(join(root, ".agents", "knowledge"), knowledge, { recursive: true });
+        cpSync(join(root, ".agents", "documents"), documents, { recursive: true });
       }
     });
-    for (const path of ["docs", "plans", "procedures/git", "procedures/github", "procedures/reviews"]) {
+    for (const path of ["docs", "plans", "knowledge", "procedures/git", "procedures/github", "procedures/reviews"]) {
       await t.test(`rejects obsolete shared directory ${path}`, () => {
         const obsoleteDirectory = join(fixture, ".agents", path);
         mkdirSync(obsoleteDirectory, { recursive: true });

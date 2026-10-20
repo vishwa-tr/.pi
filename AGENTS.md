@@ -21,15 +21,15 @@ do not commit them. This is an explicit local-only exception inside the shared s
 protected by its `.gitignore`, not shared-library content. The path convention does not
 require reports or backups for every task. Maintained extension usage and API documentation
 belongs with its package under `packages/`.
-Reusable cross-project knowledge belongs in `.agents/knowledge/<topic>/README.md`, with
-relative links to implementations under `.agents/scripts/`. Remove project-specific, private,
+Reusable cross-project documents belong in `.agents/documents/<topic>/README.md`, registered in
+`.agents/documents/index.md`, with relative links to implementations under `.agents/scripts/`. Remove project-specific, private,
 and personal examples or data before saving it. Outside ignored `artifacts/`, do not put
 Pi project-specific artifacts inside the shared submodule. Keep Pi Subagents and Pi Teams on the same
 `.agents/subagents/` definitions; do not create a second role library.
 
 Pi's project instructions live in this file. Because `.agents/` is the shared submodule, Pi has
 no project library of its own: there is no project `RULES.md`, `NOTES.md`, or memory folder.
-Pi-specific lessons that must stay local use ignored `.agents/artifacts/knowledge/<topic>/`.
+Pi-specific lessons that must stay local use ignored `.agents/artifacts/documents/<topic>/`.
 
 ## Validation and publication
 

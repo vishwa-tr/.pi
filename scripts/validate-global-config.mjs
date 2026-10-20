@@ -143,10 +143,10 @@ try {
   if (modulePath !== ".agents" || moduleUrl !== "https://github.com/voidverse-xyz/.agents.git") {
     fail(".agents submodule configuration must use the shared repository");
   }
-  for (const category of ["skills", "subagents", "procedures", "knowledge"]) {
+  for (const category of ["skills", "subagents", "procedures", "documents"]) {
     if (!existsSync(join(root, ".agents", category))) fail(`shared resource category is missing: ${category}`);
   }
-  for (const obsoletePath of ["docs", "plans", "procedures/git", "procedures/github", "procedures/reviews"]) {
+  for (const obsoletePath of ["docs", "plans", "knowledge", "procedures/git", "procedures/github", "procedures/reviews"]) {
     if (existsSync(join(root, ".agents", obsoletePath))) fail(`obsolete shared resource directory must be absent: ${obsoletePath}`);
   }
 } catch (error) {
@@ -166,7 +166,7 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (unignoredArtifacts.length > 0) fail("shared local artifacts must remain ignored");
-  for (const path of ["artifacts/probe.md", "artifacts/plans/probe.md", "artifacts/knowledge/probe.md"]) {
+  for (const path of ["artifacts/probe.md", "artifacts/plans/probe.md", "artifacts/documents/probe.md"]) {
     const result = spawnSync("git", ["-C", sharedRoot, "check-ignore", "--no-index", "-q", path]);
     if (result.status !== 0) fail(`expected shared artifact ignore is not covered: ${path}`);
   }
