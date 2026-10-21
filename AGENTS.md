@@ -1,9 +1,19 @@
 # Pi Repository Instructions
 
-Read `.agents/AGENTS.md`, resolved relative to this file, for the shared working,
-privacy, Git, coding, and documentation rules. Read `README.md` and `MANIFEST.md`
-before changing this repository's layout or active resources, then relevant package
-documentation and nested instructions.
+The shared working, privacy, Git, coding, and documentation rules are in these files,
+resolved relative to this file:
+
+@.agents/AGENTS.md
+@.agents/RULES.md
+@.agents/documents/index.md
+
+Before doing anything else, check that the contents of all three files are in your
+context. If they are, for example because your agent loaded the imports above, do not
+read them again. If they are not, read them now; do not continue with any task until
+you have.
+
+Read `README.md` and `MANIFEST.md` before changing this repository's layout or active
+resources, then relevant package documentation and nested instructions.
 
 ## Repository ownership
 
