@@ -623,3 +623,87 @@ test("Swarm fork defaults and per-worker overrides preserve native identity, his
 		assert.equal((await f.driver.history("forked", 100)).filter(entry => entry.type === "custom" && entry.customType === "worker-context" && entry.data.status === "ready").length, 1);
 	} finally { await shutdown(f); }
 });
+
+
+test("an exhausted worker cannot fence an eligible peer or borrow its allowance after resume", async t => {
+	const f = await fixture(t, [tool("swarm_status", {}), { text: "Builder finished" }, tool("swarm_status", {}), { text: "Reviewer finished" }], { modelRequests: 6, workerModelRequests: 2 });
+	try {
+		await f.driver.recruit(specialist("builder")); await f.driver.recruit(specialist("reviewer"));
+		f.driver.wake("builder"); await f.driver.idle();
+		assert.equal(f.mock.calls.length, 2);
+		assert.equal(f.c.snapshot().status, "running");
+		await f.driver.pause(); await f.driver.resume({ reconciled: true });
+		f.driver.wake("builder"); await f.driver.idle();
+		assert.equal(f.mock.calls.length, 2, "exhausted worker cannot start another request");
+		f.driver.wake("reviewer"); await f.driver.idle();
+		assert.equal(f.mock.calls.length, 4, "peer retains its own allowance in the same run");
+		assert.equal(f.c.snapshot().status, "running");
+		assert.deepEqual(f.c.snapshot().sessions.usage.map(row => [row.workerId, row.requests]), [["builder", 2], ["reviewer", 2]]);
+	} finally { await shutdown(f); }
+});
+
+test("worker budget exhaustion releases unfinished claims without a task failure", async t => {
+	const f = await fixture(t, [
+		tool("swarm_task", { action: "claim", taskId: "handoff", kind: "build" }),
+		tool("swarm_files", { action: "claim", paths: ["result.txt"] }),
+	], { workerModelRequests: 2 });
+	try {
+		await f.driver.recruit(specialist("builder"));
+		await f.c.owner("task.create", { id: "handoff", title: "Pending work", criteria: [0], dependencies: [] });
+		f.driver.wake("builder"); await f.driver.idle();
+		assert.equal(f.mock.calls.length, 2);
+		const task = f.c.snapshot().tasks[0];
+		assert.equal(task.assignment, null);
+		assert.equal(task.status, "ready");
+		assert.equal(task.failures, 0);
+		assert.deepEqual(f.workspace.coordinationStatus().counts, { claims: 0, pending: 0, active: 0 });
+		assert.equal(f.c.snapshot().status, "running");
+	} finally { await shutdown(f); }
+});
+
+
+test("a capped contributor does not prevent eligible reviewer final verification", async t => {
+	const f = await fixture(t, autonomousScript, { modelRequests: 20, workerModelRequests: 5 });
+	try {
+		await f.driver.recruit(specialist("builder")); await f.driver.recruit(specialist("reviewer"));
+		await f.c.owner("task.create", { id: "first", title: "Ready candidate", criteria: [0], dependencies: [] });
+		await f.c.system("session.turn.start", { id: "build-turn", workerId: "builder", kind: "prompt", messageIds: [], guidanceRevision: 0 });
+		await f.c.worker("builder").dispatch("task.claim", { taskId: "first", kind: "build", assignmentId: "build" });
+		for (let i = 0; i < 5; i++) {
+			await f.c.system("session.request", { id: `build-${i}`, workerId: "builder" });
+			await f.c.system("session.usage", { id: `build-${i}`, workerId: "builder", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } });
+		}
+		const receipt = await f.workspace.worker("builder").shell("true");
+		await f.workspace.worker("builder").submit("Candidate verified", [receipt.executionId]);
+		await f.c.system("session.turn.end", { id: "build-turn", outcome: "settled" });
+		await f.workspace.settle("first");
+		f.driver.wake("reviewer"); await f.driver.idle();
+		assert.equal(f.c.snapshot().status, "completed");
+		assert.equal(f.c.snapshot().tasks[0].reviews[0].workerId, "reviewer");
+		assert.equal(f.c.snapshot().sessions.usage.find(row => row.workerId === "builder").requests, 5);
+		assert.equal(f.c.snapshot().sessions.usage.find(row => row.workerId === "reviewer").requests, 5);
+		assert.ok(f.c.snapshot().completionEvidence);
+	} finally { await shutdown(f); }
+});
+
+test("pause during automatic budget handoff still retires the native turn", async t => {
+	const f = await fixture(t, [tool("swarm_task", { action: "claim", taskId: "first", kind: "build" })], { workerModelRequests: 1 });
+	try {
+		await f.driver.recruit(specialist("builder"));
+		await f.c.owner("task.create", { id: "first", title: "Work", criteria: [0], dependencies: [] });
+		const worker = f.c.worker.bind(f.c);
+		f.c.worker = id => {
+			const capability = worker(id);
+			return { ...capability, dispatch: async (type, ...args) => {
+				if (type === "task.yield") await f.c.owner("run.pause");
+				return capability.dispatch(type, ...args);
+			} };
+		};
+		f.driver.wake("builder"); await f.driver.idle();
+		assert.equal(f.c.snapshot().status, "paused");
+		assert.equal(f.c.snapshot().sessions.turns.length, 0);
+		assert.equal(f.c.snapshot().workspace.operations.length, 0);
+		assert.equal(f.c.snapshot().tasks[0].assignment, null);
+		assert.equal(f.c.snapshot().tasks[0].failures, 0);
+	} finally { await shutdown(f); }
+});

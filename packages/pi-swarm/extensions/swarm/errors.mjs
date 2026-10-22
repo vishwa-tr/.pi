@@ -28,6 +28,8 @@ const FAILURE_MESSAGES = {
 	MODEL: "Select an available physical model before starting.",
 	MODE_DENIED: "Use unrestricted mode and wait for policy readiness.",
 	AUTHORITY: "Approval was declined, unavailable, or revoked.",
+	PROPOSAL_REQUIRED: "The proposal is absent, replaced, or revoked. Prepare a fresh proposal, let its turn finish, then obtain exact owner confirmation. No work has launched.",
+	PROPOSAL_UNCONFIRMED: "The current proposal still needs explicit owner confirmation in the owning chat. Do not retry the launch or create a replacement proposal to infer consent.",
 	CANCELLED: "The request was cancelled; fresh approval is required to continue.",
 	INSPECTION_TIMEOUT: "Workspace inspection reached its deadline.",
 	INSPECTION_LIMIT: "Git inspection output exceeded its bounded limit.",

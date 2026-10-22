@@ -6,7 +6,7 @@ import { privateDirectory } from "./store/files.mjs";
 import { makeSessionTools } from "./session-tools.mjs";
 import { coordinationHandoffs } from "./coordination.mjs";
 import { workerStatus, taskRows } from "./worker-context.mjs";
-import { usageLimitReason, measuredUsage } from "./usage.mjs";
+import { aggregateUsageLimitReason, workerUsageLimitReason, measuredUsage } from "./usage.mjs";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { assertProviderSelection } from "./provider-capability.mjs";
 import { selectWorkerContext } from "./context/fork.mjs";
@@ -126,19 +126,19 @@ export class SwarmSessions {
 				admitRequest: async () => {
 					await this.#controller.system("run.tick");
 					this.#requestGuard(entry);
-					if (this.#usageBlocked || usageLimitReason(this.#controller.snapshot())) {
-						this.#usageBlocked = true;
+					if (this.#usageBlocked || aggregateUsageLimitReason(this.#controller.snapshot()) || workerUsageLimitReason(this.#controller.snapshot(), workerId)) {
+						this.#usageBlocked = Boolean(aggregateUsageLimitReason(this.#controller.snapshot()));
 						entry.usageDenied = true;
 						check(false, "USAGE_LIMIT", "Worker model allowance reached");
 					}
 					const id = randomUUID();
 					try { await this.#controller.system("session.request", { id, workerId }); }
-					catch (error) { if (error.code === "USAGE_LIMIT") { this.#usageBlocked = true; entry.usageDenied = true; } throw error; }
+					catch (error) { if (error.code === "USAGE_LIMIT") { this.#usageBlocked = Boolean(aggregateUsageLimitReason(this.#controller.snapshot())); entry.usageDenied = true; } throw error; }
 					return id;
 				},
 				observeResponse: async (id, message) => {
 					await this.#controller.system("session.usage", { id, workerId, usage: measuredUsage(message) });
-					if (usageLimitReason(this.#controller.snapshot())) this.#usageBlocked = true;
+					if (aggregateUsageLimitReason(this.#controller.snapshot())) this.#usageBlocked = true;
 				},
 				systemPrompt: buildSpecialistPrompt(state, worker), customTools: tools,
 				...(state.sessions.workerContext ? { workerContext: selectWorkerContext(state.sessions.workerContext, state.sessions.workerContexts?.find(item => item.workerId === workerId)?.mode) } : {}),
@@ -264,7 +264,8 @@ export class SwarmSessions {
 	}
 
 	#enqueue(workerId, reason) {
-		if (this.#closed || this.#controller.snapshot().status !== "running") return false;
+		const state = this.#controller.snapshot();
+		if (this.#closed || state.status !== "running" || aggregateUsageLimitReason(state) || workerUsageLimitReason(state, workerId)) return false;
 		this.#queue.set(workerId, reason);
 		if (!this.#pumpQueued) {
 			this.#pumpQueued = true;
@@ -282,6 +283,7 @@ export class SwarmSessions {
 			if (this.#active.size >= state.limits.active) break;
 			if (this.#active.has(workerId)) continue;
 			this.#queue.delete(workerId);
+			if (workerUsageLimitReason(this.#controller.snapshot(), workerId)) continue;
 			this.#launch(workerId, "prompt", reason);
 		}
 	}
@@ -290,7 +292,7 @@ export class SwarmSessions {
 		let settled = false;
 		const promise = this.#execute(workerId, kind, reason).then(outcome => { settled = outcome === "settled"; }).catch(async error => {
 			this.#recordError(error);
-			if (error.code === "USAGE_LIMIT") { this.#usageBlocked = true; return; }
+			if (error.code === "USAGE_LIMIT") { this.#usageBlocked = Boolean(aggregateUsageLimitReason(this.#controller.snapshot())); return; }
 			if (["running", "verifying"].includes(this.#controller.snapshot().status)) {
 				try { await this.#controller.system("run.pause"); } catch (failure) { this.#recordError(failure); }
 			}
@@ -309,6 +311,8 @@ export class SwarmSessions {
 	async #execute(workerId, kind, reason) {
 		this.#admission?.assert();
 		const requested = this.#controller.snapshot();
+		check(!aggregateUsageLimitReason(requested), "USAGE_LIMIT", "Aggregate model allowance exhausted or unmeasured");
+		check(!workerUsageLimitReason(requested, workerId), "USAGE_LIMIT", "Worker model allowance exhausted or unmeasured");
 		const entry = await this.#entry(workerId);
 		const state = this.#controller.snapshot();
 		if (state.status !== "running" || state.cycle !== requested.cycle || state.generation !== requested.generation) return;
@@ -367,6 +371,19 @@ export class SwarmSessions {
 					}
 				}
 			}
+			const settledState = this.#controller.snapshot();
+			if (kind === "prompt" && !context.signal.aborted && settledState.status === "running" && workerUsageLimitReason(settledState, workerId)) {
+				const task = settledState.tasks.find(task => task.assignment?.workerId === workerId);
+				// Native work has drained. Hand unfinished work to an eligible peer
+				// without charging a task failure or granting this worker more requests.
+				if (task && !task.pending) {
+					try { await context.worker.dispatch("task.yield", { taskId: task.id, blocker: null }); }
+					catch (error) {
+						if (context.signal.aborted && ["GUIDANCE", "FENCED", "STATE", "TIME_LIMIT"].includes(error.code)) outcome = "interrupted";
+						else failure ??= error;
+					}
+				}
+			}
 			if (outcome !== "settled" && this.#finalRequest?.turnId === context.id) this.#finalRequest = undefined;
 			await this.#controller.system("session.turn.end", { id: context.id, outcome });
 			entry.active = null;
@@ -379,8 +396,10 @@ export class SwarmSessions {
 
 	#coordinate(preferredWorkerId) {
 		if (this.#closed || this.#quiescence || this.#usageBlocked || this.#finalRequest || this.#finalizing) return;
+		const state = this.#controller.snapshot();
 		const unavailable = new Set([...this.#active.keys(), ...this.#queue.keys()]);
-		const handoffs = coordinationHandoffs(this.#controller.snapshot(), unavailable, this.#handoffs, preferredWorkerId);
+		const eligibleWorkers = state.workers.filter(worker => !workerUsageLimitReason(state, worker.id));
+		const handoffs = coordinationHandoffs({ ...state, workers: eligibleWorkers }, unavailable, this.#handoffs, preferredWorkerId);
 		for (const handoff of handoffs) {
 			if (this.#enqueue(handoff.workerId, handoff.reason)) this.#handoffs.add(handoff.key);
 		}
@@ -467,10 +486,10 @@ export class SwarmSessions {
 	async resume({ reconciled = false, restart = false } = {}) {
 		this.#admission?.assert();
 		check(!this.#active.size && !this.#drain, "UNSETTLED", "Settle session preparation and execution before continuation");
-		check(restart || !usageLimitReason(this.#controller.snapshot()), "USAGE_LIMIT", "Explicit restart/fresh objective required for exhausted or unmeasured model allowance");
+		check(restart || !aggregateUsageLimitReason(this.#controller.snapshot()), "USAGE_LIMIT", "Explicit restart/fresh objective required for exhausted or unmeasured model allowance");
 		await this.#controller.owner(restart ? "run.restart" : "run.resume", { reconciled });
 		this.#finalVerificationFailed = false;
-		this.#usageBlocked = Boolean(usageLimitReason(this.#controller.snapshot()));
+		this.#usageBlocked = Boolean(aggregateUsageLimitReason(this.#controller.snapshot()));
 	}
 
 	async pause({ timeoutMs = 5000, stop = false } = {}) {

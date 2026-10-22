@@ -72,9 +72,10 @@ function addTopics(f, count = 1) {
 }
 
 // Run the same SDK contract on each host; report the actual platform explicitly.
-test("managed Pi 1.0.4 verification boundary", t => {
-	t.diagnostic(`Verified host platform: ${process.platform}`);
-	assert.equal(JSON.parse(readFileSync(join(sdk, "package.json"), "utf8")).version, "1.0.4");
+test("managed Pi SDK verification boundary", t => {
+	const version = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8")).version;
+	t.diagnostic(`Verified host platform: ${process.platform}; Pi ${version}`);
+	assert.ok(["1.0.4", "1.2.0"].includes(version), `Pi ${version} needs explicit SDK contract revalidation`);
 });
 
 test("actual extension appendEntry persists/renders topics, batches and deduplicates only the active run/branch without turns", async t => {

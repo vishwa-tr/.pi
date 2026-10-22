@@ -24,7 +24,8 @@ export function usageTotals(state) {
 		}) };
 }
 
-export function usageLimitReason(state) {
+/** Limits shared by every worker, independent of worker identity. */
+export function aggregateUsageLimitReason(state) {
 	const { total } = usageTotals(state);
 	const limits = state.limits ?? {};
 	if (limits.modelRequests !== undefined && total.requests >= limits.modelRequests) return "modelRequests";
@@ -32,7 +33,14 @@ export function usageLimitReason(state) {
 	if (tokenLimited && (total.unknownResponses || total.unresolvedResponses)) return "unmeasured response";
 	if (limits.uncachedInputTokens !== undefined && total.input >= limits.uncachedInputTokens) return "uncachedInputTokens";
 	if (limits.outputTokens !== undefined && total.output >= limits.outputTokens) return "outputTokens";
+	return null;
+}
+
+/** Only this worker's limits; callers must also check aggregate limits. */
+export function workerUsageLimitReason(state, workerId) {
+	const limits = state.limits ?? {};
 	for (const worker of state.sessions?.usage ?? []) {
+		if (worker.workerId !== workerId) continue;
 		if (limits.workerModelRequests !== undefined && worker.requests >= limits.workerModelRequests) return `${worker.workerId}: workerModelRequests`;
 		const tokenLimited = limits.workerUncachedInputTokens !== undefined || limits.workerOutputTokens !== undefined;
 		if (tokenLimited && (worker.unknownResponses || worker.pending.length && !state.sessions.turns.some(turn => turn.workerId === worker.workerId))) return `${worker.workerId}: unmeasured response`;
@@ -42,9 +50,27 @@ export function usageLimitReason(state) {
 	return null;
 }
 
+/** Worker-specific blockers are visible without presenting them as a run-wide stop. */
+export function workerUsageBlockers(state) {
+	return (state.sessions?.usage ?? []).map(({ workerId }) => ({ workerId, reason: workerUsageLimitReason(state, workerId) }))
+		.filter(row => row.reason !== null);
+}
+
+/** Combined status preserved for existing callers. */
+export function usageLimitReason(state) {
+	const aggregate = aggregateUsageLimitReason(state);
+	if (aggregate) return aggregate;
+	for (const worker of state.sessions?.usage ?? []) {
+		const reason = workerUsageLimitReason(state, worker.workerId);
+		if (reason) return reason;
+	}
+	return null;
+}
+
 export function recordRequest(state, payload) {
 	check(state.status === "running" && state.sessions.turns.some(turn => turn.workerId === payload.workerId), "FENCED", "A current worker turn is required");
-	check(!usageLimitReason(state), "USAGE_LIMIT", "Worker model allowance exhausted or unmeasured");
+	check(!aggregateUsageLimitReason(state), "USAGE_LIMIT", "Aggregate model allowance exhausted or unmeasured");
+	check(!workerUsageLimitReason(state, payload.workerId), "USAGE_LIMIT", "Worker model allowance exhausted or unmeasured");
 	check(typeof payload.id === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(payload.id), "INPUT", "Invalid request identifier");
 	state.sessions.usage ??= [];
 	let worker = state.sessions.usage.find(row => row.workerId === payload.workerId);

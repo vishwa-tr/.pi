@@ -20,7 +20,7 @@ import { WorkspaceRuntime } from "./workspace.mjs";
 import { releaseStaleLease } from "./store/lease.mjs";
 import { readSessionHistory } from "./sdk-session.mjs";
 import { DEFAULT_LIMITS, reduceEvent } from "./state.mjs";
-import { ModeGate, requestSafety } from "./host-gates.mjs";
+import { ModeGate, requestSafety, DEFAULT_SAFETY_TIMEOUT_MS } from "./host-gates.mjs";
 import { inspectRecovery } from "./recovery-inspection.mjs";
 import { validateWorkerContext } from "./context/fork.mjs";
 import { inspectCheckout, specificationFingerprint } from "./host-approval.mjs";
@@ -73,7 +73,7 @@ export class SwarmHost {
 	#recovery;
 	#transition;
 
-	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = 30000, tickIntervalMs = 1000, runner, beforePrompt = async () => { }, providerCapability, nativeModels = false }) {
+	constructor({ events, sessionId, requestApproval, modelRuntime, mainModel, thinkingLevel = "off", codingTools = ["read", "edit", "write", "bash"], instructions = "", approvalTimeoutMs = 120000, safetyTimeoutMs = DEFAULT_SAFETY_TIMEOUT_MS, tickIntervalMs = 1000, runner, beforePrompt = async () => { }, providerCapability, nativeModels = false }) {
 		check(typeof requestApproval === "function", "INPUT", "Human approval callback required");
 		for (const timeout of [approvalTimeoutMs, safetyTimeoutMs]) check(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 600000, "INPUT", "Invalid approval timeout");
 		const descriptor = providerCapability === undefined ? undefined : providerDescriptor(providerCapability);

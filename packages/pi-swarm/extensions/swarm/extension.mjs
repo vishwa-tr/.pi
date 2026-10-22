@@ -368,7 +368,8 @@ function configureSwarmExtension({ modelRuntime, mainModel, thinkingLevel = "off
 			let accepted;
 			if (args.proposalId !== undefined) {
 				check(Object.keys(args).every(key => ["action", "proposalId"].includes(key)), "INPUT", "Confirmation cannot replace proposal fields");
-				check(proposal?.id === args.proposalId && proposal.action === action && proposal.confirmed, "AUTHORITY", "Current explicit owner confirmation is required");
+				check(proposal?.id === args.proposalId && proposal.action === action, "PROPOSAL_REQUIRED", "Prepare a current proposal before confirmation");
+				check(proposal.confirmed, "PROPOSAL_UNCONFIRMED", "Confirm the current proposal in owner chat");
 				accepted = proposal;
 				// Consume before any await. Errors and cancellation never restore consent.
 				proposal = undefined;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter, getEventListeners } from "node:events";
 import test from "node:test";
-import { ModeGate, requestSafety } from "../extensions/swarm/host-gates.mjs";
+import { ModeGate, requestSafety, DEFAULT_SAFETY_TIMEOUT_MS } from "../extensions/swarm/host-gates.mjs";
 
 const QUERY = "pi-plan:query-mode";
 const CHANGE = "pi-plan:mode-changed";
@@ -480,4 +480,20 @@ test("malformed safety inputs and deadlines deny before emission", async () => {
 		assert.deepEqual(await requestSafety({ events, request, timeoutMs }), { approved: false });
 	}
 	assert.equal(emissions, 0);
+});
+
+
+test("default Safety deadline gives the provider two minutes without removing cancellation", async t => {
+	assert.equal(DEFAULT_SAFETY_TIMEOUT_MS, 120000);
+	const delays = [];
+	const original = globalThis.setTimeout;
+	t.mock.method(globalThis, "setTimeout", (fn, delay, ...args) => { delays.push(delay); return original(fn, delay, ...args); });
+	const parent = new AbortController();
+	let providerSignal;
+	const pending = safetyWith(request => { providerSignal = request.signal; return new Promise(() => {}); }, { signal: parent.signal });
+	assert.deepEqual(delays, [120000]);
+	assert.equal(providerSignal.aborted, false);
+	parent.abort();
+	assert.deepEqual(await pending, { approved: false });
+	assert.equal(providerSignal.aborted, true);
 });

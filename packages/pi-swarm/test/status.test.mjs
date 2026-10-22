@@ -94,3 +94,14 @@ test("explicit task and message pages reach beyond compact caps without dispatch
 	assert.equal((await invoke({ channel: "tasks", taskId: "task54" })).details.tasks[0].id, "task54");
 	assert.equal((await invoke({ channel: "messages" })).details.messages[0].text, "private history");
 });
+
+
+test("worker cap is reported separately from aggregate exhaustion", () => {
+	const state = snapshot("running");
+	state.run.limits.modelRequests = 4; state.run.limits.workerModelRequests = 2;
+	state.run.sessions.usage = [{ workerId: "worker", requests: 2, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, unknownResponses: 0, pending: [], completed: [] }];
+	assert.equal(budgetStatus(state).usageBlocker, null);
+	assert.deepEqual(budgetStatus(state).workerUsageBlockers, [{ workerId: "worker", reason: "worker: workerModelRequests" }]);
+	state.run.limits.modelRequests = 2;
+	assert.equal(budgetStatus(state).usageBlocker, "modelRequests");
+});

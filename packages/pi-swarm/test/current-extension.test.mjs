@@ -133,6 +133,19 @@ for (const text of ["yes", "confirm", "YES!", "Start", "START", " start", "start
 	assert.equal(f.auth(), 0); assert.equal(f.calls.length, 0);
 	assert.equal(existsSync(prepareLayout(f.ctx.cwd, "run1").stateRoot), false);
 });
+test("missing and unconfirmed proposals return actionable distinct diagnostics without dispatch", async t => {
+	const f = await fixture(t); f.select("first");
+	const p = (await f.tool("swarm_start", { objective: "Current proposal" })).details;
+	const unconfirmed = await f.consume(p);
+	assert.equal(unconfirmed.details.diagnostic.code, "PROPOSAL_UNCONFIRMED");
+	assert.match(unconfirmed.details.error, /explicit owner confirmation/);
+	await f.input("not approval");
+	const revoked = await f.consume(p);
+	assert.equal(revoked.details.diagnostic.code, "PROPOSAL_REQUIRED");
+	assert.match(revoked.details.error, /Prepare a fresh proposal/);
+	assert.equal(f.auth(), 0);
+	assert.equal(f.calls.length, 0);
+});
 test("literal complete agreement renders at narrow widths without expansion", async t => {
 	const f = await fixture(t); f.select("first");
 	const objective = '**literal** `name` [label](https://example.invalid/full/destination) \\path\\file\nnext "quoted" ``` fence 界';

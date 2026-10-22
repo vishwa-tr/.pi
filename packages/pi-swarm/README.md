@@ -60,6 +60,9 @@ a model call; the main agent can choose settings appropriate to the task.
 
 No affirmative reply means no execution. Chat proposals have no time limit: taking a break
 before replying, or before the main agent consumes confirmation, does not expire them.
+Missing/revoked and still-unconfirmed proposals return distinct diagnostics with
+the next required step; neither condition launches work or infers approval.
+
 Confirmation is still single-use and bound to the owning session/project, host model and
 thinking level, provider, mode, ownership, run revision and inspected workspace. Execution
 revalidates the complete agreement and current workspace; changes invalidate it and require
@@ -163,8 +166,9 @@ reload never dispatches either objective.
 
 ## Requirements and optional integrations
 
-Use managed **Pi 1.0.4** and **Node 22.19+**. Linux is the verified runtime and PTY test
-platform. Storage avoids POSIX-only ownership checks and directory fsync on Windows;
+Use managed **Pi 1.0.4 or 1.2.0** and **Node 22.19+**. Linux is the verified
+runtime; the SDK suite retains an explicit version allowlist so future upgrades
+still require revalidation. Pi 1.0.4 is the original PTY test baseline. Storage avoids POSIX-only ownership checks and directory fsync on Windows;
 Windows terminal/process behavior has not been verified by this test run. Journal
 paths are checked independently of OS no-follow flags before reading or writing. Native Windows end-to-end behavior remains unverified. Bash must be
 available for the native Bash tool. Git is optional: Swarm does not initialize repositories
@@ -395,6 +399,21 @@ exclusives remain FIFO and block new mutations; own already-admitted mutations d
 Main and worker status show bounded claim owners, task IDs, operation purposes and stages
 (queued, Safety approval, inspection, execution, settlement or unknown settlement), without
 commands or target paths. Cancellation is only a request until the callback/process settles.
+
+Safety requests have a bounded two-minute default lifetime, matching the confirmation
+provider's review window instead of expiring after 30 seconds. Stop, mode/session
+changes and cancellation still revoke them immediately; late approval never executes.
+No request is approved automatically when its deadline expires.
+
+File claims reserve workspace mutations; ordinary reads need no claim. Native read
+and image tools stay inside the workspace. Explicitly scoped external inputs may be
+read through normally gated Bash commands; this does not grant broad external access.
+Store generated review images in an approved workspace output directory.
+
+Finish artifact writes before the final read-only verification, then submit its current
+successful receipt without intervening mutations. A stale-receipt rejection calls for
+fresh verification in the admitted task, not a new run or owner approval. Safety denials
+remain distinct and must never be retried or treated as stale evidence.
 
 A refused or timed-out worker approval fences further writes/edits/shell requests for that
 assignment/cycle/generation without reopening Safety. Guidance updates do not clear that
@@ -725,9 +744,12 @@ No failed/interrupted turn causes an automatic mail retry.
 Optional launch `limits` fields are `modelRequests`, `uncachedInputTokens` and
 `outputTokens` (positive integers). `workerModelRequests`,
 `workerUncachedInputTokens` and `workerOutputTokens` apply separate allowances
-to each worker rather than the aggregate. Exhausting any configured worker cap
-fences new run requests; peers already executing still settle normally. They appear in the inspected agreement and
-persist in the journal. Existing journals without these limits remain readable;
+to each worker rather than the aggregate. An exhausted worker cannot make another
+model request or borrow a peer's allowance, but eligible peers continue in the same
+approved run. Native work already admitted settles normally; unfinished assignments
+are yielded without charging a task failure so an eligible peer can take the handoff.
+Aggregate exhaustion still fences all new model requests and pauses after settlement.
+The limits appear in the inspected agreement and persist in the journal. Existing journals without these limits remain readable;
 the limits are opt-in and never silently added to an existing run.
 
 `usage` reports admitted requests and measured input/cache/output per worker for

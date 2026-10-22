@@ -48,7 +48,7 @@ function collaborationDefinitions() {
 		},
 		{
 			name: "swarm_files", label: "Swarm files",
-			description: "Atomically claim all requested file paths or release your idle claims. Reread after a new claim and coordinate conflicts; never force a handoff during mutation.",
+			description: "Atomically claim workspace file paths for mutation or release your idle claims. Reads need no file claim; external paths cannot be claimed. Reread after a new claim and coordinate conflicts; never force a handoff during mutation.",
 			parameters: Type.Union([
 				object({ action: Type.Literal("claim"), paths: strings() }),
 				object({ action: Type.Literal("release") }),
@@ -61,7 +61,7 @@ function collaborationDefinitions() {
 		},
 		{
 			name: "swarm_report", label: "Swarm report",
-			description: "Submit a candidate with real current execution receipt IDs, or independently review a candidate. After reporting, stop and await runtime settlement; this does not complete the run.",
+			description: "Submit a candidate with real current execution receipt IDs, or independently review a candidate. Finish artifact writes first, then run a read-only verification; stale receipts require a fresh verification, not lifecycle approval. After reporting, stop and await runtime settlement; this does not complete the run.",
 			parameters: Type.Union([
 				object({ action: Type.Literal("submit"), summary: Type.String(), receipts: strings() }),
 				object({ action: Type.Literal("review"), approved: Type.Boolean(), summary: Type.String() }),

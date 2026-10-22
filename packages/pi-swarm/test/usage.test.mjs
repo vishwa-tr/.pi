@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { reduceSession } from "../extensions/swarm/session-state.mjs";
-import { usageTotals, usageLimitReason, measuredUsage } from "../extensions/swarm/usage.mjs";
+import { usageTotals, usageLimitReason, aggregateUsageLimitReason, workerUsageLimitReason, measuredUsage } from "../extensions/swarm/usage.mjs";
 import { workerStatus, incomingMessages } from "../extensions/swarm/worker-context.mjs";
 import { buildTurnPrompt } from "../extensions/swarm/specializations.mjs";
 import { machine } from "./helpers.mjs";
@@ -73,11 +73,49 @@ test("per-worker allowances remain separate and an exhausted role cannot borrow 
 	assert.match(usageLimitReason(run), /one: workerModelRequests/);
 	const workers = usageTotals(run).workers;
 	assert.equal(workers[0].budgets.modelRequests.remaining, 0); assert.equal(workers[1].budgets.modelRequests.remaining, 1);
-	assert.throws(() => apply(run, "session.request", { id: "d", workerId: "two" }), error => error.code === "USAGE_LIMIT");
+	assert.throws(() => apply(run, "session.request", { id: "d", workerId: "one" }), error => error.code === "USAGE_LIMIT");
+	apply(run, "session.request", { id: "peer-second", workerId: "two" });
+	assert.equal(usageTotals(run).workers[1].requests, 2);
 	assert.throws(() => machine({ workerModelRequests: 0 }));
 });
 
 test("synthetic error/abort zero counters never establish measured zero token usage", () => {
 	assert.equal(measuredUsage({ stopReason: "error", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }), null);
 	assert.equal(measuredUsage({ stopReason: "aborted", usage: sample }), null);
+});
+
+for (const limits of [{ modelRequests: 2 }, { uncachedInputTokens: 200 }, { outputTokens: 100 }]) test(`aggregate admission remains global for ${JSON.stringify(limits)}`, () => {
+	const run = state({ ...limits, workerModelRequests: 1 });
+	apply(run, "session.request", { id: "first", workerId: "one" });
+	apply(run, "session.usage", { id: "first", workerId: "one", usage: sample });
+	assert.equal(aggregateUsageLimitReason(run), null);
+	assert.equal(workerUsageLimitReason(run, "one"), "one: workerModelRequests");
+	assert.equal(workerUsageLimitReason(run, "two"), null);
+	run.sessions.usage.push({ ...structuredClone(run.sessions.usage[0]), workerId: "two", pending: [], completed: [] });
+	assert.ok(aggregateUsageLimitReason(run));
+	assert.throws(() => apply(run, "session.request", { id: "third", workerId: "two" }), error => error.code === "USAGE_LIMIT");
+});
+
+test("aggregate unknown response fencing is independent of worker identity", () => {
+	const run = state({ outputTokens: 100 });
+	apply(run, "session.request", { id: "unknown", workerId: "one" });
+	apply(run, "session.usage", { id: "unknown", workerId: "one", usage: null });
+	assert.equal(aggregateUsageLimitReason(run), "unmeasured response");
+	assert.throws(() => apply(run, "session.request", { id: "peer", workerId: "two" }), error => error.code === "USAGE_LIMIT");
+});
+
+for (const [key, expected] of [["workerUncachedInputTokens", "workerUncachedInputTokens"], ["workerOutputTokens", "workerOutputTokens"]]) test(`unmeasured and exhausted ${key} fence only the affected worker`, () => {
+	const run = state({ [key]: 50 });
+	apply(run, "session.request", { id: "limited", workerId: "one" });
+	apply(run, "session.usage", { id: "limited", workerId: "one", usage: sample });
+	assert.equal(workerUsageLimitReason(run, "one"), `one: ${expected}`);
+	assert.equal(aggregateUsageLimitReason(run), null);
+	apply(run, "session.request", { id: "peer", workerId: "two" });
+	assert.throws(() => apply(run, "session.request", { id: "blocked", workerId: "one" }), error => error.code === "USAGE_LIMIT");
+	const unknown = state({ [key]: 50 });
+	apply(unknown, "session.request", { id: "unknown", workerId: "one" });
+	apply(unknown, "session.usage", { id: "unknown", workerId: "one", usage: null });
+	assert.equal(workerUsageLimitReason(unknown, "one"), "one: unmeasured response");
+	assert.equal(aggregateUsageLimitReason(unknown), null);
+	apply(unknown, "session.request", { id: "peer", workerId: "two" });
 });

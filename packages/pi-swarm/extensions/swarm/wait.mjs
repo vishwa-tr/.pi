@@ -1,5 +1,5 @@
 import { requireCondition as check } from "./errors.mjs";
-import { usageLimitReason } from "./usage.mjs";
+import { aggregateUsageLimitReason, workerUsageBlockers } from "./usage.mjs";
 
 /** Ignore clock ticks and routine mail/counter changes; observe settled task states. */
 export function transitionKey(snapshot) {
@@ -7,7 +7,7 @@ export function transitionKey(snapshot) {
 	return JSON.stringify(run ? { status: run.status, cycle: run.cycle, generation: run.generation, guidanceRevision: run.guidanceRevision, ownershipHeld: snapshot.ownershipHeld ?? null,
 		tasks: run.tasks.map(task => ({ id: task.id, status: task.status, blocker: task.blocker ?? null })),
 		uncertain: run.workspace?.operations.filter(operation => operation.uncertain).length ?? null,
-		errors: Boolean(snapshot.errors?.length || snapshot.driver?.errors?.length), usageBlocker: usageLimitReason(run),
+		errors: Boolean(snapshot.errors?.length || snapshot.driver?.errors?.length), usageBlocker: aggregateUsageLimitReason(run), workerUsageBlockers: workerUsageBlockers(run),
 	} : { status: "unattached" });
 }
 

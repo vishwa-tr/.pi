@@ -1,5 +1,7 @@
 import { SwarmError } from "./errors.mjs";
 
+export const DEFAULT_SAFETY_TIMEOUT_MS = 120_000;
+
 const MODE_KEYS = [
 	"version", "instanceId", "revision", "contextRevision", "ready", "sessionId",
 	"selectedMode", "enforcedMode", "runMode", "pendingChange",
@@ -204,7 +206,7 @@ function safetyResult(value) {
 }
 
 /** One synchronous claimant, bounded asynchronous approval, and request-local cancellation. */
-export async function requestSafety({ events, request, signal, timeoutMs = 30_000, probe = false }) {
+export async function requestSafety({ events, request, signal, timeoutMs = DEFAULT_SAFETY_TIMEOUT_MS, probe = false }) {
 	const controller = new AbortController();
 	let copiedRequest;
 	try { copiedRequest = safetyRequest(request, controller.signal); }
