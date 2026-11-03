@@ -89,13 +89,12 @@ test("idle Quick-mode custom wake receives current restrictions rather than hist
 });
 
 
-test("a cold Plan custom wake preserves an explicit skill selection when metadata is unavailable", async t => {
+test("a cold Plan custom wake receives Plan instructions without planning guidance and drops a legacy template selection", async t => {
 	const f = await fixture(t, { mode: "plan", selectedPlanSkill: "explicit-template" });
 	f.state.run.messages.push({ id: "cold-plan", from: "worker", to: "owner", text: "Read-only audit wake.", cycle: 1, generation: 0 });
 	f.progress.launched(); await until(() => f.calls.length === 1 && f.session.isIdle);
 	const instructions = getCurrentSystemPrompt(f.calls[0].context.messages);
 	assert.match(instructions, /Plan mode is active/);
-	assert.match(instructions, /explicit-template/);
-	const selected = f.manager.getBranch().filter(entry => entry.type === "custom" && entry.customType === "plan-mode.state").at(-1);
-	assert.equal(selected.data.selectedPlanSkill, "explicit-template");
+	assert.match(instructions, /save_plan/);
+	assert.doesNotMatch(instructions, /explicit-template|plan_template|planning skill/);
 });

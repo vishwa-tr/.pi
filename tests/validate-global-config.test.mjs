@@ -81,7 +81,7 @@ test("configuration validation follows the shared documents layout and retains s
       assert.equal(existsSync(join(fixture, ".agents", "mcp")), false);
       const result = validate(fixture);
       assert.equal(result.status, 0, result.output);
-      assert.match(result.output, /27 global skills/);
+      assert.match(result.output, /20 global skills/);
     });
     await t.test("artifact boundary: local paths stay ignored in the owning submodule", () => {
       withChangedFile(fixture, ".agents/.gitignore",
@@ -223,12 +223,6 @@ test("configuration validation follows the shared documents layout and retains s
         suite.evals = suite.evals.filter((item) => item.id !== 21);
         return JSON.stringify(suite);
       }, () => assertFailure(fixture, "github-issue-maintenance eval IDs"));
-    });
-    await t.test("rejects the old Plan skill name in runtime discovery", () => {
-      withChangedFile(fixture, "packages/pi-plan/extensions/plan/index.ts",
-        (text) => text.replace('const PLAN_SKILL_NAME = "pi-plan-mode";', 'const PLAN_SKILL_NAME = "plan";'), () => {
-          assertFailure(fixture, 'const PLAN_SKILL_NAME = "pi-plan-mode";');
-        });
     });
     await t.test("rejects a submodule configured for the wrong repository", () => {
       withChangedFile(fixture, ".gitmodules",

@@ -8,7 +8,7 @@ Host-managed Discuss, Plan, and Quick modes for Pi. Off remains the normal unres
 |---|---|---|
 | **Off** | Normal Pi behavior | The exact tool set that was active before entering a restricted mode |
 | **Discuss** (`󰍩`) | Normal response length and structure | Quick tools plus trusted `ask_user` and `show_files` |
-| **Plan** (``) | Research and save a decision-complete Markdown plan | trusted read/UI/session tools, `save_plan`, and scoped read-only `subagent_*` tools |
+| **Plan** (``) | Read-only work, plus saving a Markdown plan document | trusted read/UI/session tools, `save_plan`, and scoped read-only `subagent_*` tools |
 | **Quick** (`󱐋`) | Quick chat, normally 1–4 short sentences | trusted built-in `read`, `grep`, `find`, `ls` only |
 
 Quick's length rule is a host-injected prompt rule, not a provider-level token cap. The tool restrictions are host-enforced with both active-tool filtering and a default-deny `tool_call` guard.
@@ -17,20 +17,18 @@ Quick's length rule is a host-injected prompt rule, not a provider-level token c
 
 - `/discuss` — toggle Discuss mode; `/discuss <message>` enables it and sends the message.
 - `/plan` — toggle Plan mode.
-- `/plan <task>` — enable Plan mode, automatically select the best tagged supplemental Plan skill, and begin planning.
-- `/plan --skill <name> <task>` — force one tagged supplemental Plan skill for the task.
+- `/plan <task>` — enable Plan mode and send the task.
 - `/quick` — toggle Quick mode; `/quick <message>` enables it and sends the message.
 - `/discuss|plan|quick on|off|exit|toggle|status` — explicit mode control.
 - `Shift+Tab` — cycle `Off → Discuss → Plan → Quick → Off` at any time.
-- `/skill:pi-plan-mode <task>` — invoke the Pi-specific base planning procedure for one task without enabling the host-enforced mode guard or `save_plan`.
 
 Mode controls are accepted while the agent is running. Selecting a different mode aborts the old run so its prompt and tool policy cannot carry into later work; the latest selection is persisted and becomes effective after `agent_settled`. If the user submits ordinary interactive input or an RPC `prompt` during that short transition, `pi-plan` holds it and starts it as a fresh top-level turn after settlement. Multiple held messages start one at a time on successive settled turns, and an item remains queued until its replacement run reaches `agent_start`. A busy `/discuss <message>`, `/plan <task>`, or `/quick <message>` follows the same fresh-turn boundary. A newer mode request cancels an older waiting command task. Explicit RPC `steer` and `follow_up` operations retain their native meaning and are not rerouted.
 
-Routine mode transitions are silent because the footer already shows the selected next-turn state. Invalid-command errors, deferred-input notices, queued-task cancellation notices, fallback warnings, and explicit `status` responses remain visible.
+Routine mode transitions are silent because the footer already shows the selected next-turn state. Invalid-command errors, deferred-input notices, queued-task cancellation notices, and explicit `status` responses remain visible.
 
 Every provider request receives an authoritative current-mode prompt block, including native custom-message/mail wakeups. In Off mode, that block disables only pi-plan's Discuss, Plan, and Quick restrictions, marks earlier mode claims as historical, and preserves every other current instruction, safety policy, and active-tool restriction.
 
-The selected mode, explicit Plan skill, authorized Plan path, and Plan-spawned subagent scope are persisted as branch-local session state. Reload, resume, fork, and `/tree` restore state from the active branch; legacy `{ enabled: boolean }` Plan entries migrate to `plan` or `off`. A new session starts Off.
+The selected mode, authorized Plan path, and Plan-spawned subagent scope are persisted as branch-local session state. Reload, resume, fork, and `/tree` restore state from the active branch; legacy `{ enabled: boolean }` Plan entries migrate to `plan` or `off`. A new session starts Off.
 
 While a restricted mode is active, `pi-plan` publishes its plain mode label under the legacy-compatible `plan-mode` status key. `pi-status-line` renders that dedicated footer segment.
 
@@ -69,25 +67,9 @@ Both channels supply the same read-only snapshot shape:
 
 Consumers requiring unrestricted mode must require a ready snapshot for their current session, **both selected and enforced modes Off**, and no pending change. Missing, malformed, unsupported, or stale responses must not grant permission. Bind approvals to the instance/session/context epoch and revoke on restrictive snapshots or epoch changes; becoming Off again is not renewed approval. Queries validate `version: 1` and a callable `respond`, and never persist state or change mode. This cooperative bridge is not a security boundary against other installed extensions.
 
-## Plan-skill templates
+## Plan instructions
 
-The base `pi-plan-mode` skill always supplies the host-controlled planning and save boundaries. It is a Pi runtime adapter rather than a portable general planning skill. Supplemental skills opt into routing with this top-level frontmatter field:
-
-```yaml
----
-name: specialized-planning
-plan-template: true
-description: Describe precisely which planning tasks should select this template.
----
-```
-
-For `/plan <task>`, Plan mode presents up to 20 tagged, model-invocable skill names, descriptions, and paths to the model. Descriptions are capped at Pi's 1024-character skill limit. The model selects at most one matching template and loads its `SKILL.md` with `read`, preserving Pi's bounded progressive-disclosure behavior instead of injecting every template body. If none is relevant, it follows only the base skill. Skills with `disable-model-invocation: true` are excluded from automatic routing.
-
-`/plan --skill <name> <task>` is an explicit user invocation, so it may select a tagged skill with `disable-model-invocation: true`. The command validates that the skill is loaded, tagged, readable, and at most 50 KiB, then injects that template directly on every turn for the current plan. A later automatic `/plan <task>` clears the explicit selection. If a selected template disappears or becomes invalid after reload/resume, the persisted override is cleared and routing falls back to automatic selection.
-
-When a supplemental template defines a mandatory output structure, that structure overrides the base skill's default section layout; the base safety and save boundaries still apply.
-
-The directly cloneable global configuration exposes the repository's root `.agents/skills/` directory through Pi's normal global discovery. The extension consumes Pi's loaded skill descriptors instead of hard-coding a repository path or contributing duplicate resources. Adding a future shared template requires only `plan-template: true`; the current tagged templates are `general-planning` and `software-implementation-planning`. Tagged, model-invocable skills from any normal global, project, package, settings, or CLI location become automatic candidates.
+Plan mode does not tell the agent how to plan and does not load a planning skill or template. Its host-injected instructions cover only the mode boundary, the enforced tool policy, Plan-subagent limits, and how to save through `save_plan`. Ask the agent to follow whichever planning guide applies, such as a shared planning document.
 
 ## Tool policy
 
@@ -147,10 +129,6 @@ Writes use Pi's shared per-file mutation queue and an fsynced same-directory tem
 
 This global setup reserves `Shift+Tab` for mode cycling by remapping Pi's built-in thinking-cycle action to `Alt+T` in root `keybindings.json`. Without that companion remap, Pi treats `Shift+Tab` as a reserved built-in shortcut and skips the extension shortcut; the slash commands remain available.
 
-## Shared skill
-
-The canonical base skill is root `.agents/skills/pi-plan-mode/SKILL.md`. Pi discovers it as a normal global skill when this repository is cloned to `~/.pi/agent`; the package manifest therefore registers only the extension and does not duplicate the skill.
-
 ## Tests
 
 ```bash
@@ -159,8 +137,7 @@ node --test \
   packages/pi-plan/extensions/plan/mode-lifecycle.test.ts \
   packages/pi-plan/extensions/plan/policy.test.ts \
   packages/pi-plan/extensions/plan/prompts.test.ts \
-  packages/pi-plan/extensions/plan/save.test.ts \
-  packages/pi-plan/extensions/plan/templates.test.ts
+  packages/pi-plan/extensions/plan/save.test.ts
 ```
 
 Factory-level bridge tests use the real public SDK event bus and stubbed host handlers, without starting a session or calling a model. With the package's SDK peers resolvable (or an installed-SDK resolution preloader), run:
@@ -169,7 +146,7 @@ Factory-level bridge tests use the real public SDK event bus and stubbed host ha
 node --test packages/pi-plan/extensions/plan/mode-bridge.integration.test.ts
 ```
 
-An offline RPC `get_commands` smoke test should report `discuss`, `plan`, `quick`, and `skill:pi-plan-mode`, confirming that the package and shared skill load successfully.
+An offline RPC `get_commands` smoke test should report `discuss`, `plan`, and `quick`, confirming that the package loads successfully.
 
 
 ## Stable request prefixes
@@ -183,10 +160,9 @@ That old path changed the cacheable prefix and omitted current-mode instructions
 on custom wakes.
 
 Unchanged mode instructions now produce a consistent prefix for ordinary input,
-retries and native mail wakes. A real mode/skill-policy change intentionally
+retries and native mail wakes. A real mode change intentionally
 changes instructions; cache reuse must never preserve obsolete restrictions.
-A cold Plan wake without skill metadata uses the conservative Plan fallback and
-preserves an explicit selection instead of clearing it as supposedly missing.
+A cold Plan wake receives the same Plan instructions as an ordinary turn.
 
 The managed-SDK regression exercises actual Swarm mail delivery and the real
 Codex payload serializer, stopping at `onPayload` before headers/transport:
