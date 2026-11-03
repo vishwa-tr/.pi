@@ -13,10 +13,10 @@ test("Pi discovers the shared skills through its compatibility directory", async
   try {
     const { loadSkills } = await import(pathToFileURL(join(findPiPackage(), "dist/index.js")).href);
     const result = loadSkills({ cwd: temporary, agentDir: join(root, "agent"), skillPaths: [], includeDefaults: true });
-    assert.equal(result.skills.length, 27);
+    assert.equal(result.skills.length, 20);
     assert.deepEqual(result.diagnostics, []);
     const names = new Set(result.skills.map((skill) => skill.name));
-    for (const oldName of ["coding", "code-conventions", "readable-code", "reviewable-code", "api-endpoint-blueprint", "frontend-backend-call", "live-notifications", "i18n", "privacy", "gh", "using-git-worktrees", "containerized-development", "agent-hook-design"]) {
+    for (const oldName of ["coding", "code-conventions", "readable-code", "reviewable-code", "api-endpoint-blueprint", "frontend-backend-call", "live-notifications", "i18n", "privacy", "gh", "using-git-worktrees", "containerized-development", "agent-hook-design", "fullstack-blueprint", "decision-by-decision-planning", "slice-by-slice-implementation", "software-implementation-planning", "general-planning", "pi-plan-mode", "plan"]) {
       assert.equal(names.has(oldName), false, `${oldName} must not remain discoverable`);
     }
     for (const skill of result.skills) {

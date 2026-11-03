@@ -19,7 +19,6 @@ import {
 	nextAgentMode,
 	parseAgentModeState,
 	parseModeCommand,
-	parsePlanCommand,
 	PLAN_SUBAGENT_TOOL_NAMES,
 	restrictedModeTools,
 	SAVE_PLAN_TOOL,
@@ -31,12 +30,6 @@ import {
 } from "./policy.ts";
 import { buildNonPlanModeInstructions, buildPlanModeInstructions } from "./prompts.ts";
 import { atomicWritePlan, resolvePlanTarget, validatePlanContent } from "./save.ts";
-import {
-	buildAutomaticTemplateInstructions,
-	discoverPlanTemplates,
-	loadSkillBody,
-	type PlanSkillDescriptor,
-} from "./templates.ts";
 
 const STATE_ENTRY = "plan-mode.state";
 const STATUS_KEY = "plan-mode";
@@ -45,7 +38,6 @@ const STATUS_TEXT: Record<Exclude<AgentMode, "off">, string> = {
 	plan: " plan mode", // nf-oct-tasklist
 	quick: "󱐋 quick mode", // nf-md-lightning-bolt
 };
-const PLAN_SKILL_NAME = "pi-plan-mode";
 const TASK_START_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFERRED_INPUT_START_TIMEOUT_MS = 30 * 1000;
 const PLAN_ENTRY_PATH = realpathSync(fileURLToPath(import.meta.url));
@@ -87,10 +79,6 @@ const TRUSTED_CUSTOM_TOOLS: TrustedCustomToolOwners = {
 	),
 };
 
-const FALLBACK_PLAN_INSTRUCTIONS = `Research and design the requested change without implementing it.
-Inspect the actual project first, resolve discoverable facts through read-only exploration, and use ask_user only for consequential choices that cannot be derived from the environment.
-Do not modify project files. You may delegate bounded research only to fresh ad-hoc one-shot subagents; the host forces their coding tools to read, grep, find, and ls. The only mutation permitted in host-managed Plan mode is saving the complete final Markdown plan through save_plan after its exact project-relative path is authorized. Finish with a concise, decision-complete implementation and test plan.`;
-
 function modeLabel(mode: AgentMode): string {
 	return mode === "off" ? "Off" : `${mode[0]!.toUpperCase()}${mode.slice(1)}`;
 }
@@ -113,19 +101,15 @@ export default function planExtension(pi: ExtensionAPI): void {
 	let modeIntentRevision = 0;
 	let authorizedPlanPath: string | undefined;
 	let authorizedProjectRoot: string | undefined;
-	let selectedPlanSkill: string | undefined;
 	let planSubagentAddresses = new Set<string>();
 	const admittedPlanSpawnCalls = new Set<string>();
 	let toolsBeforeRestrictedMode: string[] | undefined;
-	let warnedMissingSkill = false;
-	let warnedMissingSelectedTemplate = "";
 	let saveTail: Promise<void> = Promise.resolve();
 	let taskLaunchTail: Promise<void> = Promise.resolve();
 	let queuedCommandTaskCount = 0;
 	let pendingTaskLaunch: {
 		task: string;
 		revision: number;
-		prepare?: () => void;
 		inputAccepted: boolean;
 		resolve: (started: boolean) => void;
 		timer: ReturnType<typeof setTimeout>;
@@ -174,7 +158,6 @@ export default function planExtension(pi: ExtensionAPI): void {
 	function waitForTaskStart(
 		task: string,
 		revision: number,
-		prepare?: () => void,
 	): Promise<boolean> {
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => finishPendingTaskLaunch(false), TASK_START_TIMEOUT_MS);
@@ -182,7 +165,6 @@ export default function planExtension(pi: ExtensionAPI): void {
 			pendingTaskLaunch = {
 				task,
 				revision,
-				...(prepare ? { prepare } : {}),
 				inputAccepted: false,
 				resolve,
 				timer,
@@ -253,7 +235,6 @@ export default function planExtension(pi: ExtensionAPI): void {
 			...(authorizedPlanPath && authorizedProjectRoot
 				? { authorizedPlanPath, authorizedProjectRoot }
 				: {}),
-			...(selectedPlanSkill ? { selectedPlanSkill } : {}),
 			...(planSubagentAddresses.size > 0
 				? { planSubagentAddresses: [...planSubagentAddresses] }
 				: {}),
@@ -322,7 +303,6 @@ export default function planExtension(pi: ExtensionAPI): void {
 			&& restored.authorizedProjectRoot === currentProjectRoot;
 		authorizedPlanPath = authorizationMatchesProject ? restored.authorizedPlanPath : undefined;
 		authorizedProjectRoot = authorizationMatchesProject ? restored.authorizedProjectRoot : undefined;
-		selectedPlanSkill = restored.selectedPlanSkill;
 		planSubagentAddresses = new Set(restored.planSubagentAddresses ?? []);
 		applyModeTools(restored.mode);
 		updateStatus(ctx);
@@ -361,7 +341,6 @@ export default function planExtension(pi: ExtensionAPI): void {
 		task: string,
 		revision: number,
 		ctx: ExtensionCommandContext,
-		prepare?: () => void,
 	): Promise<void> {
 		queuedCommandTaskCount += 1;
 		try {
@@ -372,7 +351,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 					return;
 				}
 				applyModeTools(modeLifecycle.selectedMode);
-				const started = waitForTaskStart(task, revision, prepare);
+				const started = waitForTaskStart(task, revision);
 				try {
 					pi.sendUserMessage(task);
 				} catch (error) {
@@ -394,7 +373,7 @@ export default function planExtension(pi: ExtensionAPI): void {
 			? ` Current run: ${modeLabel(modeLifecycle.runMode!)}; next turn: ${modeLabel(selectedMode)}.`
 			: "";
 		ctx.ui.notify(
-			`Mode: ${modeLabel(selectedMode)}.${pending} Plan template: ${selectedPlanSkill ?? "automatic"}.${authorizedPlanPath ? ` Authorized path: ${authorizedPlanPath}.` : ""}`,
+			`Mode: ${modeLabel(selectedMode)}.${pending}${authorizedPlanPath ? ` Authorized path: ${authorizedPlanPath}.` : ""}`,
 			"info",
 		);
 	}
@@ -429,10 +408,10 @@ export default function planExtension(pi: ExtensionAPI): void {
 		name: SAVE_PLAN_TOOL,
 		label: "Save Plan",
 		description:
-			"Save the complete final Plan-mode document to an authorized project-relative Markdown path. This is the only project-file mutation allowed in Plan mode.",
-		promptSnippet: "Save the complete final plan to an authorized project-relative Markdown file",
+			"Save the complete Plan-mode document to an authorized project-relative Markdown path. This is the only project-file mutation allowed in Plan mode.",
+		promptSnippet: "Save the complete plan to an authorized project-relative Markdown file",
 		promptGuidelines: [
-			"Use save_plan only in host-managed Plan mode, only after the plan is decision-complete, and pass the complete replacement Markdown document.",
+			"Use save_plan only in host-managed Plan mode, and pass the complete replacement Markdown document.",
 		],
 		parameters: Type.Object({
 			path: Type.String({
@@ -492,9 +471,9 @@ export default function planExtension(pi: ExtensionAPI): void {
 
 	pi.registerCommand("plan", {
 		description: "Toggle Plan mode, or enable it and plan a task",
-		getArgumentCompletions: completions(["on", "off", "exit", "toggle", "status", "--skill "]),
+		getArgumentCompletions: completions(["on", "off", "exit", "toggle", "status"]),
 		handler: async (args, ctx) => {
-			const command = parsePlanCommand(args);
+			const command = parseModeCommand(args);
 			if (command.kind === "toggle") {
 				toggleMode("plan", ctx);
 				return;
@@ -512,25 +491,8 @@ export default function planExtension(pi: ExtensionAPI): void {
 				return;
 			}
 
-			if (command.skillName) {
-				const templates = discoverPlanTemplates(
-					ctx.getSystemPromptOptions().skills,
-					PLAN_SKILL_NAME,
-					{ includeDisabled: true },
-				);
-				const selected = templates.find((template) => template.name === command.skillName);
-				if (!selected || !loadSkillBody(selected)) {
-					const names = templates.map((template) => template.name).join(", ") || "(none)";
-					ctx.ui.notify(`Unknown, untagged, unreadable, or oversized Plan skill "${command.skillName}". Available: ${names}`, "error");
-					return;
-				}
-			}
-			const requestedPlanSkill = command.skillName;
 			const { revision } = requestMode("plan", ctx);
-			await sendTaskOnNextRun(command.task, revision, ctx, () => {
-				selectedPlanSkill = requestedPlanSkill;
-				persistState();
-			});
+			await sendTaskOnNextRun(command.task, revision, ctx);
 		},
 	});
 
@@ -585,8 +547,6 @@ export default function planExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("Queued mode task cancelled because a newer mode change took precedence.", "info");
 				return { action: "handled" as const };
 			}
-			pending.prepare?.();
-			pending.prepare = undefined;
 			pending.inputAccepted = true;
 		}
 	});
@@ -648,64 +608,17 @@ export default function planExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	let promptSkills: PlanSkillDescriptor[] | undefined;
-
-	function modeInstructions(runMode: AgentMode, ctx: ExtensionContext): string {
-		if (runMode !== "plan") return buildNonPlanModeInstructions(runMode);
-		// A cold custom wake has no before_agent_start skill snapshot. Preserve an
-		// explicit selection rather than treating unknown metadata as a missing skill.
-		if (promptSkills === undefined) return buildPlanModeInstructions(FALLBACK_PLAN_INSTRUCTIONS,
-			selectedPlanSkill ? `The user selected ${JSON.stringify(selectedPlanSkill)}. Skill metadata is unavailable on this wake. Preserve the selection; do not substitute another template.` : "Use the current approved task and planning constraints.");
-		const skills = promptSkills;
-		const loadedSkillBody = loadSkillBody(skills.find((candidate) => candidate.name === PLAN_SKILL_NAME));
-		if (!loadedSkillBody && !warnedMissingSkill) {
-			warnedMissingSkill = true;
-			ctx.ui.notify("Plan mode could not load the plan skill; using its read-only fallback instructions.", "warning");
-		}
-		if (loadedSkillBody) warnedMissingSkill = false;
-		const skillBody = loadedSkillBody ?? FALLBACK_PLAN_INSTRUCTIONS;
-		const automaticTemplates = discoverPlanTemplates(skills, PLAN_SKILL_NAME);
-		const explicitTemplates = discoverPlanTemplates(
-			skills,
-			PLAN_SKILL_NAME,
-			{ includeDisabled: true },
-		);
-
-		let templateInstructions: string;
-		if (selectedPlanSkill) {
-			const selected = explicitTemplates.find((template) => template.name === selectedPlanSkill);
-			const selectedBody = loadSkillBody(selected);
-			if (selected && selectedBody) {
-				warnedMissingSelectedTemplate = "";
-				templateInstructions = `The user explicitly selected ${JSON.stringify(selected.name)}. Follow this template; do not auto-select another.\n\n<selected_plan_template name=${JSON.stringify(selected.name)}>\n${selectedBody}\n</selected_plan_template>`;
-			} else {
-				const unavailableSelection = selectedPlanSkill;
-				if (warnedMissingSelectedTemplate !== unavailableSelection) {
-					warnedMissingSelectedTemplate = unavailableSelection;
-					ctx.ui.notify(`Selected Plan skill "${unavailableSelection}" is unavailable; using automatic selection.`, "warning");
-				}
-				selectedPlanSkill = undefined;
-				persistState();
-				templateInstructions = buildAutomaticTemplateInstructions(automaticTemplates);
-			}
-		} else {
-			warnedMissingSelectedTemplate = "";
-			templateInstructions = buildAutomaticTemplateInstructions(automaticTemplates);
-		}
-
-		return buildPlanModeInstructions(skillBody, templateInstructions);
+	function modeInstructions(runMode: AgentMode): string {
+		return runMode === "plan" ? buildPlanModeInstructions() : buildNonPlanModeInstructions(runMode);
 	}
 
-	pi.on("before_agent_start", (event, ctx) => {
-		const runMode = modeLifecycle.startRun();
+	pi.on("before_agent_start", () => {
+		modeLifecycle.startRun();
 		modeBridge.publish();
-		promptSkills = event.systemPromptOptions.skills ?? [];
-		// Resolve ordinary-input skill selection before the first model request.
-		modeInstructions(runMode, ctx);
 	});
 
-	pi.on("context_with_system", (event, ctx) => {
-		const instructions = modeInstructions(modeLifecycle.enforcedMode, ctx);
+	pi.on("context_with_system", (event) => {
+		const instructions = modeInstructions(modeLifecycle.enforcedMode);
 		const section = `<pi_plan_mode>\n${instructions}\n</pi_plan_mode>`;
 		const leading = event.messages.findIndex(message => message.role === "system");
 		if (leading < 0) return { messages: [{ role: "system" as const, content: "", sections: { pi_plan_mode: section }, timestamp: Date.now() }, ...event.messages] };

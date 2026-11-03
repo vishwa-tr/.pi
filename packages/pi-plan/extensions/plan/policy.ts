@@ -48,7 +48,6 @@ export interface AgentModeState {
 	mode: AgentMode;
 	authorizedPlanPath?: string;
 	authorizedProjectRoot?: string;
-	selectedPlanSkill?: string;
 	planSubagentAddresses?: string[];
 }
 
@@ -58,10 +57,6 @@ export type ModeCommand =
 	| { kind: "set"; enabled: boolean }
 	| { kind: "task"; task: string }
 	| { kind: "invalid"; message: string };
-
-export type PlanCommand =
-	| Exclude<ModeCommand, { kind: "task" }>
-	| { kind: "task"; task: string; skillName?: string };
 
 export type PlanSubagentPolicyDecision =
 	| { allowed: true; normalizedInput?: Record<string, unknown> }
@@ -120,20 +115,6 @@ export function parseModeCommand(args: string): ModeCommand {
 	return { kind: "task", task };
 }
 
-export function parsePlanCommand(args: string): PlanCommand {
-	const command = parseModeCommand(args);
-	if (command.kind !== "task") return command;
-	const task = command.task;
-	if (task === "--skill" || task.startsWith("--skill ") || task.startsWith("--skill=")) {
-		const match = task.match(/^--skill(?:=|\s+)([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)(?:\s+([\s\S]+))?$/);
-		if (!match?.[1]) return { kind: "invalid", message: "Usage: /plan --skill <name> <task>" };
-		const selectedTask = match[2]?.trim();
-		if (!selectedTask) return { kind: "invalid", message: "A task is required after the Plan skill name" };
-		return { kind: "task", task: selectedTask, skillName: match[1] };
-	}
-	return command;
-}
-
 export function parseAgentModeState(value: unknown): AgentModeState | undefined {
 	if (!isRecord(value)) return undefined;
 	const mode = isAgentMode(value.mode)
@@ -160,9 +141,6 @@ export function parseAgentModeState(value: unknown): AgentModeState | undefined 
 				authorizedPlanPath: value.authorizedPlanPath as string,
 				authorizedProjectRoot: value.authorizedProjectRoot as string,
 			}
-			: {}),
-		...(typeof value.selectedPlanSkill === "string" && value.selectedPlanSkill
-			? { selectedPlanSkill: value.selectedPlanSkill }
 			: {}),
 		...(planSubagentAddresses.length > 0 ? { planSubagentAddresses } : {}),
 	};
