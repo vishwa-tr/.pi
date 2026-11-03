@@ -8,7 +8,6 @@ import {
 	nextAgentMode,
 	parseAgentModeState,
 	parseModeCommand,
-	parsePlanCommand,
 	PLAN_SUBAGENT_TOOL_NAMES,
 	restrictedModeTools,
 	SAVE_PLAN_TOOL,
@@ -111,24 +110,14 @@ test("user input waits for a pending mode change instead of joining the old run"
 	assert.equal(shouldDeferModeTransitionInput("interactive", false, false), false);
 });
 
-test("Plan commands preserve template selection syntax", () => {
-	assert.deepEqual(parsePlanCommand(" design auth migration "), {
+test("Plan tasks are passed through without template selection", () => {
+	assert.deepEqual(parseModeCommand(" design auth migration "), {
 		kind: "task",
 		task: "design auth migration",
 	});
-	assert.deepEqual(parsePlanCommand("--skill software-implementation-planning design auth migration"), {
+	assert.deepEqual(parseModeCommand("--skill planning design auth migration"), {
 		kind: "task",
-		task: "design auth migration",
-		skillName: "software-implementation-planning",
-	});
-	assert.deepEqual(parsePlanCommand("--skill=general-planning plan a conference"), {
-		kind: "task",
-		task: "plan a conference",
-		skillName: "general-planning",
-	});
-	assert.deepEqual(parsePlanCommand("--skill general-planning"), {
-		kind: "invalid",
-		message: "A task is required after the Plan skill name",
+		task: "--skill planning design auth migration",
 	});
 });
 
@@ -232,7 +221,7 @@ test("resolved package provenance still rejects mismatched owners and scopes", (
 	}
 });
 
-test("state parsing supports all modes, Plan child scope, and legacy booleans", () => {
+test("state parsing supports all modes, Plan child scope, and legacy fields", () => {
 	assert.deepEqual(
 		parseAgentModeState({
 			mode: "plan",
@@ -245,7 +234,6 @@ test("state parsing supports all modes, Plan child scope, and legacy booleans", 
 			mode: "plan",
 			authorizedPlanPath: "docs/plan.md",
 			authorizedProjectRoot: "/project-a",
-			selectedPlanSkill: "software-implementation-planning",
 			planSubagentAddresses: ["adhoc/one", "adhoc/two"],
 		},
 	);

@@ -10,7 +10,7 @@ const failures = [];
 const notes = [];
 
 const EXPECTED_PACKAGE_COUNT = 32;
-const EXPECTED_SKILL_COUNT = 27;
+const EXPECTED_SKILL_COUNT = 20;
 const AGENT_PACKAGE_PREFIX = "./packages/";
 
 function fail(message) {
@@ -342,10 +342,6 @@ requireGuidance(".agents/skills/github-issue-maintenance/references/pi-runtime.m
   "partial-retirement",
   "absence alone is not proof",
   "Until then, do not create a next-epoch pair",
-]);
-requireGuidance(".agents/skills/pi-plan-mode/SKILL.md", ["name: pi-plan-mode", "disable-model-invocation: true"]);
-requireGuidance("packages/pi-plan/extensions/plan/index.ts", [
-  'const PLAN_SKILL_NAME = "pi-plan-mode";',
 ]);
 
 const criticalEvalClauses = new Map([

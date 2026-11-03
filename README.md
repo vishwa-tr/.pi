@@ -95,9 +95,9 @@ root `.agents/skills/` is the canonical global skill library.
 - **Modes:** `pi-plan` provides unrestricted Off plus restricted Discuss, Plan,
   and Quick modes through `/discuss`, `/plan`, `/quick`, and the `Shift+Tab`
   cycle. Quick keeps concise read-only chat; Discuss adds normal-length read-only
-  discussion; Plan uses tagged planning skills and an authorized `save_plan`
-  path. Plan-mode workers are fresh read-only one-shot Pi Subagents. The Pi-specific
-  base instructions live in `.agents/skills/pi-plan-mode/`.
+  discussion; Plan keeps read-only tools and adds an authorized `save_plan` tool,
+  without injecting planning instructions. Plan-mode workers are fresh read-only
+  one-shot Pi Subagents.
 - **MCP:** Pi's built-in MCP support reads server definitions from
   `~/.pi/agent/mcp.json` and provides the `/mcp` command. See
   [MCP migration](#mcp-migration) before using an existing server configuration.

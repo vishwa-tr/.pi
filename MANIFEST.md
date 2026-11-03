@@ -23,7 +23,7 @@ Pi packages live under `packages/<name>/` and are enabled through portable paths
 | `pi-merge` | `/merge` current-session branch synthesis |
 | `pi-model-thinking` | Model/thinking producer for the shared status row |
 | `pi-notify-user` | LLM-callable `notify_user` notices |
-| `pi-plan` | Branch-persistent, hard read-only Plan mode with automatic tagged-skill routing, explicit `--skill` override, and a user-authorized `save_plan` path |
+| `pi-plan` | Branch-persistent, hard read-only Plan mode with a user-authorized `save_plan` path and no injected planning instructions |
 | `pi-questions` | LLM-callable `ask_user` TUI questions with defaults and non-selecting recommendations |
 | `pi-queue` | Coalesced, session-persistent busy/compaction messages with wrapped display and editor retrieval |
 | `pi-run-guard` | Confirmation before interrupting an active run |
